@@ -1,0 +1,13 @@
+seen: 2026-08-28
+port: COM25
+device_id: null                    # factory firmware — silent to I
+hardware_id: "90:70:69:12:BA:38 (ESP32-S3 MAC, colon-form via usbser)"
+board_note: "announced itself in factory boot spew: 'Hello from Seeed Studio XIAO ESP32-S3 Sense'"
+answered: "silent to I — factory firmware"
+class_note: "confirms the 303a:* suspected rule — Espressif native USB-SERIAL-JTAG (303a:1001)"
+procedure_warning: "after flashing TinyUSB/Arduino firmware this board may RE-ENUMERATE under a different VID/PID (239a:* or 2886:*) — match rules must cover pre- and post-flash identities; continuity is device_id, not VID"
+usb:
+  vid_pid: "303a:1001"
+  product: "USB Serial Device (COM25)"
+  manufacturer: Microsoft          # usbser driver — native CDC
+  serial: "90:70:69:12:BA:38"

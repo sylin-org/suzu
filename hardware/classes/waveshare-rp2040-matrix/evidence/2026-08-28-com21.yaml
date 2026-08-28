@@ -1,0 +1,10 @@
+seen: 2026-08-28
+port: COM21
+device_id: null                    # CircuitPython — silent to I
+hardware_id: "E6625C05E7355A25 (RP2040 flash-derived)"
+answered: "silent to I — CircuitPython REPL, no identity protocol running"
+state: "clean probe"
+batch_note: "lot B (E6625C05E7 prefix)"
+usb:
+  vid_pid: "239a:80f4"
+  product: "USB Serial Device (COM21)"

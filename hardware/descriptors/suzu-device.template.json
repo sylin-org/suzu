@@ -1,0 +1,23 @@
+{
+  "//": "suzu/1 device descriptor — the migration target for legacy fireflies and the identity every suzu companion answers `I` with. Placeholders in {{double braces}} are filled at provisioning (GUIDv7 mint, uid, variant).",
+  "proto": "suzu/1",
+  "companion": "firefly",
+  "family": "esp8266-oled",
+  "variant": "oled-v2",
+  "coverage": {
+    "class": "suzu-d",
+    "sets": ["os"],
+    "grounds": ["report", "run", "rest"],
+    "rings": [
+      "heartbeat", "begin", "completion", "discovery",
+      "departure", "alert", "allclear", "tended", "transition"
+    ],
+    "slots": { "report": ["subject", "health", "cpu", "mem"], "depth": "gauge" },
+    "budget": { "updates_per_s": 5 }
+  },
+  "device_id": "{{guidv7}}",
+  "firmware": "{{version}}",
+  "hardware_id": "{{uid}}",
+  "display": { "type": "oled-dual-zone", "resolution": "128x64" },
+  "capabilities": ["dashboard", "wipe-animations", "brightness", "seed-bank-icon"]
+}

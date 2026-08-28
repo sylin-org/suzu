@@ -1,0 +1,14 @@
+# Flash procedure sketch — codify fully after the first bench
+# (BOOT mount → copy UF2 → COM re-enumeration → probe).
+schema: 1
+
+procedures:
+  install:
+    pre: "planned — BOOT during reset enters UF0 download mode"
+    steps:
+      - say: "Hold BOOT while plugging in."
+      - wait-mount: { label: RPI-RP2, timeout: 30s }
+      - copy: { file: suzu-d-rp2040-matrix.uf2 }
+      - wait-unmount: { label: RPI-RP2, timeout: 15s }
+      - sleep: 2s
+      - probe: { expect: suzu-d, timeout: 4s }

@@ -1,0 +1,13 @@
+seen: 2026-08-28
+port: COM13
+device_id: "019d8e97-e45e-722d-a6af-78a7583cd407"
+hardware_id: "esp32-8813bffccd40"
+bridge_serial: "5B0A007017"
+board_note: "different vendor / different physical unit from the COM14 class-mate — identical capabilities, identical firmware line"
+answered: "I on demand; boot noise glued onto the response line (tolerated by the parser)"
+descriptor:
+  capabilities: [json-push, load-incremental, service-deltas, wipe-animations]
+  display: { resolution: "135x240", type: st7789-tft }
+  processor: esp32
+  variant: tdisplay
+  version: "1.0.0"

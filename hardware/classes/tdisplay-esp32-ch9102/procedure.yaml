@@ -1,0 +1,20 @@
+# Install takes the bootloader path, then composes the shared push tail
+# from the esp8266-oled-v2 class — the two procedures are the same work
+# after the bootloader hands over.
+schema: 1
+
+procedures:
+  install:
+    pre: "factory firmware — silent to I (observed COM13, 2026-08-28)"
+    steps:
+      - say: "Flashing MicroPython (russhughes st7789 build). The board will reset afterward."
+      - backend:
+          tool: esptool
+          args: ["--port {port}", "--baud 460800", "write_flash", "--flash_size=detect", "0x0", "{micropython_bin}"]
+      - poll-repl: { command: "print('mpready')", expect: mpready, timeout: 30s }
+      - use: esp8266-oled-v2/upgrade
+
+  upgrade:
+    pre: "device already runs MicroPython"
+    steps:
+      - use: esp8266-oled-v2/upgrade

@@ -1,0 +1,28 @@
+# The class manifest: what servicing targets. Boards are incarnations;
+# identity (device_id) belongs to individuals and lives in evidence/.
+schema: 1
+id: esp8266-oled-v2-class
+coverage_target: suzu-d
+flash:
+  backend: repl-push
+  baud: 115200
+  characteristics: "80 KB RAM — chunked raw-REPL writes (512 B); mpremote cp flaky"
+sets: [os]
+boards:
+  - name: "EstarDyn NodeMCU ESP8266 V3, Type-C"
+    status: suspected                # vendor listing 2026-08-28
+  - name: "TZT NodeMCU ESP8266 V3, Type-C (yellow)"
+    status: suspected                # vendor listing 2026-08-28
+  - name: "NodeMCU ESP8266 + OLED class — multiple units (CH340)"
+    status: observed                 # 2026-08-28: three individuals across sessions
+class_notes: |
+  CH340 bridges report a constant serial ("6"): USB-level identity is
+  identical on every unit, so individuals are distinguishable only after
+  the probe (device_id / hardware_id). Ports must never be trusted
+  across replugs for this class — always re-probe.
+  Device_id mint order across the first three units spans ~6 hours —
+  provisioning chronology is recoverable from GUIDv7 timestamps.
+migration:
+  to: suzu-d
+  keep: [device_id, hardware_id]     # identity survives the upgrade
+  descriptor_map: { family: companion, version: firmware }

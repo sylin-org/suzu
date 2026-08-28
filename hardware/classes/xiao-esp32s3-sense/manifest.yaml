@@ -1,0 +1,10 @@
+schema: 1
+id: xiao-esp32s3-sense
+coverage_target: suzu-a            # as an ember until a display is attached
+flash:
+  backend: espflash                # native CDC — S3 ROM bootloader
+  characteristics: "native CDC, no bridge chip; watch for vendor VID variants"
+sets: []
+boards:
+  - name: "Seeed Studio XIAO ESP32-S3 Sense"
+    status: observed               # COM25 2026-08-28, factory firmware, silent to I

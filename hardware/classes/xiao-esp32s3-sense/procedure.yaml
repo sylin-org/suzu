@@ -1,0 +1,8 @@
+# Procedure to be written after the first bench observation.
+schema: 1
+
+procedures:
+  install:
+    pre: "planned — S3 ROM bootloader over native CDC (espflash backend)"
+    steps:
+      - say: "Not yet codified — this class has not been observed."

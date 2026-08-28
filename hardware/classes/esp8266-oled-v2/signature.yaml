@@ -1,0 +1,11 @@
+# Identification bits — the one file the tool parses at boot.
+# Everything needed to recognize the class on the wire lives here.
+schema: 1
+id: esp8266-oled-v2-class
+family: firefly                    # the firefly family — suzu.s visual moniker
+variant: oled
+capabilities: [dashboard, wipe-animations, brightness, seed-bank-icon]
+display: { type: oled-dual-zone, resolution: "128x64" }
+firmware_line: "2.0.0"
+match:
+  vid_pid: ["1a86:7523"]           # CH340 — bridge hint, not proof

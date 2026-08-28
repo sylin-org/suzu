@@ -1,0 +1,12 @@
+seen: 2026-08-28
+port: COM24
+device_id: "019d9460-4561-7196-a17d-ff53458fb039"
+hardware_id: "esp8266-05325000"
+answered: "I on demand; boot noise glued onto the response line"
+chronology: "device_id minted noticeably later than the other three units — second provisioning session"
+descriptor:
+  capabilities: [dashboard, wipe-animations, brightness, seed-bank-icon]
+  display: { resolution: "128x64", type: oled-dual-zone }
+  processor: esp8266
+  variant: oled
+  version: "2.0.0"

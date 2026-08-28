@@ -1,0 +1,9 @@
+# Identification bits — observed 2026-08-28 running CircuitPython.
+schema: 1
+id: waveshare-rp2040-matrix
+family: firefly                    # the suzu visual moniker — target of migration
+variant: matrix
+display: { type: rgb-matrix, resolution: "5x5" }
+match:
+  vid_pid: ["239a:80f4"]           # observed — CircuitPython CDC (Adafruit VID)
+  # suspected: ["2e8a:*"] — BOOTSEL/mass-storage mode is not a serial port

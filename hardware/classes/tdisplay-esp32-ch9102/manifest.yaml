@@ -1,0 +1,18 @@
+schema: 1
+id: tdisplay-esp32-ch9102
+coverage_target: suzu-d
+flash:
+  backend: bootloader-then-repl-push
+  baud: 115200
+  characteristics: "hard reset after flash — poll REPL readiness (print('mpready')) before push"
+sets: [os]
+boards:
+  - name: "TENSTAR T-Display ESP32-D0WD, Type-C — factory unit"
+    status: observed                 # COM13 first session, silent to I
+  - name: "TENSTAR T-Display ESP32-D0WD, Type-C — pre-suzu firmware unit"
+    status: observed                 # COM14, firefly fw 1.0.0
+  - name: "different-vendor T-Display-class unit (CH9102F)"
+    status: observed                 # COM13 second session, firefly fw 1.0.0
+migration:
+  to: suzu-d
+  keep: [device_id, hardware_id]

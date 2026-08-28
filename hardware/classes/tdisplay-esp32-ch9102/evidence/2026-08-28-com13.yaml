@@ -1,0 +1,4 @@
+seen: 2026-08-28
+port: COM13
+answered: "silent to I — factory firmware (anime test screen)"
+note: "first board to exercise the bootloader flash path, not REPL push"

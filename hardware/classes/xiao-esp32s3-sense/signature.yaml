@@ -1,0 +1,13 @@
+# Identification bits — not yet observed. First *input-class* board:
+# camera + microphone, no display. Output companion starts at suzu-a;
+# as a sensor-producer it opens suzu's input story.
+schema: 1
+id: xiao-esp32s3-sense
+family: new-class
+variant: s3-sense
+processor: esp32-s3
+inputs: [ov2640-camera, pdm-microphone]
+display: null
+match:
+  vid_pid: ["303a:1001", "303a:*", "2886:*"]   # 303a:1001 observed 2026-08-28; wider rules suspected
+  # alternates, suspected: ["303a:*" Espressif native, "2886:*" Seeed]

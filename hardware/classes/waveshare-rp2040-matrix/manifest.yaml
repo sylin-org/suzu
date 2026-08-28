@@ -1,0 +1,14 @@
+schema: 1
+id: waveshare-rp2040-matrix
+coverage_target: suzu-d            # + frames capability
+flash:
+  backend: circuitpy-drive-copy    # when CP is present (observed state)
+  characteristics: "CP present → copy onto CIRCUITPY drive; blank board → BOOTSEL → RPI-RP2 → CP UF2 first"
+  procedures:
+    upgrade: circuitpy-drive-copy
+    install: rp2040-bootsel
+sets: []
+constraints: "25 px; host-side frames engine"
+boards:
+  - name: "Waveshare RP2040-Matrix, Type-C"
+    status: observed               # COM15 2026-08-28, CircuitPython, silent to I

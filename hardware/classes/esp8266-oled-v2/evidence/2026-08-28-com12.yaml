@@ -1,0 +1,14 @@
+seen: 2026-08-28
+port: COM12
+device_id: "019d8d7a-5913-73a1-9eff-f7dff0fc93be"
+hardware_id: "esp8266-26953e00"
+board_note: "different board version, same capabilities as the vendor listings"
+answered: "I on demand (no HELLO — booted before port open"
+descriptor:
+  capabilities: [dashboard, wipe-animations, brightness, seed-bank-icon]
+  display: { resolution: "128x64", type: oled-dual-zone }
+  processor: esp8266
+  variant: oled
+  version: "2.0.0"
+
+re_sighted: "2026-08-28, second session — same unit returned to COM12; a different individual (esp8266-96bdc200) held this port name in between. CH340 port names are not identity."

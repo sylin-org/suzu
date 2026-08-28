@@ -1,0 +1,10 @@
+# Identification bits — the one file the tool parses at boot.
+schema: 1
+id: tdisplay-esp32-ch9102
+family: firefly
+variant: tdisplay
+display: { type: "st7789 135x240", touch: false }
+bridge: ch9102f
+flash_size: 16MB
+match:
+  vid_pid: ["1a86:55d4", "1a86:55d3"]

@@ -1,0 +1,12 @@
+seen: 2026-08-28
+port: COM15
+device_id: null                    # CircuitPython REPL / no suzu firmware — silent to I
+hardware_id: "E6625887D3331037 (RP2040 flash-derived serial — the E66 prefix is the tell)"
+board_note: "Waveshare RP2040-Matrix running CircuitPython; initially misattributed to the XIAO class — the E66 serial prefix and the CP VID (239A) are the RP2040 tells"
+answered: "silent to I — CircuitPython REPL / no identity protocol running"
+state: "two sessions: second probe clean after board RESET — the os-error-22 wedged-CDC episode was transient"
+usb:
+  vid_pid: "239a:80f4"
+  product: "USB Serial Device (COM15)"
+  manufacturer: Microsoft          # usbser driver — native CDC on RP2040
+  serial: "E6625887D3331037"

@@ -1,0 +1,32 @@
+# Flash procedures for this class. The upgrade (REPL push) is the tail
+# that other esp8266-family classes compose via `use: <class-id>/<name>`.
+schema: 1
+
+procedures:
+  upgrade:
+    pre: "device already runs MicroPython (the COM12 case)"
+    steps:
+      - open-serial: { baud: 115200 }
+      - sleep: 2.5s                        # ESP auto-reset on open
+      - repl-interrupt: { ctrl_c: 2, settle: 300ms }
+      - push-chunked:
+          chunk: 512B                      # REPL buffer overflow ceiling
+          read_timeout: 10s
+          write_timeout: 5s
+      - soft-reset: {}
+      - sleep: 2.5s
+      - verify-readback: { method: cat-file }   # read-back verify — cat the file, re-copy on mismatch
+      - probe: { expect: suzu-d, timeout: 4s }
+
+  install:
+    pre: "no MicroPython — bootloader path"
+    steps:
+      - say: "Flashing MicroPython. The board will reset itself afterward."
+      - backend:
+          tool: esptool
+          args: ["--port {port}", "erase_flash"]
+      - backend:
+          tool: esptool
+          args: ["--port {port}", "--baud 460800", "write_flash", "--flash_size=detect", "0", "{micropython_bin}"]
+      - poll-repl: { command: "print('mpready')", expect: mpready, timeout: 30s }
+      - use: upgrade                    # compose the shared push tail
