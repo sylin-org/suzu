@@ -23,7 +23,8 @@ the adapters are proven on real hardware. Implementation begins after ideation
 cycles confirm the surface.
 
 See `CLAUDE.md` for the agent brief, `CONTRACT.md` for the protocol, and
-`HARVEST.md` for what to read.
+`HARVEST.md` for what to read. Harvest and ideation analyses live in
+[`docs/`](docs/).
 
 ## The fleet so far
 

@@ -3,6 +3,31 @@
 Read these files fully. They are the evidence base: what was proven, what
 worked, what broke, and what the garden (the first producer) actually says.
 
+The distilled analysis of this reading — philosophy, devices, mechanics, and
+the ADR history behind them — lives in
+[`docs/poc-companion-surface.md`](docs/poc-companion-surface.md); the prior-art
+research and strategic positioning (including the signal-lexicon proposal)
+lives in [`docs/prior-art-and-positioning.md`](docs/prior-art-and-positioning.md);
+the multimodal presence catalogue designed against the PoC firmware is
+[`docs/presence-catalogue.md`](docs/presence-catalogue.md); the application
+roles and multi-producer sharing model are
+[`docs/applications-and-sharing.md`](docs/applications-and-sharing.md); the
+settled mental model — producers speak stories, companions own faces, the
+contract is only the language — is
+[`docs/the-model.md`](docs/the-model.md), and wins where older docs
+contradict it; the serial wire draft under the asymmetry principle is
+[`docs/wire-protocol.md`](docs/wire-protocol.md); the drafted suzu/1
+message inventory — grounds, rings, invariants, wire arity — is
+[`docs/message-inventory.md`](docs/message-inventory.md), pending
+ratification into CONTRACT.md; the implementation plan — workspace,
+firmware tiers (suzu-a / suzu-d), milestones — is
+[`docs/implementation-plan.md`](docs/implementation-plan.md); the
+delight/ease assessment with the six acceptance tests is
+[`docs/delight-and-ease.md`](docs/delight-and-ease.md); the known-hardware
+catalog and adoption tool are
+[`docs/hardware-catalog-and-adoption.md`](docs/hardware-catalog-and-adoption.md).
+Read them first, then verify against the sources below.
+
 ## The PoC companions (all live-proven, read fully)
 
 | Path | Lines | What it proves |
