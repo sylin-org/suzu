@@ -4,12 +4,15 @@
 //!   (none)     watch USB serial ports; identify on hotplug; service
 //!   scan       one-shot identification of every connected port
 //!   detective  full fact dump per USB device — the harvest instrument
+//!   serve      the Resident: watcher · devices · moments · sensor,
+//!              talking to each other in the open
 //!
 //! Servicing today: test. install / update / factory-wipe land with the
 //! procedure engine (docs/hardware-catalog-and-adoption.md §4).
 
 mod catalog;
 mod probe;
+mod resident;
 
 use catalog::Catalog;
 use probe::{Outcome, Transcript};
@@ -475,7 +478,8 @@ fn watch(catalog: &Arc<Catalog>) {
     println!("bye — the garden keeps breathing.");
 }
 
-fn main() {
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let catalog = Arc::new(catalog::Catalog::load());
     println!("catalog: {}", catalog.source);
@@ -483,6 +487,8 @@ fn main() {
     match args.get(1).map(|s| s.as_str()) {
         Some("scan") => scan_once(&catalog),
         Some("detective") => detective(&catalog),
+        Some("serve") => resident::run(catalog).await?,
         _ => watch(&catalog),
     }
+    Ok(())
 }

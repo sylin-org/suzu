@@ -28,6 +28,7 @@ pub struct MatchRules {
     pub vid_pid: Vec<String>,
 }
 
+#[derive(Clone)]
 pub struct Catalog {
     /// Where the signatures came from (for the boot line).
     pub source: String,
@@ -150,16 +151,28 @@ impl ClassSignature {
 
 /// Built-in fallback hints (used only when no manifests are found).
 /// Seeds from the physical fleet: 2026-08-28 bench sessions.
+const SEED: &[(u16, Option<u16>, &str)] = &[
+    (0x1a86, Some(0x7523), "ESP8266 + OLED display (NodeMCU class, CH340)"),
+    (0x1a86, Some(0x55d4), "ESP32 T-Display class (CH9102F)"),
+    (0x1a86, Some(0x55d3), "ESP32 T-Display class (CH9102)"),
+    (0x10c4, Some(0xea60), "CP2102 bridge — board class unknown until probed"),
+    (0x303a, None, "ESP32-Sx native USB (XIAO S3 class)"),
+    (0x2e8a, None, "RP2040 (matrix class)"),
+];
+
 pub fn seed_hint(vid: u16, pid: u16) -> Option<&'static str> {
-    const SEED: &[(u16, Option<u16>, &str)] = &[
-        (0x1a86, Some(0x7523), "ESP8266 + OLED display (NodeMCU class, CH340)"),
-        (0x1a86, Some(0x55d4), "ESP32 T-Display class (CH9102F)"),
-        (0x1a86, Some(0x55d3), "ESP32 T-Display class (CH9102)"),
-        (0x10c4, Some(0xea60), "CP2102 bridge — board class unknown until probed"),
-        (0x303a, None, "ESP32-Sx native USB (XIAO S3 class)"),
-        (0x2e8a, None, "RP2040 (matrix class)"),
-    ];
     SEED.iter()
         .find(|(v, p, _)| *v == vid && p.is_none_or(|sp| sp == pid))
         .map(|(_, _, label)| *label)
 }
+
+pub fn seed_class_for(vid: u16, pid: u16) -> Option<String> {
+    match (vid, pid) {
+        (0x1a86, 0x7523) => Some("esp8266-oled-v2-class".to_string()),
+        (0x1a86, _) => Some("tdisplay-esp32-ch9102".to_string()),
+        (0x2e8a, _) => Some("waveshare-rp2040-matrix".to_string()),
+        (0x303a, _) => Some("xiao-esp32s3-sense".to_string()),
+        _ => None,
+    }
+}
+
