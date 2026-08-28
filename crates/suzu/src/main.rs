@@ -11,8 +11,10 @@
 //! procedure engine (docs/hardware-catalog-and-adoption.md §4).
 
 mod catalog;
+mod mpush;
 mod probe;
 mod resident;
+mod servicing;
 
 use catalog::Catalog;
 use probe::{Outcome, Transcript};
@@ -488,6 +490,14 @@ async fn main() -> anyhow::Result<()> {
         Some("scan") => scan_once(&catalog),
         Some("detective") => detective(&catalog),
         Some("serve") => resident::run(catalog).await?,
+        Some("firmware") => {
+            let port = args.get(2).ok_or_else(|| anyhow::anyhow!("usage: suzu firmware <port>"))?;
+            println!("{}", servicing::migrate(port)?);
+        }
+        Some("restore") => {
+            let port = args.get(2).ok_or_else(|| anyhow::anyhow!("usage: suzu restore <port>"))?;
+            println!("{}", servicing::restore(port)?);
+        }
         _ => watch(&catalog),
     }
     Ok(())

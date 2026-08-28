@@ -144,8 +144,21 @@ pub fn probe_transcript(port_name: &str) -> Transcript {
     let mut lines = Lines::new();
     let started = Instant::now();
 
+    // 0. Boot wait — opening the port can hard-reset the board
+    // (harvest constant: 2.5 s). Probing mid-boot loses the `I`.
+    std::thread::sleep(Duration::from_millis(2500));
+
+    // 0.5 Loving recovery — a previous session may have left the board
+    // at a REPL prompt. A soft reboot brings its app back, and the
+    // app's boot HELLO lands in our passive window. (No interrupt
+    // here — an interrupt after the reboot would kill the very app we
+    // just recovered.)
+    let _ = port.write_all(b"\x02\x04");
+    let _ = port.flush();
+    std::thread::sleep(Duration::from_millis(2500));
+
     // 1. Passive window — some firmware speaks first on boot.
-    let deadline = started + Duration::from_millis(1500);
+    let deadline = started + Duration::from_millis(2000);
     while Instant::now() < deadline {
         match lines.poll(&mut port) {
             Ok(seen) => {
@@ -163,27 +176,34 @@ pub fn probe_transcript(port_name: &str) -> Transcript {
         }
     }
 
-    // 2. The handshake: write `I`, expect JSON within the deadline.
+    // 2. The handshake: write `I`, expect JSON within the deadline —
+    // asking twice, because a boot race can swallow the first ask.
     use std::io::Write;
-    if let Err(e) = port.write_all(b"I\n").and_then(|_| port.flush()) {
-        t.error = Some(e.to_string());
-        return t;
-    }
-    let deadline = Instant::now() + HANDSHAKE_DEADLINE;
-    while Instant::now() < deadline {
-        match lines.poll(&mut port) {
-            Ok(seen) => {
-                for line in seen {
-                    if handle(&mut t, line) {
-                        t.identity_after_ms = Some(started.elapsed().as_millis());
-                        return t;
+    for attempt in 0..2 {
+        if let Err(e) = port.write_all(b"I\n").and_then(|_| port.flush()) {
+            t.error = Some(e.to_string());
+            return t;
+        }
+        let deadline = Instant::now() + HANDSHAKE_DEADLINE;
+        while Instant::now() < deadline {
+            match lines.poll(&mut port) {
+                Ok(seen) => {
+                    for line in seen {
+                        if handle(&mut t, line) {
+                            t.identity_after_ms = Some(started.elapsed().as_millis());
+                            return t;
+                        }
                     }
                 }
+                Err(e) => {
+                    t.error = Some(e.to_string());
+                    return t;
+                }
             }
-            Err(e) => {
-                t.error = Some(e.to_string());
-                return t;
-            }
+        }
+        if attempt == 0 {
+            let _ = port.write_all(b"I\n");
+            let _ = port.flush();
         }
     }
     t

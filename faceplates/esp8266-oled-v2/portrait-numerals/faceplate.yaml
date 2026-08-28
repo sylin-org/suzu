@@ -1,0 +1,9 @@
+name: portrait-numerals
+aesthetic: striking
+class: esp8266-oled-v2
+slots: [name, cpu, mem, gpu]
+extras: [audio.level]
+resources:
+  install:
+    - { from: main.py, to: main.py }
+frames: [I, S, G, P, R]

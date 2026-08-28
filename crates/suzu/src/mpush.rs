@@ -20,6 +20,8 @@ const CHUNK: usize = 256;
 pub struct Repl {
     port: Box<dyn SerialPort>,
     buf: Vec<u8>,
+    /// True while the device is in raw REPL.
+    raw: bool,
 }
 
 fn find(buf: &[u8], marker: &[u8]) -> Option<usize> {
@@ -54,7 +56,7 @@ impl Repl {
             .timeout(Duration::from_millis(200))
             .open()
             .map_err(|e| anyhow::anyhow!("{port_name}: {e}"))?;
-        thread_sleep(BOOT_WAIT);
+        std::thread::sleep(BOOT_WAIT);
         // Interrupt any running application (Ctrl-C ×2) and drain the
         // boot/banner noise.
         let _ = port.write_all(b"\r\x03\x03");
@@ -62,13 +64,10 @@ impl Repl {
         let mut repl = Self {
             port,
             buf: Vec::new(),
+            raw: false,
         };
         repl.drain(Duration::from_millis(700));
         Ok(repl)
-    }
-
-    fn thread_sleep(d: Duration) {
-        std::thread::sleep(d);
     }
 
     fn drain(&mut self, for_: Duration) {
@@ -109,30 +108,60 @@ impl Repl {
         }
     }
 
-    /// Enter raw REPL (Ctrl-A). Every later call assumes raw mode.
+    /// Interrupt any running application and return to the friendly
+    /// prompt.
+    pub fn interrupt(&mut self) {
+        let _ = self.port.write_all(b"\r\x03\x03");
+        let _ = self.port.flush();
+        self.drain(Duration::from_millis(700));
+        self.raw = false;
+    }
+
+    /// Enter raw REPL (Ctrl-A) — interrupting first, so a running app
+    /// cannot swallow the mode switch.
     pub fn enter_raw(&mut self) -> Result<()> {
+        self.interrupt();
         self.port.write_all(b"\x01")?;
         self.port.flush()?;
         self.read_until(b"raw REPL", Duration::from_secs(3))?;
         self.read_until(b">", Duration::from_secs(3))?;
+        self.raw = true;
         Ok(())
     }
 
     /// Leave raw REPL (Ctrl-B) back to the friendly prompt.
     pub fn exit_raw(&mut self) -> Result<()> {
-        self.port.write_all(b"\x02")?;
-        self.port.flush()?;
-        self.drain(Duration::from_millis(500));
+        if self.raw {
+            self.port.write_all(b"\x02")?;
+            self.port.flush()?;
+            self.drain(Duration::from_millis(500));
+            self.raw = false;
+        }
         Ok(())
     }
 
-    /// Execute one line/statement; returns its stdout. Fails on
+    /// Execute one statement in raw REPL; returns its stdout. Fails on
     /// tracebacks — the device's error is the error.
     pub fn exec(&mut self, code: &str) -> Result<String> {
-        self.port.write_all(code.as_bytes())?;
-        self.port.write_all(b"\x04")?;
-        self.port.flush()?;
-        let out = self.read_until(b"\x04", EXEC_TIMEOUT)?;
+        if !self.raw {
+            self.enter_raw()?;
+        }
+        if let Err(e) = self
+            .port
+            .write_all(code.as_bytes())
+            .and_then(|_| self.port.write_all(b"\x04"))
+            .and_then(|_| self.port.flush())
+        {
+            self.raw = false;
+            bail!("{e}");
+        }
+        let out = match self.read_until(b"\x04", EXEC_TIMEOUT) {
+            Ok(out) => out,
+            Err(e) => {
+                self.raw = false; // framing unknown after a timeout
+                return Err(e);
+            }
+        };
         self.read_until(b">", Duration::from_secs(5))?;
         if out.contains("Traceback") {
             bail!("device raised:\n{}", out.trim());
@@ -163,7 +192,6 @@ impl Repl {
 
     /// Chunked escaped write + read-back verification.
     pub fn write_file(&mut self, name: &str, data: &[u8]) -> Result<()> {
-        self.enter_raw()?;
         self.exec(&format!("f = open('{name}','wb')"))?;
         for chunk in data.chunks(CHUNK) {
             self.exec(&format!("f.write({})", py_bytes_literal(chunk)))?;
@@ -193,10 +221,8 @@ impl Repl {
     }
 
     pub fn remove_file(&mut self, name: &str) -> Result<()> {
-        self.enter_raw()?;
-        let r = self.exec(&format!("import os; os.remove('{name}')"));
-        self.exit_raw()?;
-        r.map(|_| ())
+        self.exec(&format!("import os; os.remove('{name}')"))
+            .map(|_| ())
     }
 
     /// Soft reboot: boot.py → main.py run again. The port closes with

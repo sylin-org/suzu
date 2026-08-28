@@ -28,7 +28,9 @@ catalog and adoption tool are
 [`docs/hardware-catalog-and-adoption.md`](docs/hardware-catalog-and-adoption.md);
 the product definition (draft, pending the §6 decisions) — which
 outranks the design docs on product questions — is
-[`docs/product-definition.md`](docs/product-definition.md).
+[`docs/product-definition.md`](docs/product-definition.md); the bench
+lessons for the automated installer are
+[`docs/install-lessons.md`](docs/install-lessons.md).
 Read them first, then verify against the sources below.
 
 ## The PoC companions (all live-proven, read fully)
