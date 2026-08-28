@@ -1,0 +1,7 @@
+{
+  "proto": "suzu/1",
+  "companion": "firefly",
+  "family": "esp8266-oled",
+  "variant": "oled-v1",
+  "device_id": "assigned at adoption (preserved from pre-suzu provisioning when present)"
+}
