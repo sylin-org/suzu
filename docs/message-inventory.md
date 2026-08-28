@@ -162,6 +162,32 @@ Rules:
   0–255). `allclear` must reference its alert's handle; the companion
   resolves the arc, not a "state".
 
+### Cadence classes and the pulse lane
+
+Atoms declare a **cadence class** alongside their set and axis:
+
+| Class | Rate | Rides | Example |
+|---|---|---|---|
+| **ground** | slow (~2 s, on drift) | `G`/`D` frames | cpu, mem, disk, uptime |
+| **fast** ("pulse") | ~5–10 Hz, lean frame `A,<axis>,<value>` | dedicated lane | `audio.level` |
+
+The law that makes it work — **the wire carries truth at measurement
+rate; the face carries time at animation rate.** The device receives a
+fast atom sparsely and animates the gap locally (attack instant, decay
+exponential — the VU pattern; the same tick-based trick as the
+ancestor's scrolling name). A 10 Hz feed looks fluid on a 30 fps loop
+at ~180 B/s of wire.
+
+The sensor design law: **cheap capture, cheap show, delightful
+experience.** A fast atom that costs more than a few bytes of capture
+or a few bytes of wire is designed wrong.
+
+First fast atom: `audio.level` (set `audio`, INFO/horizontal — the
+machine's output intensity, 0–100). Optional: consumers that don't
+declare it never see the lane; consumers that do must degrade silently
+when it rests.
+
+
 ## 5 · Context and session
 
 | Message | Class | Meaning |

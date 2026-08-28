@@ -16,7 +16,8 @@ pub struct MachineReport {
     pub disk: u8,
 }
 
-const TICK: Duration = Duration::from_secs(2);
+const FAST_TICK: Duration = Duration::from_millis(200);
+const GROUND_EVERY: u64 = 10; // one ground publish per ~2 s
 
 pub struct Sensor {
     events: Sender<HouseEvent>,
@@ -77,30 +78,47 @@ impl Sensor {
         // Prime the CPU statistics with a real interval — the first
         // sample is otherwise a 100% lie.
         let _prime = self.capture();
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let mut ticks: u64 = 0;
+        let mut audio: u8 = 40; // the stub capture: decay + noise
+        let mut rng: u32 = 0x9e37_79b9;
         loop {
-            let report = self.capture();
-            // Only publish on change — the ground drifts silently.
-            let changed = match &self.last {
-                None => true,
-                Some(prev) => {
-                    prev.cpu != report.cpu
-                        || prev.mem != report.mem
-                        || prev.disk != report.disk
-                        || prev.name != report.name
+            ticks += 1;
+
+            // ── fast lane: pulse atoms (cheap capture, cheap show) ──
+            rng = rng.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let attack = ((rng >> 16) % 30) as u8;
+            audio = ((audio as u32 * 3 / 4) + attack as u32).min(100) as u8;
+            let _ = self.events.send(HouseEvent::Pulse {
+                axis: "audio.level",
+                value: audio,
+            });
+
+            // ── slow lane: the ground, on drift ──
+            if ticks.is_multiple_of(GROUND_EVERY) {
+                let report = self.capture();
+                // Only publish on change — the ground drifts silently.
+                let changed = match &self.last {
+                    None => true,
+                    Some(prev) => {
+                        prev.cpu != report.cpu
+                            || prev.mem != report.mem
+                            || prev.disk != report.disk
+                            || prev.name != report.name
+                    }
+                };
+                if changed {
+                    self.last = Some(report.clone());
+                    let _ = self.events.send(HouseEvent::GroundChanged {
+                        name: report.name,
+                        uptime_s: report.uptime_s,
+                        cpu: report.cpu,
+                        mem: report.mem,
+                        disk: report.disk,
+                    });
                 }
-            };
-            if changed {
-                self.last = Some(report.clone());
-                let _ = self.events.send(HouseEvent::GroundChanged {
-                    name: report.name,
-                    uptime_s: report.uptime_s,
-                    cpu: report.cpu,
-                    mem: report.mem,
-                    disk: report.disk,
-                });
             }
-            tokio::time::sleep(TICK).await;
+            tokio::time::sleep(FAST_TICK).await;
         }
     }
 }

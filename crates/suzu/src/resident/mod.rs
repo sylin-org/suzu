@@ -106,6 +106,10 @@ fn house_line(ev: &HouseEvent) {
             );
         }
         HouseEvent::DeviceGone { port } => line("watcher", &format!("gone {port}")),
+        HouseEvent::PortBusy { port, reason } => line(
+            "watcher",
+            &format!("{port} is busy — not minding ({reason})"),
+        ),
         HouseEvent::DeviceMinded {
             port,
             device_id,
@@ -139,6 +143,7 @@ fn house_line(ev: &HouseEvent) {
                 "ground: {name} · cpu {cpu}% · mem {mem}% · disk {disk}% · up {uptime_s}s"
             ),
         ),
+        HouseEvent::Pulse { .. } => {} // the pulse lane is silent by design
         HouseEvent::SplashDecided { decision, label } => {
             line("moments", &format!("splash: {decision} {}", label.as_deref().unwrap_or("")))
         }
@@ -349,12 +354,12 @@ pub async fn run(catalog: Arc<Catalog>) -> anyhow::Result<()> {
                             for r in rows {
                                 let state = format!("{:?}", r.state);
                                 println!(
-                                    "  {} · {} {}/{} v{:?} · proto {:?} · {}",
+                                    "  {} · {} {}/{} v{} · proto {:?} · {}",
                                     r.port,
                                     r.class.as_deref().unwrap_or("?"),
                                     r.family.as_deref().unwrap_or("?"),
                                     r.variant.as_deref().unwrap_or("?"),
-                                    r.version,
+                                    r.version.as_deref().unwrap_or("?"),
                                     r.proto,
                                     state,
                                 );

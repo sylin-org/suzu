@@ -32,8 +32,13 @@ fn usb_of(p: &serialport::SerialPortInfo) -> Option<(u16, u16)> {
 }
 
 /// One identification pass, blocking — run inside spawn_blocking.
-fn identify_facts(catalog: &Catalog, port: &str, vid: u16, pid: u16) -> DeviceFacts {
+/// `Err(reason)` means the port could not be honestly read (busy,
+/// stale, or failing) — such ports are never minded.
+fn identify_facts(catalog: &Catalog, port: &str, vid: u16, pid: u16) -> Result<DeviceFacts, String> {
     let t = probe::probe_transcript(port);
+    if let Some(err) = &t.error {
+        return Err(err.clone());
+    }
     let class_by_sig = t.identity.as_ref().and_then(|j| {
         let f = j.get("family").and_then(|v| v.as_str())?;
         let var = j.get("variant").and_then(|v| v.as_str())?;
@@ -56,7 +61,7 @@ fn identify_facts(catalog: &Catalog, port: &str, vid: u16, pid: u16) -> DeviceFa
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
     });
-    DeviceFacts {
+    Ok(DeviceFacts {
         port: port.to_string(),
         vid,
         pid,
@@ -67,7 +72,7 @@ fn identify_facts(catalog: &Catalog, port: &str, vid: u16, pid: u16) -> DeviceFa
         proto: field("proto"),
         device_id,
         legacy: t.legacy_line.is_some(),
-    }
+    })
 }
 
 impl Watcher {
@@ -99,22 +104,24 @@ impl Watcher {
                 // The ladder blocks (up to ~5.5 s) — off the async lane.
                 let catalog = self.catalog.clone();
                 let name = p.port_name.clone();
-                let facts = tokio::task::spawn_blocking(move || {
+                let identified = tokio::task::spawn_blocking(move || {
                     identify_facts(&catalog, &name, vid, pid)
                 })
                 .await
-                .unwrap_or_else(|_| DeviceFacts {
-                    port: p.port_name.clone(),
-                    vid,
-                    pid,
-                    class: None,
-                    family: None,
-                    variant: None,
-                    version: None,
-                    proto: None,
-                    device_id: None,
-                    legacy: false,
-                });
+                .unwrap_or_else(|e| Err(format!("join: {e}")));
+
+                // Report-before-minding: an unreachable port is a fact
+                // for the house, never a device to mind.
+                let facts = match identified {
+                    Ok(facts) => facts,
+                    Err(reason) => {
+                        let _ = self.links.events.send(HouseEvent::PortBusy {
+                            port: p.port_name.clone(),
+                            reason,
+                        });
+                        continue;
+                    }
+                };
 
                 let _ = self
                     .links

@@ -43,6 +43,11 @@ impl Device {
 /// the translation.
 pub enum Outbound {
     Ground(Arc<MachineReport>),
+    /// The pulse lane — fast atoms for faces that declared the extra.
+    /// Fields are read by faceplate sessions once they land; v0 drops
+    /// them at the boundary by design.
+    #[allow(dead_code)]
+    Pulse { axis: String, value: u8 },
     Close,
 }
 
@@ -64,12 +69,14 @@ pub enum DevicesCmd {
     Gone { port: String },
     /// The publisher's outbound pipeline: one call, every live consumer.
     Publish(Arc<MachineReport>),
+    Pulse { axis: String, value: u8 },
     Snapshot { reply: mpsc::Sender<Vec<DeviceRow>> },
 }
 
 pub struct Devices {
     events: Sender<HouseEvent>,
     devices: BTreeMap<String, Device>,
+    pulse_announced: bool,
 }
 
 impl Devices {
@@ -77,6 +84,7 @@ impl Devices {
         Self {
             events,
             devices: BTreeMap::new(),
+            pulse_announced: false,
         }
     }
 
@@ -86,6 +94,7 @@ impl Devices {
                 DevicesCmd::Mind(facts) => self.mind(facts),
                 DevicesCmd::Gone { port } => self.gone(&port),
                 DevicesCmd::Publish(ground) => self.publish(&ground),
+                DevicesCmd::Pulse { axis, value } => self.pulse(&axis, value),
                 DevicesCmd::Snapshot { reply } => {
                     let _ = reply.send(self.snapshot()).await;
                 }
@@ -171,6 +180,28 @@ impl Devices {
         }
     }
 
+    /// v0: no faceplate declares `audio.level` yet — the lane flows up
+    /// to this boundary and stops, silently. When the pulse-bar
+    /// faceplate lands, consumers that declared the extra receive it.
+    fn pulse(&mut self, axis: &str, value: u8) {
+        let mut consumers = 0;
+        for device in self.devices.values_mut() {
+            if let Some(outbound) = &device.outbound {
+                consumers += 1;
+                let _ = outbound.send(Outbound::Pulse {
+                    axis: axis.to_string(),
+                    value,
+                });
+            }
+        }
+        if !self.pulse_announced {
+            self.pulse_announced = true;
+            println!(
+                "[devices] pulse lane alive: {axis}={value} across {consumers} consumer(s)"
+            );
+        }
+    }
+
     pub fn snapshot(&self) -> Vec<DeviceRow> {
         self.devices
             .values()
@@ -217,6 +248,10 @@ fn session_thread(port: String, rx: std_mpsc::Receiver<Outbound>, close: Arc<Ato
                     }
                 }
             }
+            // The pulse lane is consumed by the face's own code once a
+            // faceplate declares the extra; until then the session
+            // drops it silently (it never reaches pre-suzu firmware).
+            Ok(Outbound::Pulse { .. }) => {}
             Ok(Outbound::Close) => break,
             // Keepalive: the ancestor idles to its fireflies after 10 s
             // without comm — a redraw every 5 s holds the dashboard.

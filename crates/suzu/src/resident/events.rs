@@ -27,6 +27,7 @@ pub struct DeviceFacts {
 pub enum HouseEvent {
     // watcher → the house
     DeviceSensed { port: String },
+    PortBusy { port: String, reason: String },
     DeviceIdentified(DeviceFacts),
     DeviceGone { port: String },
 
@@ -37,6 +38,8 @@ pub enum HouseEvent {
 
     // sensor → the house
     GroundChanged { name: String, uptime_s: u64, cpu: u8, mem: u8, disk: u8 },
+    /// The pulse lane — fast, cheap, drift-or-value atoms.
+    Pulse { axis: &'static str, value: u8 },
 
     // moments → the house
     SplashDecided { decision: String, label: Option<String> },

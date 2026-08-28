@@ -61,7 +61,15 @@ impl Publisher {
                     self.last = Some(Arc::clone(&ground));
                     self.distribute(ground).await;
                 }
-                HouseEvent::DeviceMinded { .. } => {
+                HouseEvent::Pulse { axis, value } => {
+                    // Fast lane: forward to consumers that declared it.
+                    let _ = self
+                        .house
+                        .devices_tx()
+                        .send(super::devices::DevicesCmd::Pulse { axis: axis.to_string(), value })
+                        .await;
+                }
+                                HouseEvent::DeviceMinded { .. } => {
                     // A new consumer appeared — give it the current
                     // published object immediately, so its face fills
                     // without waiting for the next drift.

@@ -25,7 +25,10 @@ firmware tiers (suzu-a / suzu-d), milestones — is
 delight/ease assessment with the six acceptance tests is
 [`docs/delight-and-ease.md`](docs/delight-and-ease.md); the known-hardware
 catalog and adoption tool are
-[`docs/hardware-catalog-and-adoption.md`](docs/hardware-catalog-and-adoption.md).
+[`docs/hardware-catalog-and-adoption.md`](docs/hardware-catalog-and-adoption.md);
+the product definition (draft, pending the §6 decisions) — which
+outranks the design docs on product questions — is
+[`docs/product-definition.md`](docs/product-definition.md).
 Read them first, then verify against the sources below.
 
 ## The PoC companions (all live-proven, read fully)
