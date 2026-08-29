@@ -23,14 +23,12 @@ class_notes: |
   Device_id mint order across the first three units spans ~6 hours —
   provisioning chronology is recoverable from GUIDv7 timestamps.
   CORRECTION (2026-08-28, later): the "boot-loop garbage" unit was NOT
-  suspect hardware. Its flash was left half-written by a cancelled
-  installer run — our own interrupted write, not the board. The ancestor
-  installer then flashed and provisioned the same unit flawlessly
-  (device 01a04aea-aa63-7be3-995e-96fe5522eeb, oled-v2, display test
-  passed). Lesson recorded in install-lessons.md: a tool reports what
-  happened; it never concludes what the hardware is. "Suspect" requires
-  repeated independent failures, and a cancelled write is ours, not
-  theirs.
+  suspect hardware. Our cancelled flash-write left it half-written;
+  the unit runs the old PoC firmware (firefly v2.0.0) and was
+  re-provisioned by the USER via the ancestor installer. Suzu made no
+  changes to any device. Lesson recorded in install-lessons.md: a tool
+  reports what happened; it never concludes what the hardware is, and
+  it never claims credit for a recovery it did not perform.
 migration:
   to: suzu-d
   keep: [device_id, hardware_id]     # identity survives the upgrade

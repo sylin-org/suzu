@@ -7,26 +7,24 @@ and [`implementation-plan.md`](implementation-plan.md) §3.*
 
 ---
 
-## 0 · Current state (recovered)
+## 0 · Current state (plain truth)
 
-The OLED v2 bench unit was **fully recovered** by the ancestor
-installer: erase + MicroPython flash + file upload + provisioning +
-display test, all green (new device_id
-`01a04aea-aa63-7be3-995e-96fe5522eeb`, oled-v2). The board was never
-faulty — the boot loop was our own cancelled write leaving a partial
-image.
+The OLED v2 bench unit (COM12) runs the OLD PoC firefly firmware
+(v2.0.0). The user re-provisioned it with the ancestor installer
+(NewFirefly.ps1: erase, MicroPython flash, file upload, descriptor,
+display test — all green). **Suzu made no changes to any device** —
+every suzu push attempt tonight failed harmlessly, and the re-flash by
+the ancestor installer replaced anything our partial writes had left.
 
-**The meta-lesson, which outranks the rest:** the installer's most
-dangerous failure mode is its own confident diagnosis. A tool reports
-what happened ("write cancelled at 62%", "verify failed — retrying");
-it never concludes what the hardware *is*. "Suspect hardware" requires
-repeated independent failures across methods — one interrupted write
-is the tool's own history, not the board's biography. The suzu
-adoption UX must encode this: retry and report, never convict.
+The meta-lesson, which outranks the rest: the installer's most
+dangerous failure mode is its own confident diagnosis — including
+diagnoses of SUCCESS. A tool reports exactly what it did and verified,
+and claims nothing else. "The board works now" must rest on the same
+verified handshake as "the board is broken."
 
-Open item: migrate the recovered unit to suzu (backup → push the suzu
-folder → verify `proto: suzu/1` with the new device_id preserved into
-the roster).
+Open item: suzu has still made no changes to any device. First real
+milestone: migrate ONE device (backup → push suzu files → verify
+`proto: suzu/1` handshake) and say so with evidence.
 
 ## 1 · Sense & identify
 
