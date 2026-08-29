@@ -50,6 +50,7 @@ class Repl:
         self.raw = True
 
     def exec(self, code):
+        sys.stdout.flush()
         if not self.raw:
             self.enter_raw()
         self.p.write(code.encode())
@@ -68,16 +69,23 @@ class Repl:
         return out
 
     def write_file(self, name, data):
+        print("    writing %s (%d bytes) ..." % (name, len(data)))
+        sys.stdout.flush()
         self.exec("f = open('%s','wb')" % name)
         for i in range(0, len(data), CHUNK):
             self.exec("f.write(%s)" % esc(data[i : i + CHUNK]))
         self.exec("f.close()")
-        # read-back verify — never trust a blind write
+        # read-back verify — never trust a blind write. The reply is
+        # `b'<hex>'`; parse the quoted section (buffer noise may precede
+        # it), never strip-all-nonhex.
         reply = self.exec(
             "import ubinascii; print(ubinascii.hexlify(open('%s','rb').read()))" % name
         )
-        hexs = "".join(c for c in reply.decode(errors="replace") if c in "0123456789abcdefABCDEF")
-        assert bytes.fromhex(hexs) == data, "verify failed for " + name
+        import re
+
+        m = re.search(rb"b'([0-9a-fA-F]*)'", reply)
+        assert m, "could not parse hexlify reply: " + repr(reply[:120])
+        assert bytes.fromhex(m.group(1).decode()) == data, "verify failed for " + name
         print("  OK %s (%d bytes verified)" % (name, len(data)))
 
     def list_files(self):
@@ -124,6 +132,7 @@ def main():
         ("main.py", open("faceplates/esp8266-oled-v2/portrait-numerals/main.py", "rb").read()),
     ]
     print("pushing %d files to %s ..." % (len(payload), port))
+    print("  list_files probe: %s" % repl.list_files())
     for name, data in payload:
         repl.write_file(name, data)
 

@@ -22,6 +22,10 @@ class_notes: |
   across replugs for this class — always re-probe.
   Device_id mint order across the first three units spans ~6 hours —
   provisioning chronology is recoverable from GUIDv7 timestamps.
+  HARDWARE SUSPECT FLAG (2026-08-28): one unit accepted a verified
+  erase+flash (esptool hash OK) and then boot-looped garbage it could
+  not boot — classic failed/counterfeit flash chip signature. Flagged,
+  set aside, not minded. The census remembers: some units are just bad.
 migration:
   to: suzu-d
   keep: [device_id, hardware_id]     # identity survives the upgrade

@@ -149,10 +149,16 @@ pub fn probe_transcript(port_name: &str) -> Transcript {
     std::thread::sleep(Duration::from_millis(2500));
 
     // 0.5 Loving recovery — a previous session may have left the board
-    // at a REPL prompt. A soft reboot brings its app back, and the
-    // app's boot HELLO lands in our passive window. (No interrupt
-    // here — an interrupt after the reboot would kill the very app we
-    // just recovered.)
+    // at a REPL prompt **with a giant unterminated edit line** (killed
+    // pushes wedged exactly so: every new byte gets typed into the line
+    // and re-echoed). Recovery order matters:
+    //   Ctrl-C ×2  aborts the wedged line  -> clean prompt
+    //   Ctrl-B     ensures friendly mode  -> ">>>"
+    //   Ctrl-D     soft reboot            -> boot.py + main.py run again
+    // (A soft reboot WITHOUT the abort just types "2,4" into the line.)
+    let _ = port.write_all(b"\x03\x03");
+    let _ = port.flush();
+    std::thread::sleep(Duration::from_millis(300));
     let _ = port.write_all(b"\x02\x04");
     let _ = port.flush();
     std::thread::sleep(Duration::from_millis(2500));

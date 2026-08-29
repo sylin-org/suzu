@@ -146,6 +146,7 @@ impl Repl {
         if !self.raw {
             self.enter_raw()?;
         }
+        self.buf.clear(); // stale response fragments must never glue onto the next reply
         if let Err(e) = self
             .port
             .write_all(code.as_bytes())
