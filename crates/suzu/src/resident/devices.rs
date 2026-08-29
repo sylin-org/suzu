@@ -48,8 +48,9 @@ pub enum Outbound {
     /// suzu sessions forward them as `A,<axis>,<value>`; ancestor
     /// sessions drop them at this boundary.
     Pulse { axis: String, value: u8 },
-    /// A moment for faces: the ring overlay.
-    Ring { words: Vec<String>, urgency: u8 },
+    /// A moment for faces: the ring overlay. The signal names the
+    /// moment (and its icon, when the face has one).
+    Ring { signal: String, words: Vec<String>, urgency: u8 },
     Close,
 }
 
@@ -78,8 +79,9 @@ pub enum DevicesCmd {
     /// republish. In-memory only — it dies with the process.
     Pause,
     Resume,
-    /// A moment bound for faces: the band shows the label briefly.
-    Ring { label: String, urgency: u8 },
+    /// A moment bound for faces: the band shows the label briefly;
+    /// the signal names an icon when the face has one.
+    Ring { signal: String, label: String, urgency: u8 },
 }
 
 pub struct Devices {
@@ -119,9 +121,9 @@ impl Devices {
                 }
                 DevicesCmd::Pause => self.pause_stream(),
                 DevicesCmd::Resume => self.resume_stream().await,
-                DevicesCmd::Ring { label, urgency } => {
+                DevicesCmd::Ring { signal, label, urgency } => {
                     if !self.paused {
-                        self.ring(&label, urgency)
+                        self.ring(&signal, &label, urgency)
                     }
                 }
             }
@@ -157,12 +159,13 @@ impl Devices {
 
     /// A ring: every live session tells its face that something
     /// happened. The frame carries the moment's words after the seq.
-    fn ring(&mut self, label: &str, urgency: u8) {
-        let words: Vec<&str> = label.split_whitespace().collect();
+    fn ring(&mut self, signal: &str, label: &str, urgency: u8) {
+        let words: Vec<String> = label.split_whitespace().map(|s| s.to_string()).collect();
         for device in self.devices.values_mut() {
             if let Some(outbound) = &device.outbound {
                 let _ = outbound.send(Outbound::Ring {
-                    words: words.iter().map(|s| s.to_string()).collect(),
+                    signal: signal.to_string(),
+                    words: words.clone(),
                     urgency,
                 });
             }
@@ -403,11 +406,11 @@ fn session_loop(
                     }
                 }
             }
-            Ok(Outbound::Ring { words, urgency }) => {
+            Ok(Outbound::Ring { signal, words, urgency }) => {
                 if suzu {
                     seq = seq.wrapping_add(1);
                     let mut frame = format!(
-                        "R,info,{urgency},0,1,{seq},{}",
+                        "R,{signal},{urgency},0,1,{seq},{}",
                         words.join(",")
                     );
                     let mut x = 0u8;

@@ -27,6 +27,7 @@ def build_env(frame_lines, native):
 
     time = types.ModuleType("time")
     time.ticks_ms = lambda: t["ms"]
+    time.ticks_add = lambda base, delta: base + delta
     time.ticks_diff = lambda a, b: a - b
     time.sleep_ms = lambda ms: t.__setitem__("ms", t["ms"] + ms)
 
@@ -159,10 +160,11 @@ def main():
         "G,report,42,61,255",
         "A,audio.level,80",
         "A,audio.level,30",
+        "R,disk,1,0,1,1,3,Disk at 50%",
     ]
     time_m, machine, ujson, ubinascii, select, ssd, stdin = build_env(frames, native)
 
-    src = open(os.path.join(plate_dir, "main.py"), encoding="utf-8").read()
+    src = open(os.path.join(plate_dir, "face.py"), encoding="utf-8").read()
 
     glo = {
         "__name__": "__main__",

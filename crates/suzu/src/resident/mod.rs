@@ -146,9 +146,9 @@ fn house_line(ev: &HouseEvent) {
                 gpu.map_or_else(|| "—".to_string(), |v| format!("{v}%"))
             ),
         ),
-        HouseEvent::Ring { label, urgency } => line(
+        HouseEvent::Ring { signal, label, urgency } => line(
             "moments",
-            &format!("ring: {label} (urgency {urgency})"),
+            &format!("ring: [{signal}] {label} (urgency {urgency})"),
         ),
         HouseEvent::Pulse { .. } => {} // the pulse lane is silent by design
         HouseEvent::SplashDecided { decision, label } => {

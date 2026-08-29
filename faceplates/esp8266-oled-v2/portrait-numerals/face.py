@@ -28,6 +28,7 @@ idle = False
 ff = ()                   # the fireflies: [u0, phase, speed, v] each
 label = "suzu"
 ring_label = None          # a moment's text, shown in the band briefly
+ring_icon = None           # its icon's index, when the signal has one
 ring_until = None
 values = {"cpu": 255, "mem": 255, "gpu": 255}
 pulse_target = 0
@@ -44,6 +45,12 @@ DIG_H = 24
 DIG_STRIDE = 1 + DIG_H * 2
 DIG_FILE = "/digits_bebas.bin"
 NUM_H = DIG_H
+
+# ── moment icons: icons.bin — 8x8 sprites, 8 bytes each, MSB-left
+# rows, in ICON_KEYS order. A ring's signal names one; the icon rides
+# the overlay. Zero boot RAM — read at draw, like the digits. ──
+ICON_KEYS = "disk usb gear net clock heart warn wilt"
+ICON_FILE = "/icons.bin"
 
 # ── microglyphs: 3x5, upright (rows -> +v, cols -> +u). Packed as a
 # 36-char key strip + 2 bytes (15 bits) per glyph — ~150 RAM bytes
@@ -240,12 +247,12 @@ def set_pulse(v):
         oled.show()
 
 def decay():
-    global pulse_lit, idle, ring_label, ring_until
+    global pulse_lit, idle, ring_label, ring_icon, ring_until
     if ring_until is not None and time.ticks_diff(time.ticks_ms(), ring_until) > 0:
         ring_label = None             # the moment passed; the house returns
+        ring_icon = None
         ring_until = None
-        draw_band()
-        oled.show()
+        redraw()
     if pulse_lit > pulse_target:      # decay exponential toward the target
         pulse_lit = pulse_target + (pulse_lit - pulse_target) * 3 // 4
         draw_divider(AREA_H - 1)
@@ -287,6 +294,30 @@ def idle_step():
         f[1] = (f[1] + f[2]) % 16       # the poc's bob tempo
         x = f[0] + (f[3] * SIN[f[1]]) // 100   # ±amp, not ±25
         px(max(1, min(46, x)), f[4], 1)
+    oled.show()
+
+def draw_icon(u, v, i):
+    try:
+        with open(ICON_FILE, "rb") as f:
+            f.seek(i * 8)
+            rows = f.read(8)
+    except OSError:
+        return
+    for r in range(8):
+        for c in range(8):
+            if rows[r] & (0x80 >> c):
+                px(u + c * 2, v + r * 2, 1)
+                px(u + c * 2 + 1, v + r * 2, 1)
+                px(u + c * 2, v + r * 2 + 1, 1)
+                px(u + c * 2 + 1, v + r * 2 + 1, 1)
+
+def ring_draw():
+    """The overlay: the moment's icon centered in the column, its
+    words glowing on the band."""
+    rect(0, 0, BAND_U, H, 0)
+    if ring_icon is not None:
+        draw_icon((BAND_U - 16) // 2, 20, ring_icon)
+    draw_band()
     oled.show()
 
 def wake():
@@ -368,12 +399,13 @@ def cmd(line):
             r("OK")                   # nothing overlaid yet; ground is showing
         elif c == "R":
             p = a.split(",")
-            global ring_label, ring_until
+            global ring_label, ring_until, ring_icon
+            ring_icon = ICON_KEYS.find(p[0].lower())
             ring_label = " ".join(p[5:])[:30] or None
             ring_until = time.ticks_add(time.ticks_ms(), 5000)
             set_pulse(48)             # the dividers flash: something happened
             pulse_target = 0
-            draw_band()               # the moment takes the band
+            ring_draw()               # the moment takes the column + band
             oled.show()
             ack = "OK," + p[4] if len(p) > 4 else "OK"   # echo the seq
             r(ack, checksum=True)

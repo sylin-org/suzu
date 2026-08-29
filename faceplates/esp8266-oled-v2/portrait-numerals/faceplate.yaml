@@ -20,6 +20,7 @@ resources:
     - { from: main.py, to: main.py }      # bootstrap: imports face
     - { from: face.mpy, to: face.mpy }    # the face, as bytecode
     - { from: digits_bebas.bin, to: digits_bebas.bin }
+    - { from: icons.bin, to: icons.bin }        # moment icons (8x8 sprites)
 
 # Provenance of the digit art (regenerate, never hand-edit). The raw
 # bin is what the device reads (one glyph at a time — import RAM on
@@ -29,6 +30,10 @@ font:
   family: Bebas Neue
   license: SIL-OFL-1.1
   source: tools/fonts/BebasNeue-Regular.ttf
+  icons:
+    source: firmware/suzu-d/esp8266-oled-v2/icons.py (Open Iconic, MIT)
+    packer: tools/pack_icons.py
+    keys: disk usb gear net clock heart warn wilt
   bytecode: face.mpy — python -m mpy_cross -march=xtensa face.py -o face.mpy
   (this firmware auto-runs main.py only; face.py is the human source)
   generator: tools/font2sprites.py

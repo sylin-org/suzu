@@ -299,6 +299,9 @@ def main():
         ("face.mpy", open(
             "faceplates/esp8266-oled-v2/portrait-numerals/face.mpy",
             "rb").read()),
+        ("icons.bin", open(
+            "faceplates/esp8266-oled-v2/portrait-numerals/icons.bin",
+            "rb").read()),
         ("digits_bebas.bin", open(
             "faceplates/esp8266-oled-v2/portrait-numerals/digits_bebas.bin",
             "rb").read()),

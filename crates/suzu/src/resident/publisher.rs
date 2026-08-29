@@ -79,11 +79,11 @@ impl Publisher {
                         self.distribute(Arc::clone(ground)).await;
                     }
                 }
-                HouseEvent::Ring { label, urgency } => {
+                HouseEvent::Ring { signal, label, urgency } => {
                     let _ = self
                         .house
                         .devices_tx()
-                        .send(super::devices::DevicesCmd::Ring { label, urgency })
+                        .send(super::devices::DevicesCmd::Ring { signal, label, urgency })
                         .await;
                 }
                 _ => {}

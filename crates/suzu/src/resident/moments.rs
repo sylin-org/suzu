@@ -117,6 +117,7 @@ impl Moments {
                                 let text = format!("{n} earlier notes + {}", label.unwrap_or_default());
                                 self.splash("coalesced-splash", Some(text.clone()));
                                 let _ = self.events_tx.send(HouseEvent::Ring {
+                                    signal: moment.kind.clone(),
                                     label: text,
                                     urgency: moment.urgency,
                                 });
@@ -124,6 +125,7 @@ impl Moments {
                                 self.splash(&format!("{} ({}, urgency {})", moment.kind, moment.from, moment.urgency), label.clone());
                                 if let Some(text) = label {
                                     let _ = self.events_tx.send(HouseEvent::Ring {
+                                        signal: moment.kind.clone(),
                                         label: text,
                                         urgency: moment.urgency,
                                     });
