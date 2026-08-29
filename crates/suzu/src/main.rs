@@ -15,6 +15,7 @@ mod mpush;
 mod probe;
 mod resident;
 mod servicing;
+mod shot;
 
 use catalog::Catalog;
 use probe::{Outcome, Transcript};
@@ -380,6 +381,59 @@ fn run_test(port: &str) {
     }
 }
 
+/// One PNG per connected firefly. The capture rides the wire
+/// (J,{"shot":1}); only suzu/1 faces answer it — everyone else gets
+/// one honest line and untouched ports.
+fn screenshot(filter: Option<&str>) {
+    println!("suzu screenshot — one png per connected firefly");
+    let ports: Vec<_> = enumerate()
+        .into_iter()
+        .filter(|e| e.usb.is_some()) // non-USB ports are foreign by default
+        .filter(|e| filter.map_or(true, |f| e.name == f))
+        .collect();
+    if ports.is_empty() {
+        println!("  no USB serial port matches — plug a firefly in (data cable, not charge-only)");
+        return;
+    }
+    let mut shots = 0;
+    for e in &ports {
+        println!("  {} …", e.name);
+        let _ = io::stdout().flush();
+        let t = probe::probe_transcript(&e.name);
+        if let Some(err) = &t.error {
+            println!("    probe failed: {err}");
+            continue;
+        }
+        let Some(json) = &t.identity else {
+            println!("    no shot: no identity response (fresh or foreign firmware)");
+            continue;
+        };
+        let device_id = json
+            .get("device_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .chars()
+            .take(8)
+            .collect::<String>();
+        match shot::capture(&e.name) {
+            Ok(frame) => {
+                let base = format!("shot-{}-{device_id}", e.name);
+                let portrait = std::path::PathBuf::from(format!("{base}.png"));
+                let native = std::path::PathBuf::from(format!("{base}-native.png"));
+                match shot::render(&frame, &portrait, &native) {
+                    Ok(()) => {
+                        println!("    shot → {}", portrait.display());
+                        shots += 1;
+                    }
+                    Err(err) => println!("    frame lifted, render failed: {err}"),
+                }
+            }
+            Err(err) => println!("    no shot: {err}"),
+        }
+    }
+    println!("{shots} png(s) — faces were rebooted to clean up; `suzu serve` dresses them again");
+}
+
 fn servicing_menu(port: &str) {
     println!("\n── servicing {port} ──────────────────────────────");
     println!("  1. test          probe & show identity");
@@ -490,6 +544,7 @@ async fn main() -> anyhow::Result<()> {
         Some("scan") => scan_once(&catalog),
         Some("detective") => detective(&catalog),
         Some("serve") => resident::run(catalog).await?,
+        Some("screenshot") => screenshot(args.get(2).map(|s| s.as_str())),
         Some("firmware") => {
             let port = args.get(2).ok_or_else(|| anyhow::anyhow!("usage: suzu firmware <port>"))?;
             println!("{}", servicing::migrate(port)?);
