@@ -27,6 +27,8 @@ import microcontroller
 NUM = 25
 COLS = 5
 ROWS = 5
+MAX_K = 0.5                  # the gentle ceiling: half brightness
+BLINK_K = 1.0                # the threshold blink may exceed it
 pixels = neopixel.NeoPixel(board.GP16, NUM, brightness=0.3, auto_write=False)
 
 _VERSION = "1.0.0"
@@ -121,7 +123,8 @@ for i in range(3):
 
 
 def atom_period(v):
-    return 6.0 - 5.0 * (v / 100.0) ** 2   # 10 pct -> ~6 s, 100 pct -> 1 s
+    # a full cycle (rise, stay, fall, wait) is 8 s tops
+    return 2.0 + 6.0 * (1.0 - v / 100.0)
 
 
 # ── raindrops: [pos, born, (r, g, b), urgency] - impact flash, ring ──
@@ -159,16 +162,17 @@ def render(t, dt):
                         a["pos"] = random.randrange(NUM)
                 a["t"] = 0.0
             f = (a["t"] / a["period"]) % 1.0
-            if f < 0.30:                     # ramp up
-                k = f / 0.30
-            elif f < 0.45:                   # stay
-                if a["value"] >= 80:         # past the threshold: blink
-                    k = 1.0 if int(t * 8) % 2 == 0 else 0.55
+            if f < 0.30:                     # ramp up to the gentle ceiling
+                k = (f / 0.30) * MAX_K
+            elif f < 0.50:                   # stay
+                if a["value"] >= 80:         # past the threshold: blink,
+                    k = (BLINK_K if int(t * 8) % 2 == 0  # allowed brighter
+                         else MAX_K * 0.45)
                 else:
-                    k = 1.0
-            elif f < 0.75:                   # fade out
-                k = 1.0 - (f - 0.45) / 0.30
-            else:                            # quiet
+                    k = MAX_K
+            elif f < 0.80:                   # fade out - all the way to black
+                k = (1.0 - (f - 0.50) / 0.30) * MAX_K
+            else:                            # the quiet beat: truly dark
                 k = 0.0
             if k > 0:
                 x, y = xy(a["pos"])
@@ -184,8 +188,15 @@ def render(t, dt):
             if fly[0] >= NUM or fly[0] < 0:
                 fly[1] = -fly[1]
                 fly[0] = max(0, min(NUM - 1, fly[0]))
-            glow = 100 + int(100 * abs((t % 2.0) - 1))
-            add(buf, fly[0], (glow // 3, glow, fly[2] // 4))
+            cyc = (t / 2.2 + fly[2] / 255.0) % 1.0
+            if cyc < 0.4:                    # fade in
+                k = cyc / 0.4
+            elif cyc < 0.7:                  # fade out - to black
+                k = 1.0 - (cyc - 0.4) / 0.3
+            else:                            # a dark rest
+                k = 0.0
+            glow = MAX_K * 0.8 * k
+            add(buf, fly[0], (int(70 * glow), int(190 * glow), int(50 * glow)))
 
     # raindrops: impact flash + expanding, fading rings (light adds)
     for d in drops:
