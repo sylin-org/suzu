@@ -133,18 +133,39 @@ latch_center = None
 latch_drop_t = 0.0
 last_frame_t = time.monotonic()
 
-# atom fireflies: the report's slots, one pixel each. value drives the
-# breathing period (a full cycle is 8 s tops); past 80 they blink at
-# the peak - brighter than the ceiling. after each cycle the firefly
-# pops to a new guard-spaced spot.
+# atom fireflies: one per report slot, and each is its own little
+# machine - "I am gpu, I am at 12, I am fading in." The position only
+# ever changes in the dark beat between cycles, so a value change or a
+# pop never teleports a lit pixel: the fade completes, then it moves.
+def timings_for(value):
+    total = 2.0 + 6.0 * (1.0 - value / 100.0)   # 8 s tops, 2 s floor
+    return total * 0.30, total * 0.20, total * 0.30, total * 0.20
+
 atoms = []
 for i in range(3):
-    atoms.append({
-        "pos": 6 + i * 7,
-        "value": 10,
-        "period": 8.0,
-        "t": i * 2.1,
-    })
+    rise, stay, fall, wait = timings_for(10)
+    atoms.append({"pos": 6 + i * 7, "value": 10, "pending": 10,
+                  "phase": "quiet", "pt": 0.0,
+                  "rise": rise, "stay": stay, "fall": fall, "wait": wait})
+
+
+def retimings(atom):
+    total = 2.0 + 6.0 * (1.0 - atom["value"] / 100.0)
+    atom["rise"], atom["stay"] = total * 0.30, total * 0.20
+    atom["fall"], atom["wait"] = total * 0.30, total * 0.20
+
+
+def area_dark(x, y):
+    """True when the pixel and its 1-px guard are all dark."""
+    for dx in (-1, 0, 1):
+        for dy in (-1, 0, 1):
+            xx, yy = x + dx, y + dy
+            if 0 <= xx < COLS and 0 <= yy < ROWS:
+                r, g, b = pixels[yy * COLS + xx]
+                if r or g or b:
+                    return False
+    return True
+
 
 # idle fireflies: [pos, drift, glow phase, move timer]
 flies = [[6, 1, 0.1, 0.0], [18, -1, 0.5, 0.4], [12, 1, 0.9, 0.8]]
@@ -275,30 +296,57 @@ def tick_wake(t, dt):
     return buf
 
 
+def step_atom(a, dt):
+    """One atom's lifecycle: rise -> stay -> fall -> wait -> rise
+    somewhere new. The position only ever changes in the dark wait, so
+    a lit pixel never teleports; a value change waits for the dark too."""
+    a["pt"] += dt
+
+    if a["phase"] == "rise":
+        k = min(1.0, a["pt"] / a["rise"]) * MAX_K
+        if a["pt"] >= a["rise"]:
+            a["phase"], a["pt"] = "stay", 0.0
+        return k
+
+    if a["phase"] == "stay":
+        if a["value"] >= 80:            # past the threshold: blink at ~4 Hz
+            k = (BLINK_K if int(a["pt"] * 8) % 2 == 0 else MAX_K * 0.45)
+        else:
+            k = MAX_K
+        if a["pt"] >= a["stay"]:
+            a["phase"], a["pt"] = "fall", 0.0
+        return k
+
+    if a["phase"] == "fall":
+        k = max(0.0, 1.0 - a["pt"] / a["fall"]) * MAX_K
+        if a["pt"] >= a["fall"]:
+            a["phase"], a["pt"] = "wait", 0.0
+        return k
+
+    # the dark beat: the walk happens here - one step to a dark
+    # adjacent pixel (wrapping), the pending value taken, nothing lit
+    # ever jumps
+    if "pending" in a:
+        a["value"] = a.pop("pending")
+        retimings(a)
+    x, y = xy(a["pos"])
+    cands = []
+    for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+        nx, ny = (x + dx) % COLS, (y + dy) % ROWS
+        if area_dark(nx, ny):
+            cands.append((nx, ny))
+    if cands:
+        nx, ny = random.choice(cands)
+        a["pos"] = ny * COLS + nx
+    a["phase"], a["pt"] = "rise", 0.0
+    return 0.0
+
+
 def tick_work(t, dt):
     buf = [(0, 0, 0)] * NUM
-    for a in atoms:
-        a["t"] += dt
-        if a["t"] >= a["period"]:
-            a["pos"] = random.randrange(NUM)
-            for other in atoms:
-                if other is not a and chebyshev(a["pos"], other["pos"]) < 2:
-                    a["pos"] = random.randrange(NUM)
-            a["t"] = 0.0
-        f = (a["t"] / a["period"]) % 1.0
-        hot = a["value"] >= 80
-        if f < 0.30:                    # ramp up to the gentle ceiling
-            k = (f / 0.30) * MAX_K
-        elif f < 0.50:                  # stay
-            if hot:                     # past the threshold: blink,
-                k = (BLINK_K if int(t * 8) % 2 == 0  # allowed brighter
-                     else MAX_K * 0.45)
-            else:
-                k = MAX_K
-        elif f < 0.80:                  # fade out - all the way to black
-            k = (1.0 - (f - 0.50) / 0.30) * MAX_K
-        else:                           # the quiet beat: truly dark
-            k = 0.0
+    for i, a in enumerate(atoms):
+        others = [o["pos"] for j, o in enumerate(atoms) if j != i]
+        k = step_atom(a, others, dt)
         if k > 0:
             x, y = xy(a["pos"])
             warm = (255, 150, 30)
@@ -392,8 +440,9 @@ def process(line):
             vals.append(int(v) if v.isdigit() else 0)
         ground[:] = vals
         for i, atom in enumerate(atoms):
-            atom["value"] = ground[i]
-            atom["period"] = 2.0 + 6.0 * (1.0 - atom["value"] / 100.0)
+            # the new value waits for the dark beat: a lit firefly never
+            # changes speed or place mid-breath
+            atom["pending"] = ground[i]
         r("OK")
     elif c == "A" and len(a) >= 2 and a[0] == "audio.level":
         pulse = max(0, min(100, int(a[1])))
