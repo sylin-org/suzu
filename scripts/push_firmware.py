@@ -10,16 +10,24 @@ mpremote) is Python and the flash step may need it first.
 Usage: python scripts/push_firmware.py COM24
 """
 
+import base64
 import json
+import os
+import re
 import serial
 import sys
 import time
 
-CHUNK = 256
+CHUNK = 192               # base64 chars per chunk-line (144 B binary) —
+                          # short lines survive the ESP8266's UART RX FIFO
+READ_SLICE = 384          # hexlify doubles it on-device: 384 -> 768, safe
 BOOT_WAIT = 2.5
 
 
 def esc(data):
+    """A MicroPython bytes literal for `data`. Kept for reference — the
+    write path uses base64 chunks instead: twice on this heap the
+    escaped-literal parse died with a 2048-byte MemoryError."""
     s = "b'"
     for b in data:
         if b == 0x5C:
@@ -37,63 +45,202 @@ def esc(data):
     return s + "'"
 
 
+class FramingError(SystemExit):
+    pass
+
+
 class Repl:
     def __init__(self, port):
         self.p = serial.Serial(port, 115200, timeout=0.3)
         time.sleep(BOOT_WAIT)                      # ESP auto-reset on open
-        self.p.write(b"\r\x03\x03")                # interrupt any app
-        time.sleep(0.7)
-        self.p.reset_input_buffer()
-        self.p.write(b"\x01")                      # raw REPL
-        time.sleep(0.5)
-        self.p.reset_input_buffer()
-        self.raw = True
+        self.raw = False
+        self.ensure_raw()
+        # The sanity round-trip: the same raw-REPL path every later
+        # step needs, proven working BEFORE anything is read or written.
+        out = self.exec("print('suzu-ok')")
+        if b"suzu-ok" not in out:
+            raise FramingError("REPL answered but not sanely: " + repr(out[:80]))
+        # The ancestor app left the heap dirty and fragmented; a collect
+        # here is the difference between a 1 KB parse fitting or not.
+        self.exec("import gc; gc.collect()")
+
+    def ensure_raw(self):
+        """Enter raw mode and BELIEVE it only when the device says so.
+
+        The failed first migration ran writes with `raw = True` set
+        blindly; half the traffic landed at the friendly prompt (a
+        Ctrl-D there reboots the board mid-session). Never again: a
+        session without the raw banner is not a session."""
+        for attempt in range(3):
+            self.p.write(b"\r\x03\x03")            # interrupt any app
+            time.sleep(0.7)
+            self.drain(0.5)                        # the app's exit reply lands late
+            self.p.write(b"\x02")                  # Ctrl-B: friendly, known state
+            time.sleep(0.3)
+            self.drain(0.3)
+            self.p.write(b"\x01")                  # Ctrl-A: raw mode
+            time.sleep(0.3)
+            banner = self.drain(0.5)
+            if b"raw REPL" in banner:
+                self.raw = True
+                print("  raw REPL confirmed (attempt %d)" % (attempt + 1))
+                return
+        raise FramingError("could not confirm raw REPL — device untouched")
+
+    def drain(self, secs):
+        end = time.time() + secs
+        buf = b""
+        while time.time() < end:
+            n = self.p.in_waiting
+            buf += self.p.read(n if n else 1)
+        return buf
 
     def exec(self, code):
+        """One raw-REPL round trip. Framing is verified, never assumed;
+        a lost frame aborts loudly (blind retries can double-write)."""
         sys.stdout.flush()
         if not self.raw:
-            self.enter_raw()
+            self.ensure_raw()
         self.p.write(code.encode())
         self.p.write(b"\x04")
+        # The end marker is the PAIR `\x04>` — a bare `\x04` check only
+        # passes when a read happens to split between the two bytes.
         out = b""
         end = time.time() + 20
-        while time.time() < end and not out.endswith(b"\x04"):
+        while time.time() < end and not out.endswith(b"\x04>"):
             out += self.p.read(512)
-        end = time.time() + 5
-        while time.time() < end:
-            c = self.p.read(1)
-            if c == b">":
-                break
+        if not out.endswith(b"\x04>"):
+            self.raw = False
+            raise FramingError(
+                "no end-of-reply marker — framing unknown, aborting "
+                "(device untouched; re-run re-verifies every file)"
+            )
         if b"Traceback" in out:
             raise SystemExit("device raised:\n" + out.decode(errors="replace"))
         return out
 
-    def write_file(self, name, data):
-        print("    writing %s (%d bytes) ..." % (name, len(data)))
-        sys.stdout.flush()
-        self.exec("f = open('%s','wb')" % name)
-        for i in range(0, len(data), CHUNK):
-            self.exec("f.write(%s)" % esc(data[i : i + CHUNK]))
-        self.exec("f.close()")
-        # read-back verify — never trust a blind write. The reply is
-        # `b'<hex>'`; parse the quoted section (buffer noise may precede
-        # it), never strip-all-nonhex.
-        reply = self.exec(
-            "import ubinascii; print(ubinascii.hexlify(open('%s','rb').read()))" % name
-        )
-        import re
+    def sync_prompt(self):
+        """Hold until the friendly prompt actually answers — the first
+        write line must never race the post-interrupt transition."""
+        self.p.write(b"\r\n")
+        got = b""
+        end = time.time() + 3
+        while time.time() < end:
+            n = self.p.in_waiting
+            if n:
+                got += self.p.read(n)
+            if got.rstrip().endswith(b">>>"):
+                return True
+            time.sleep(0.05)
+        return False
 
-        m = re.search(rb"b'([0-9a-fA-F]*)'", reply)
-        assert m, "could not parse hexlify reply: " + repr(reply[:120])
-        assert bytes.fromhex(m.group(1).decode()) == data, "verify failed for " + name
+    def write_file(self, name, data):
+        """The ancestor Send-ESP8266File pattern, hardened: interrupt,
+        Ctrl-B to the friendly prompt, then base64 chunk lines — each
+        line dribbled in 16-char bites (the ESP8266's UART RX FIFO
+        overruns a 200+ char burst; a truncated line with an open
+        quote swallows the session silently) and each line waited out
+        to the `>>> ` prompt. Verified afterwards by sliced read-back."""
+        self.exec("import gc; gc.collect()")
+        self.p.write(b"\r\x03\x03")            # interrupt whatever runs
+        time.sleep(0.7)
+        self.drain(0.5)
+        self.p.write(b"\x02")                  # Ctrl-B: friendly, deliberately
+        time.sleep(0.4)
+        self.drain(0.4)
+        self.raw = False
+        if not self.sync_prompt():
+            raise SystemExit("friendly prompt not answering — device untouched")
+
+        def line(s):
+            payload = s.encode() + b"\r\n"
+            for i in range(0, len(payload), 16):
+                self.p.write(payload[i : i + 16])
+                time.sleep(0.004)
+            got = b""
+            end = time.time() + 5
+            while time.time() < end:
+                n = self.p.in_waiting
+                if n:
+                    got += self.p.read(n)
+                if b">>>" in got[-8:]:
+                    return
+                time.sleep(0.02)
+            self.p.write(b"\r\x03\x03")        # unwind a stuck line
+            self.drain(0.4)
+            raise SystemExit(
+                "line never reached the prompt: %r... reply tail: %r"
+                % (s[:60], got[-80:])
+            )
+
+        line("f = open('%s','wb')" % name)
+        line("import ubinascii")
+        b64 = base64.b64encode(data).decode()
+        for i in range(0, len(b64), CHUNK):
+            line("f.write(ubinascii.a2b_base64('%s'))" % b64[i : i + CHUNK])
+        line("f.close()")
+        line("import os; print('SIZE:', os.stat('%s')[6])" % name)
+        time.sleep(0.2)
+        # Read-back verify — sliced, never a whole-file hexlify (that
+        # doubles the bytes on-device and blows the heap floor).
+        self.ensure_raw()
+        got = self.read_file(name)
+        assert got == data, "verify failed for " + name
         print("  OK %s (%d bytes verified)" % (name, len(data)))
 
     def list_files(self):
         out = self.exec("import os; print(os.listdir())")
-        inner = out.decode(errors="replace").strip().strip("[]")
+        text = out.decode(errors="replace")
+        # Extract the bracket section — a late exit-reply can glue an
+        # `OK` (or boot noise) onto the front of the real answer.
+        a, b = text.find("["), text.rfind("]")
+        if a == -1 or b == -1 or b < a:
+            raise FramingError("unparseable list_files reply: " + repr(text[:120]))
+        inner = text[a + 1 : b]
         return [s.strip().strip("'\"") for s in inner.split(",") if s.strip()]
 
+    def read_file(self, name):
+        """Read a device file back in small slices — hexlify doubles the
+        bytes on-device, so the slice obeys the 2 KB heap floor."""
+        data = b""
+        self.exec("f = open('%s','rb')" % name)
+        while True:
+            reply = self.exec(
+                "import ubinascii; print(ubinascii.hexlify(f.read(%d)))"
+                % READ_SLICE
+            )
+            m = re.search(rb"b'([0-9a-fA-F]*)'", reply)
+            assert m, "could not parse backup slice: " + repr(reply[:120])
+            chunk = bytes.fromhex(m.group(1).decode())
+            if not chunk:
+                break
+            data += chunk
+        self.exec("f.close()")
+        return data
+
+    def backup_files(self, names, port):
+        """Dump every existing file before any write — the procedure's
+        license to touch a working device. Framing errors are NOT
+        skippable here: a lost frame means we no longer know state."""
+        if not names:
+            print("nothing to back up (fresh filesystem)")
+            return
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        dest = os.path.join("backups", "%s-%s" % (port, stamp))
+        os.makedirs(dest, exist_ok=True)
+        for name in names:
+            try:
+                data = self.read_file(name)
+            except (AssertionError, OSError) as e:
+                print("  backup skipped %s (%s)" % (name, e))
+                continue
+            with open(os.path.join(dest, name), "wb") as f:
+                f.write(data)
+            print("  backed up %s (%d bytes)" % (name, len(data)))
+        print("backup at %s" % dest)
+
     def soft_reboot(self):
+        self.raw = False
         self.p.write(b"\x02")                      # friendly prompt
         time.sleep(0.4)
         self.p.reset_input_buffer()
@@ -106,10 +253,23 @@ def main():
     port = sys.argv[1] if len(sys.argv) > 1 else "COM24"
     base = "firmware/suzu-d/esp8266-oled-v2/"
     device_id = sys.argv[2] if len(sys.argv) > 2 else None
+    fresh = "--fresh" in sys.argv
 
     repl = Repl(port)
     files = repl.list_files()
     print("device files:", files)
+    if not files and not fresh:
+        # The failed first migration "backed up" an empty list into
+        # silence — an unreadable filesystem is a diagnosis, not a
+        # blank check. Nothing gets written on top of an unknown state.
+        raise SystemExit(
+            "filesystem listing came back empty — refusing to write "
+            "(pass --fresh after erase_flash + write_flash, never on a guess)"
+        )
+    # Rule zero: never modify a working device without a proven
+    # rollback. The backup is the file-level rollback; the ancestor
+    # installer (erase -> flash -> provision) remains the heavy one.
+    repl.backup_files(files, port)
 
     suzu = {
         "proto": "suzu/1",
@@ -129,11 +289,15 @@ def main():
         ("icons.py", open(base + "icons.py", "rb").read()),
         ("profont_10.py", open(base + "profont_10.py", "rb").read()),
         ("suzu.json", json.dumps(suzu).encode()),
-        ("main.py", open("faceplates/esp8266-oled-v2/portrait-numerals/main.py", "rb").read()),
+        ("main.py", open(
+            "faceplates/esp8266-oled-v2/portrait-numerals/main.py", "rb").read()),
+        ("digits_bebas.bin", open(
+            "faceplates/esp8266-oled-v2/portrait-numerals/digits_bebas.bin",
+            "rb").read()),
     ]
     print("pushing %d files to %s ..." % (len(payload), port))
-    print("  list_files probe: %s" % repl.list_files())
     for name, data in payload:
+        repl.exec("import gc; gc.collect()")       # fresh heap per file
         repl.write_file(name, data)
 
     repl.soft_reboot()

@@ -1,9 +1,32 @@
 name: portrait-numerals
-aesthetic: striking
 class: esp8266-oled-v2
-slots: [name, cpu, mem, gpu]
+aesthetic: striking
+
+# Ground "report" slots, in the order the face reads them.
+# (255 / missing -> drawn as a dash: "not measured", not zero.)
+slots: [cpu, mem, gpu]
+
+# Fast-lane atoms the face consumes; the pulse dividers.
 extras: [audio.level]
+
+# suzu/1 frames this face answers (see README).
+frames: [I, K, G, A, J, S, X, R]
+
+# The tool installs what the faceplate declares — files are pushed
+# verbatim, never interpreted. Art lives in the files, not in the tool.
 resources:
   install:
     - { from: main.py, to: main.py }
-frames: [I, S, G, P, R]
+    - { from: digits_bebas.bin, to: digits_bebas.bin }
+
+# Provenance of the digit art (regenerate, never hand-edit). The raw
+# bin is what the device reads (one glyph at a time — import RAM on
+# the ESP8266 is 80 KB and spoken for); the .py module is host-side
+# reference only.
+font:
+  family: Bebas Neue
+  license: SIL-OFL-1.1
+  source: tools/fonts/BebasNeue-Regular.ttf
+  generator: tools/font2sprites.py
+  data: digits_bebas.bin
+  cap-height: 24
