@@ -15,14 +15,17 @@ W, H = 64, 128            # portrait: u 0..63 across, v 0..127 down
 BAND_U = 48               # the yellow band starts here (16 px wide)
 AREA_H = 42               # 3 areas x 42 + 2 dividers = 128
 NUM_H = 34                # numeral zone inside an area
-REST_MS = 10000           # frames since last_rx before the face rests
+REST_MS = 10000           # frames since last_rx before the face idles
+BOOT_IDLE_MS = 3000       # no host at boot -> fireflies instead of dashes
 I2C_SCL, I2C_SDA = 12, 14 # the class's OLED wiring (D6/D5), 400 kHz
 
 u = UART(0, 115200)
 oled = None
 tick = None
 last_rx = None
-resting = False
+boot_ms = None
+idle = False
+ff = ()                   # the fireflies: [u0, phase, speed, v] each
 name = "suzu"
 values = {"cpu": 255, "mem": 255, "gpu": 255}
 pulse_target = 0
@@ -45,6 +48,9 @@ NUM_H = DIG_H
 # where a dict of tuples costs ~3 KB this board doesn't have. ──
 GLYPH_KEYS = "ABCDEFGHIKLMNOPRSTUVWXYZ0123456789- "
 GLYPH_BITS = b"+\xedk\xae9#kny\xa7y\xa49k[\xedt\x97[\xadI'_\xedkm+jk\xa4k\xad8\x8et\x92[o[j[\xfdZ\xadZ\x92r\xa7{o,\x97R\xa7r\xcf[\xc9\x7f\x8e?kr\x92{\xefk\xce\x01\xc0\x00\x00"
+
+# the poc's sine table (x100) — the idle fireflies bob on it
+SIN = (0, 38, 70, 92, 100, 92, 70, 38, 0, -38, -70, -92, -100, -92, -70, -38)
 
 # portrait mapping: visual (u,v) -> native (x=v, y=63-u)
 
@@ -115,12 +121,11 @@ def band_glyph(u, v, ch, on=1):
                 px(u + (4 - row), v + col, on)
 
 def draw_band():
-    """The yellow hardware zone: the name as spine text, black on
-    yellow, reading top -> bottom."""
-    rect(BAND_U, 0, 16, H, 1)
+    """The yellow strip, kept dark: the name as glowing spine text,
+    reading top -> bottom. Lit letters outread black cutouts at 1 px."""
     x = BAND_U + 5                    # rotated glyphs are 5 across
     for i, ch in enumerate(name.upper()[:30]):   # 4 + 29*4 <= 127
-        band_glyph(x, 4 + i * 4, ch, 0)
+        band_glyph(x, 4 + i * 4, ch, 1)
 
 def draw_divider(v):
     """1-px divider; the lit run hangs off the name band, growing left."""
@@ -209,28 +214,54 @@ def set_pulse(v):
         oled.show()
 
 def decay():
-    global pulse_lit, resting
-    if resting:
-        return
+    global pulse_lit, idle
     if pulse_lit > pulse_target:      # decay exponential toward the target
         pulse_lit = pulse_target + (pulse_lit - pulse_target) * 3 // 4
         draw_divider(AREA_H - 1)
         draw_divider(AREA_H * 2 - 1)
         oled.show()
     now = time.ticks_ms()
-    if last_rx is not None and time.ticks_diff(now, last_rx) > REST_MS:
-        rest()
+    quiet_for = (REST_MS if last_rx is not None
+                 else BOOT_IDLE_MS + REST_MS)
+    anchor = last_rx if last_rx is not None else boot_ms
+    if time.ticks_diff(now, anchor) > quiet_for and not idle:
+        idle_start()
 
-def rest():
-    global resting
-    resting = True
-    oled.contrast(10)
+def idle_start():
+    """The poc's idle: three fireflies drift down the numeral column,
+    bobbing on the same sine table, in the same 100 ms tick."""
+    global idle, ff, boot_ms, ff_t0
+    idle = True
+    boot_ms = None
+    ff_t0 = time.ticks_ms()
+    ff = [list(p) for p in (
+        # [u0, phase, speed, amp, v, delay] — the poc's particles,
+        # portrait-turned: they drift DOWN the column, bob ±amp on the
+        # sine table, and enter staggered (0/1000/2000 ms).
+        (24, 0, 1, 6, -2, 0),
+        (34, 4, 2, 8, 40, 1000),
+        (20, 10, 1, 5, 84, 2000),
+    )]
+
+def idle_step():
+    rect(0, 0, BAND_U, H, 0)
+    now = time.ticks_ms()
+    for f in ff:
+        if time.ticks_diff(now, ff_t0) < f[5]:
+            continue                    # staggered entrance, as the poc
+        f[4] += f[2]                    # drift down at the poc's speeds
+        if f[4] > 129:
+            f[4] = -1
+        f[1] = (f[1] + f[2]) % 16       # the poc's bob tempo
+        x = f[0] + (f[3] * SIN[f[1]]) // 100   # ±amp, not ±25
+        px(max(1, min(46, x)), f[4], 1)
+    oled.show()
 
 def wake():
-    global resting
-    if resting:
-        resting = False
-        oled.contrast(255)
+    global idle
+    if idle:
+        idle = False
+        redraw()
 
 def dump_shot():
     """A copy of the screen: the J escape's snapshot form. The frame
@@ -246,6 +277,7 @@ def dump_shot():
 def cmd(line):
     global last_rx, name, values
     line = line.strip()
+    wake()
     if not line:
         return
     if "*" in line:                   # `*hh` xor checksum, if present
@@ -258,7 +290,6 @@ def cmd(line):
                 return                # bad checksum: drop; state self-heals
             line = body
     last_rx = time.ticks_ms()
-    wake()
     parts = line.split(",", 1)
     c = parts[0].upper()
     a = parts[1] if len(parts) > 1 else ""
@@ -314,9 +345,13 @@ def cmd(line):
             r("ERR,unknown:%s" % c)
     except (ValueError, IndexError) as e:
         r("ERR,%s" % e)
+    wake()
 
 def tcb(t):
-    decay()
+    if idle:
+        idle_step()
+    else:
+        decay()
 
 def init():
     global oled, tick
@@ -335,6 +370,8 @@ def init():
     return True
 
 def main():
+    global boot_ms
+    boot_ms = time.ticks_ms()
     r("suzu firefly oled v2 — portrait numerals, suzu/1")
     r("OK," + descriptor(), checksum=True)   # unsolicited hello
     if not init():
