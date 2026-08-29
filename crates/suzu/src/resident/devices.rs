@@ -71,12 +71,18 @@ pub enum DevicesCmd {
     Publish(Arc<MachineReport>),
     Pulse { axis: String, value: u8 },
     Snapshot { reply: mpsc::Sender<Vec<DeviceRow>> },
+    /// The control chirp: stop streaming and release the ports (the
+    /// faces fall idle into their animations), then re-open and
+    /// republish. In-memory only — it dies with the process.
+    Pause,
+    Resume,
 }
 
 pub struct Devices {
     events: Sender<HouseEvent>,
     devices: BTreeMap<String, Device>,
     pulse_announced: bool,
+    paused: bool,
 }
 
 impl Devices {
@@ -85,6 +91,7 @@ impl Devices {
             events,
             devices: BTreeMap::new(),
             pulse_announced: false,
+            paused: false,
         }
     }
 
@@ -93,11 +100,21 @@ impl Devices {
             match cmd {
                 DevicesCmd::Mind(facts) => self.mind(facts),
                 DevicesCmd::Gone { port } => self.gone(&port),
-                DevicesCmd::Publish(ground) => self.publish(&ground),
-                DevicesCmd::Pulse { axis, value } => self.pulse(&axis, value),
+                DevicesCmd::Publish(ground) => {
+                    if !self.paused {
+                        self.publish(&ground)
+                    }
+                }
+                DevicesCmd::Pulse { axis, value } => {
+                    if !self.paused {
+                        self.pulse(&axis, value)
+                    }
+                }
                 DevicesCmd::Snapshot { reply } => {
                     let _ = reply.send(self.snapshot()).await;
                 }
+                DevicesCmd::Pause => self.pause_stream(),
+                DevicesCmd::Resume => self.resume_stream().await,
             }
         }
     }
@@ -106,6 +123,67 @@ impl Devices {
     /// stay silent until their dialect is codified.
     fn supports_consumer(class: Option<&str>) -> bool {
         class == Some("esp8266-oled-v2-class")
+    }
+
+    /// One session thread per live device, owning its port and
+    /// translating ground → device-shaped data. A device answering
+    /// suzu/1 gets the suzu surface; everything else with a known
+    /// translation gets the ancestor vocabulary.
+    fn spawn_session(&mut self, facts: &DeviceFacts) {
+        let suzu = facts.proto.as_deref() == Some("suzu/1");
+        if !suzu && !Self::supports_consumer(facts.class.as_deref()) {
+            return; // minded, but no consumer translation yet — silent
+        }
+        let (tx, rx) = std_mpsc::channel::<Outbound>();
+        let close = Arc::new(AtomicBool::new(false));
+        let port = facts.port.clone();
+        let close2 = Arc::clone(&close);
+        let _ = std::thread::Builder::new()
+            .name(format!("session:{port}"))
+            .spawn(move || session_thread(port, rx, close2, suzu));
+        if let Some(device) = self.devices.get_mut(&facts.port) {
+            device.outbound = Some(tx);
+        }
+    }
+
+    /// Pause: sessions close, ports release, the ground stops. The
+    /// faces fall idle into their animations; the devices stay minded
+    /// so `resume` re-opens without replug.
+    fn pause_stream(&mut self) {
+        if self.paused {
+            return;
+        }
+        self.paused = true;
+        for device in self.devices.values_mut() {
+            if let Some(outbound) = device.outbound.take() {
+                let _ = outbound.send(Outbound::Close);
+            }
+        }
+        println!(
+            "[devices] stream paused — {} port(s) released, faces fall idle (`suzu resume` to restart)",
+            self.devices.len()
+        );
+    }
+
+    /// Resume: sessions re-open and the DeviceMinded events send the
+    /// publisher republishing its last ground, so faces redress at once.
+    async fn resume_stream(&mut self) {
+        if !self.paused {
+            return;
+        }
+        self.paused = false;
+        let ports: Vec<String> = self.devices.keys().cloned().collect();
+        println!("[devices] stream resumed — re-opening {} session(s)", ports.len());
+        for port in ports {
+            let facts = self.devices[&port].facts.clone();
+            self.spawn_session(&facts);
+            let _ = self.events.send(HouseEvent::DeviceMinded {
+                port,
+                device_id: facts.device_id.clone(),
+                class: facts.class.clone(),
+                state: format!("{:?}", DeviceState::Accepted),
+            });
+        }
     }
 
     fn mind(&mut self, facts: DeviceFacts) {
@@ -127,37 +205,19 @@ impl Devices {
             }
         }
 
-        // The consumer: one session thread per live device, owning its
-        // port and translating ground → device-shaped data. A device
-        // answering suzu/1 gets the suzu surface; everything else with
-        // a known translation gets the ancestor vocabulary.
-        let suzu = facts.proto.as_deref() == Some("suzu/1");
-        let (outbound, _close) = if suzu || Self::supports_consumer(facts.class.as_deref())
-        {
-            let (tx, rx) = std_mpsc::channel::<Outbound>();
-            let close = Arc::new(AtomicBool::new(false));
-            let port = facts.port.clone();
-            let close2 = Arc::clone(&close);
-            let _ = std::thread::Builder::new()
-                .name(format!("session:{port}"))
-                .spawn(move || session_thread(port, rx, close2, suzu));
-            (Some(tx), close)
-        } else {
-            // Minded, but no consumer translation yet — a known, named,
-            // silent device.
-            let (tx, _) = std_mpsc::channel::<Outbound>();
-            (Some(tx), Arc::new(AtomicBool::new(false)))
-        };
-
         self.devices.insert(
             facts.port.clone(),
             Device {
-                facts,
+                facts: facts.clone(),
                 state,
                 minded_at: now(),
-                outbound,
+                outbound: None,
             },
         );
+        // A paused house stays silent: the session spawns on resume.
+        if !self.paused {
+            self.spawn_session(&facts);
+        }
     }
 
     fn gone(&mut self, port: &str) {

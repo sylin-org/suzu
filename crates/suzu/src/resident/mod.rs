@@ -299,6 +299,9 @@ pub async fn run(catalog: Arc<Catalog>) -> anyhow::Result<()> {
     spawn_sensor_supervised(Arc::clone(&house));
     spawn_publisher_supervised(Arc::clone(&house));
 
+    // the control chirp: `suzu pause` / `suzu resume` from any shell
+    tokio::spawn(crate::control::listen(house.devices_tx()));
+
     // the visitor door, by hand: `tell <label>`
     let (stdin_tx, mut stdin_rx) = mpsc::channel::<String>(16);
     std::thread::spawn(move || {
@@ -319,6 +322,7 @@ pub async fn run(catalog: Arc<Catalog>) -> anyhow::Result<()> {
 
     println!("suzu resident is up — domains: watcher · devices · moments · sensor · publisher");
     println!("plug a device and watch the house talk. `tell <label>` rings the bell · `status` · `q` quits.");
+    println!("control: `suzu pause` / `suzu resume` stop and restart the stream to devices.");
 
     let mut ev_rx = events.subscribe();
     let mut last_ground_line = Option::<std::time::Instant>::None;
