@@ -501,6 +501,10 @@ fn open_serial(port: &str) -> anyhow::Result<Box<dyn serialport::SerialPort>> {
         .timeout(Duration::from_millis(200))
         .open()
         .map_err(|e| anyhow::anyhow!("{port}: {e}"))?;
+    // CircuitPython gates its CDC console on DTR: without it the face
+    // hears no ground and gardens forever while its neighbors work
+    // (proven 2026-08-29 — the matrix idle through a live stream).
+    let _ = p.write_data_terminal_ready(true);
     // ESP auto-reset on open — the harvest's 2.5 s boot, plus a settle.
     std::thread::sleep(Duration::from_millis(2500));
     let _ = p.write_all(b"\r\n");

@@ -56,6 +56,9 @@ impl Repl {
             .timeout(Duration::from_millis(200))
             .open()
             .map_err(|e| anyhow::anyhow!("{port_name}: {e}"))?;
+        // CircuitPython gates its console on DTR — without it a live
+        // board answers in silence (see resident/devices.rs).
+        let _ = port.write_data_terminal_ready(true);
         std::thread::sleep(BOOT_WAIT);
         // Interrupt any running application (Ctrl-C ×2) and drain the
         // boot/banner noise.
