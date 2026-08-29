@@ -577,8 +577,16 @@ async fn main() -> anyhow::Result<()> {
         Some("serve") => resident::run(catalog).await?,
         Some("screenshot") => screenshot(&catalog, args.get(2).map(|s| s.as_str())),
         Some("record") => {
+            // Reasonable limits, stated out loud when an ask exceeds
+            // them: the wire caps fps, the host and GIF viewers cap
+            // the run. The face never chokes either way (one shot is
+            // one bounded write) — these guard our side of the wire.
             let secs: u32 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(10);
             let fps: u32 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(3);
+            let (secs, fps) = (secs.clamp(1, 60), fps.clamp(1, 5));
+            if args.len() > 2 {
+                println!("recording {secs} s at {fps} fps (limits: ≤60 s, ≤5 fps — the wire decides)");
+            }
             let entry = enumerate()
                 .into_iter()
                 .find(|e| e.usb.is_some())
