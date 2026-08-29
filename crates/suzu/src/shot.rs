@@ -196,24 +196,18 @@ fn be32(v: u32) -> [u8; 4] {
     v.to_be_bytes()
 }
 
-/// `px` is one byte per pixel (0 = dark, 1 = lit), `w` x `h`, scaled by
-/// integer replication (nearest-neighbour — the chunky look is the look).
-pub fn write_png(path: &std::path::Path, w: usize, h: usize, px: &[u8], scale: usize) -> anyhow::Result<()> {
+/// `px` is one RGB triple per pixel, `w` x `h`, scaled by integer
+/// replication (nearest-neighbour — the chunky look is the look).
+pub fn write_png(path: &std::path::Path, w: usize, h: usize, px: &[[u8; 3]], scale: usize) -> anyhow::Result<()> {
     let sw = w * scale;
-    let stride = (sw + 7) / 8;
+    let stride = sw * 3;
     let mut raw = Vec::with_capacity(h * scale * (1 + stride));
     for y in 0..h * scale {
         raw.push(0u8); // filter: none
         let sy = y / scale;
-        for xb in 0..stride {
-            let mut byte = 0u8;
-            for bit in 0..8 {
-                let x = xb * 8 + bit;
-                if x < sw && px[sy * w + x / scale] != 0 {
-                    byte |= 0x80 >> bit;
-                }
-            }
-            raw.push(byte);
+        for x in 0..sw {
+            let c = &px[sy * w + x / scale];
+            raw.extend_from_slice(c);
         }
     }
 
@@ -233,7 +227,7 @@ pub fn write_png(path: &std::path::Path, w: usize, h: usize, px: &[u8], scale: u
     let mut ihdr = Vec::new();
     ihdr.extend_from_slice(&be32(sw as u32));
     ihdr.extend_from_slice(&be32((h * scale) as u32));
-    ihdr.extend_from_slice(&[1, 0, 0, 0, 0]); // 1-bit grayscale
+    ihdr.extend_from_slice(&[8, 2, 0, 0, 0]); // 8-bit truecolor RGB
     for (kind, data) in [("IHDR", ihdr), ("IDAT", idat), ("IEND", vec![])] {
         png.extend_from_slice(&be32(data.len() as u32));
         png.extend_from_slice(kind.as_bytes());
@@ -247,31 +241,63 @@ pub fn write_png(path: &std::path::Path, w: usize, h: usize, px: &[u8], scale: u
 }
 
 /// Decode the MVLSB frame (column bytes, 8 vertical pixels, D0 = top)
-/// and render the face's true portrait orientation + the native panel.
-pub fn render(frame: &[u8], out_portrait: &std::path::Path, out_native: &std::path::Path) -> anyhow::Result<()> {
+/// and render the face as the eye sees it: each native row shines in
+/// its phosphor zone's color (dual-zone panels: a yellow strip above a
+/// cyan field). `zones` is (first_row, last_row, rgb); rows outside
+/// any zone fall back to a neutral white.
+pub fn render(
+    frame: &[u8],
+    zones: &[(usize, usize, [u8; 3])],
+    out_portrait: &std::path::Path,
+    out_native: &std::path::Path,
+) -> anyhow::Result<()> {
     let w = 128usize;
-    let mut native = vec![0u8; w * 64];
+    let neutral = [230u8, 230, 230];
+    // An OLED's off state is black; lit pixels shine their zone's color.
+    let off = [0u8, 0, 0];
+    let shade = |y: usize| -> [u8; 3] {
+        zones
+            .iter()
+            .find(|(y0, y1, _)| y >= *y0 && y <= *y1)
+            .map(|(_, _, c)| *c)
+            .unwrap_or(neutral)
+    };
+    let mut native = vec![off; w * 64];
     for page in 0..8 {
         for col in 0..128usize {
             let bits = frame[page * 128 + col];
             for b in 0..8u32 {
                 if bits & (1 << b) != 0 {
-                    native[(page * 8 + b as usize) * w + col] = 1;
+                    native[(page * 8 + b as usize) * w + col] = shade(page * 8 + b as usize);
                 }
             }
         }
     }
     // The panel stands on its long edge: portrait(u,v) -> native(v, 63-u).
     // Row-major portrait: index = v * 64 + u.
-    let mut portrait = vec![0u8; 64 * 128];
+    let mut portrait = vec![off; 64 * 128];
     for u in 0..64usize {
         for v in 0..128usize {
-            if native[(63 - u) * w + v] != 0 {
-                portrait[v * 64 + u] = 1;
+            let src = native[(63 - u) * w + v];
+            if src != off {
+                portrait[v * 64 + u] = src;
             }
         }
     }
     write_png(out_portrait, 64, 128, &portrait, 3)?;
     write_png(out_native, w, 64, &native, 4)?;
     Ok(())
+}
+
+/// `#rrggbb` -> RGB triple; unparsable colors fall back to white.
+pub fn parse_color(s: &str) -> [u8; 3] {
+    let hex = s.trim_start_matches('#');
+    if hex.len() != 6 {
+        return [230, 230, 230];
+    }
+    let mut out = [230u8, 230, 230];
+    for (i, pair) in hex.as_bytes().chunks(2).enumerate() {
+        out[i] = u8::from_str_radix(std::str::from_utf8(pair).unwrap_or("e6"), 16).unwrap_or(230);
+    }
+    out
 }

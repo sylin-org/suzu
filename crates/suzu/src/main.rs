@@ -385,7 +385,7 @@ fn run_test(port: &str) {
 /// One PNG per connected firefly. The capture rides the wire
 /// (J,{"shot":1}); only suzu/1 faces answer it — everyone else gets
 /// one honest line and untouched ports.
-fn screenshot(filter: Option<&str>) {
+fn screenshot(catalog: &Catalog, filter: Option<&str>) {
     println!("suzu screenshot — one png per connected firefly");
     let ports: Vec<_> = enumerate()
         .into_iter()
@@ -409,6 +409,17 @@ fn screenshot(filter: Option<&str>) {
             println!("    no shot: no identity response (fresh or foreign firmware)");
             continue;
         };
+        // The panel's phosphor zones, from the class manifest: a
+        // screenshot colors what the eye sees (dual-zone panels shine
+        // yellow above cyan).
+        let zones = e
+            .usb
+            .as_ref()
+            .and_then(|u| catalog.class_by_vidpid(u.vid, u.pid))
+            .map(|c| c.id.clone())
+            .map(|id| catalog.display_zones(&id))
+            .unwrap_or_default();
+
         let device_id = json
             .get("device_id")
             .and_then(|v| v.as_str())
@@ -439,7 +450,7 @@ fn screenshot(filter: Option<&str>) {
                 let base = format!("shot-{}-{model}-{device_id}", e.name);
                 let portrait = std::path::PathBuf::from(format!("{base}.png"));
                 let native = std::path::PathBuf::from(format!("{base}-native.png"));
-                match shot::render(&frame, &portrait, &native) {
+                match shot::render(&frame, &zones, &portrait, &native) {
                     Ok(()) => {
                         println!("    shot → {}", portrait.display());
                         shots += 1;
@@ -563,7 +574,7 @@ async fn main() -> anyhow::Result<()> {
         Some("scan") => scan_once(&catalog),
         Some("detective") => detective(&catalog),
         Some("serve") => resident::run(catalog).await?,
-        Some("screenshot") => screenshot(args.get(2).map(|s| s.as_str())),
+        Some("screenshot") => screenshot(&catalog, args.get(2).map(|s| s.as_str())),
         Some("pause") => control::chirp("pause").await?,
         Some("resume") => control::chirp("resume").await?,
         Some("firmware") => {

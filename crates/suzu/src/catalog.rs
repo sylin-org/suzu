@@ -1,9 +1,11 @@
 //! The catalog — hardware manifests loaded into memory at boot.
 //!
-//! Folder per class (`hardware/classes/<class-id>/`); the tool parses
-//! only `signature.yaml` — the identification bits. `manifest.yaml`,
-//! `procedure.yaml`, and `evidence/` belong to the servicing engine and
-//! are ignored here. serde skips unknown fields, so the files may grow
+//! Folder per class (`hardware/classes/<class-id>/`). Two files are
+//! parsed, per the separation of concerns: `signature.yaml` — the
+//! identification bits — and the `display` section of `manifest.yaml`
+//! (servicing data: the panel's phosphor zones, so screenshots can
+//! color what the eye sees). Procedures and evidence/ stay with the
+//! servicing engine. serde skips unknown fields, so the files may grow
 //! without this tool ever changing.
 
 use serde::Deserialize;
@@ -23,9 +25,34 @@ pub struct ClassSignature {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct DisplayZone {
+    /// Inclusive native row range: `rows: [0, 15]`.
+    pub rows: Vec<u16>,
+    /// `#rrggbb` — the phosphor color this zone shines.
+    pub color: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct DisplaySpec {
+    #[serde(rename = "type")]
+    pub panel_type: Option<String>,
+    pub resolution: Option<String>,
+    #[serde(default)]
+    pub zones: Vec<DisplayZone>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct MatchRules {
     /// `"1a86:7523"` (exact) or `"2e8a:*"` (vendor-wide).
     pub vid_pid: Vec<String>,
+}
+
+/// The parsed `manifest.yaml` — servicing data only. Fields grow as
+/// the tool earns them; serde ignores the rest.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ClassManifest {
+    pub id: String,
+    pub display: Option<DisplaySpec>,
 }
 
 #[derive(Clone)]
@@ -35,6 +62,21 @@ pub struct Catalog {
     classes: Vec<ClassSignature>,
     /// vid -> [(pid-or-wildcard, class index)]
     index: HashMap<u16, Vec<(Option<u16>, usize)>>,
+    /// class id -> its manifest's servicing bits (display zones …)
+    manifests: HashMap<String, ClassManifest>,
+}
+
+/// `#rrggbb` -> RGB triple; unparsable colors fall back to white.
+pub fn parse_color(s: &str) -> [u8; 3] {
+    let hex = s.trim_start_matches('#');
+    if hex.len() != 6 {
+        return [230, 230, 230];
+    }
+    let mut out = [230u8, 230, 230];
+    for (i, pair) in hex.as_bytes().chunks(2).enumerate() {
+        out[i] = u8::from_str_radix(std::str::from_utf8(pair).unwrap_or("e6"), 16).unwrap_or(230);
+    }
+    out
 }
 
 fn parse_vidpid(s: &str) -> Option<(u16, Option<u16>)> {
@@ -78,7 +120,13 @@ impl Catalog {
 
             let mut classes = Vec::new();
             let mut index: HashMap<u16, Vec<(Option<u16>, usize)>> = HashMap::new();
+            let mut manifests: HashMap<String, ClassManifest> = HashMap::new();
             for dir in class_dirs {
+                if let Ok(text) = std::fs::read_to_string(dir.join("manifest.yaml")) {
+                    if let Ok(m) = serde_yaml::from_str::<ClassManifest>(&text) {
+                        manifests.insert(m.id.clone(), m);
+                    }
+                }
                 let sig_path = dir.join("signature.yaml");
                 let Ok(text) = std::fs::read_to_string(&sig_path) else {
                     eprintln!("catalog: no signature.yaml in {}", dir.display());
@@ -109,6 +157,7 @@ impl Catalog {
                 ),
                 classes,
                 index,
+                manifests,
             };
         }
 
@@ -116,6 +165,7 @@ impl Catalog {
             source: "no manifests found — using built-in seed hints".into(),
             classes: Vec::new(),
             index: HashMap::new(),
+            manifests: HashMap::new(),
         }
     }
 
@@ -126,6 +176,28 @@ impl Catalog {
             .iter()
             .find(|(mp, _)| mp.is_none_or(|p| p == pid))
             .map(|(_, idx)| &self.classes[*idx])
+    }
+
+    /// The display zones of a class's manifest: (first_row, last_row,
+    /// rgb) — what a faithful screenshot colors.
+    pub fn display_zones(&self, class_id: &str) -> Vec<(usize, usize, [u8; 3])> {
+        self.manifests
+            .get(class_id)
+            .and_then(|m| m.display.as_ref())
+            .map(|d| {
+                d.zones
+                    .iter()
+                    .filter(|z| z.rows.len() == 2)
+                    .map(|z| {
+                        (
+                            z.rows[0] as usize,
+                            z.rows[1] as usize,
+                            parse_color(&z.color),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// Signature lookup — used when a descriptor answered. Legacy CSV

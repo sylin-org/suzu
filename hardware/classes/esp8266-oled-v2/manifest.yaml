@@ -7,6 +7,12 @@ flash:
   backend: repl-push
   baud: 115200
   characteristics: "80 KB RAM — chunked raw-REPL writes (512 B); mpremote cp flaky"
+display:
+  type: oled-dual-zone
+  resolution: "128x64"
+  zones:
+    - { rows: [0, 15], color: "#ffdd00" }    # yellow strip (native top)
+    - { rows: [16, 63], color: "#00d5ff" }   # cyan field
 sets: [os]
 boards:
   - name: "EstarDyn NodeMCU ESP8266 V3, Type-C"
