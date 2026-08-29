@@ -22,10 +22,15 @@ class_notes: |
   across replugs for this class — always re-probe.
   Device_id mint order across the first three units spans ~6 hours —
   provisioning chronology is recoverable from GUIDv7 timestamps.
-  HARDWARE SUSPECT FLAG (2026-08-28): one unit accepted a verified
-  erase+flash (esptool hash OK) and then boot-looped garbage it could
-  not boot — classic failed/counterfeit flash chip signature. Flagged,
-  set aside, not minded. The census remembers: some units are just bad.
+  CORRECTION (2026-08-28, later): the "boot-loop garbage" unit was NOT
+  suspect hardware. Its flash was left half-written by a cancelled
+  installer run — our own interrupted write, not the board. The ancestor
+  installer then flashed and provisioned the same unit flawlessly
+  (device 01a04aea-aa63-7be3-995e-96fe5522eeb, oled-v2, display test
+  passed). Lesson recorded in install-lessons.md: a tool reports what
+  happened; it never concludes what the hardware is. "Suspect" requires
+  repeated independent failures, and a cancelled write is ours, not
+  theirs.
 migration:
   to: suzu-d
   keep: [device_id, hardware_id]     # identity survives the upgrade

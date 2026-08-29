@@ -7,16 +7,26 @@ and [`implementation-plan.md`](implementation-plan.md) §3.*
 
 ---
 
-## 0 · Current state (open item)
+## 0 · Current state (recovered)
 
-COM24 (OLED v2, device_id `019d9460…`) is mid-recovery: flash was
-erased and one re-flash attempt was interrupted. Next session: finish
-with the ancestor recipe — `esptool erase_flash` then
-`esptool --baud 460800 write_flash --flash_size=detect 0x0
-micropython-esp8266.bin` (cached at `~/.zen-garden/firefly-cache/`) —
-then REPL-push the suzu folder (`scripts/push_firmware.py` already
-does the push + verify end-to-end) and confirm `suzu scan` answers
-`proto: suzu/1` with the preserved device_id.
+The OLED v2 bench unit was **fully recovered** by the ancestor
+installer: erase + MicroPython flash + file upload + provisioning +
+display test, all green (new device_id
+`01a04aea-aa63-7be3-995e-96fe5522eeb`, oled-v2). The board was never
+faulty — the boot loop was our own cancelled write leaving a partial
+image.
+
+**The meta-lesson, which outranks the rest:** the installer's most
+dangerous failure mode is its own confident diagnosis. A tool reports
+what happened ("write cancelled at 62%", "verify failed — retrying");
+it never concludes what the hardware *is*. "Suspect hardware" requires
+repeated independent failures across methods — one interrupted write
+is the tool's own history, not the board's biography. The suzu
+adoption UX must encode this: retry and report, never convict.
+
+Open item: migrate the recovered unit to suzu (backup → push the suzu
+folder → verify `proto: suzu/1` with the new device_id preserved into
+the roster).
 
 ## 1 · Sense & identify
 
