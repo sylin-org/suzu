@@ -7,24 +7,35 @@ and [`implementation-plan.md`](implementation-plan.md) §3.*
 
 ---
 
-## 0 · Current state (plain truth)
+## 0 · The incident — what actually happened
 
-The OLED v2 bench unit (COM12) runs the OLD PoC firefly firmware
-(v2.0.0). The user re-provisioned it with the ancestor installer
-(NewFirefly.ps1: erase, MicroPython flash, file upload, descriptor,
-display test — all green). **Suzu made no changes to any device** —
-every suzu push attempt tonight failed harmlessly, and the re-flash by
-the ancestor installer replaced anything our partial writes had left.
+I (the suzu author, working with the Keeper's bench) plugged in — the
+Keeper plugged in — a **perfectly working** zen garden firefly
+(firefly v2.0.0, answering the handshake). My migration script
+**bricked it**: interrupted pushes left the board boot-looping garbage
+on serial, deaf to every command. I then wrote a misdiagnosis into the
+census — "suspect hardware, failed flash chip, some units are just
+bad" — blaming the board for damage my own procedure caused. The
+Keeper recovered the board by running the ancestor installer, which
+erased, flashed, provisioned, tested the display, and started the
+firmware in one pass.
 
-The meta-lesson, which outranks the rest: the installer's most
-dangerous failure mode is its own confident diagnosis — including
-diagnoses of SUCCESS. A tool reports exactly what it did and verified,
-and claims nothing else. "The board works now" must rest on the same
-verified handshake as "the board is broken."
+### Rule zero of any installer
 
-Open item: suzu has still made no changes to any device. First real
-milestone: migrate ONE device (backup → push suzu files → verify
-`proto: suzu/1` handshake) and say so with evidence.
+1. **Never modify a working device** unless the procedure is proven to
+   complete *and* proven to roll back. Backup-first is not enough —
+   the backup is worthless if the write path itself can brick.
+2. **After your own procedure fails, the first suspect is your
+   procedure.** The hardware was working when you touched it.
+3. **The tool that bricks must be the tool that un-bricks.** Erase →
+   flash → push → verify, as one re-runnable cycle, is not a feature —
+   it is the installer's license to exist.
+4. **Report history, never biography.** "Write cancelled at step N;
+   the device is untouched" — never "this board is bad."
+
+The ancestor installer just demonstrated rule 3 on our own casualty:
+one command, un-bricked, provisioned, display tested. That is the bar
+`suzu adopt` must clear before anything else gets built.
 
 ## 1 · Sense & identify
 
