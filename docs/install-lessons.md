@@ -112,3 +112,139 @@ one command, un-bricked, provisioned, display tested. That is the bar
   busy / unknown — never a guess dressed as a fact.
 - After any write: verify, then *say so* — "wrote and verified" beats
   "done".
+
+## 8 · The un-brick ladder — harvest of the ancestor installer
+
+*Codified 2026-08-28 from a full read of
+`zen-garden/installer/NewFirefly.ps1` (1203 lines, all handler regions)
+and `FireflyDeviceId.psm1`. This is the recovery knowledge the Keeper
+used to un-brick our casualty, written down so `suzu adopt` can inherit
+it. Cross-reference: the procedure checklists in
+`hardware/classes/*/procedure.yaml`.*
+
+### 8.0 · What Repair-LegacyBoot.ps1 is (a correction)
+
+The briefing guessed it was "likely the un-brick playbook". **It is
+not.** Read in full (378 lines): it patches a **NewStone USB stick**
+for legacy-BIOS/32-bit-UEFI boot — a 440-byte syslinux MBR splice, a
+VBR install, a bridging `syslinux.cfg`, a `BOOTIA32.EFI` copy. It
+never touches a firefly. The real un-brick playbook turned out to be
+**NewFirefly.ps1 itself**: its whole ESP8266 flow is one re-runnable
+*erase → flash → upload → provision → test → start* pass, and that
+pass is exactly what recovered our board. Still, the repair script
+models discipline worth stealing for any destructive tool:
+
+- **Validate the target against known markers before writing**
+  (`isolinux/` + `preseed.cfg` must exist, or it exits).
+- **Refuse to touch the system disk** — a hard stop, not a warning.
+- **Splice, don't overwrite**: read the 512-byte sector, replace only
+  the 440 bytes it owns, preserve signature + partition table.
+- **Verify dependencies before starting** (`mbr.bin` must be exactly
+  440 bytes).
+- **Restore the state you found** (re-sets the disk read-only flag).
+
+### 8.1 · The ladder (cheapest rung first)
+
+**Rung 0 — diagnose honestly, never guess.**
+
+| Symptom | Truth | Action |
+|---|---|---|
+| Continuous binary garbage at 115200 | boot spew at **74880** misread; board reboots faster than we read | listen at 74880 to confirm; verdict = "unreachable — recovery path", never "bad board" |
+| Port won't open | another program holds it (`PortBusy`) | message, not error — never a write attempt |
+| Prompt dead but firmware intact | REPL lost raw/friendly sync | rung 1 |
+| Everything else dead on serial | ROM bootloader still answers | rung 2 |
+
+**Rung 1 — REPL recovery** (harmless; firmware untouched):
+
+1. `\r\x03\x03` (Ctrl-C ×2) + 700 ms drain — the app catches
+   KeyboardInterrupt and yields the prompt, by design.
+2. `\x02` (Ctrl-B) → friendly prompt.
+3. `\x02\x04` soft reboot + 2500 ms wait if the prompt stays confused.
+4. **Never interrupt after the soft reboot** — a recovery probe sent
+   after the app comes back kills the app it just revived.
+
+**Rung 2 — the ROM bootloader pass** (ESP8266/ESP32; the bootloader
+answers even from a crash loop — this is why a "bricked" ESP is
+normally a few minutes from whole). The ancestor's recipe, verbatim,
+no improvements:
+
+```
+python -m esptool --port <p> erase_flash
+python -m esptool --port <p> --baud 460800 write_flash --flash_size=detect 0 <micropython-esp8266.bin>
+```
+(ESP32: add `--chip esp32`, write at `-z 0x1000`; images cached in
+`~/.zen-garden/firefly-cache/`, size-checked >500 KB before reuse —
+install works offline.)
+
+Then, in order: wait ≥3 s for the hard-reset boot → **poll a cheap
+raw-REPL round trip** (`print('mpready')`) instead of blind sleeps —
+the first upload races the boot otherwise (the ancestor's own "failed
+to upload boot.py" scar) → upload resources → **verify read-back** →
+provision → visual test → reset into `main.py` (`machine.reset()` —
+more reliable than Ctrl-D after paste mode). One command, one pass,
+fully re-runnable: **the tool that bricks must be the tool that
+un-bricks.**
+
+**Rung 3 — RP2040** (no serial bootloader; mass-storage instead):
+
+1. Hold BOOTSEL while plugging → `RPI-RP2` volume appears.
+2. Copy the CircuitPython UF2 onto it (that *is* the flash).
+3. **Wait for `CIRCUITPY`** to mount (poll up to 45 s) — the board
+   re-enumerates as new drives and a **new COM port number**.
+4. Copy `lib/neopixel.mpy` + `code.py`; re-detect the COM port
+   (Refresh-RP2040ComPort pattern — never reuse the stale number).
+5. Probe `I` (expect "firefly"), then the visual test: open/close the
+   port per command (`C`, `F,r,g,b`, `A,rainbow`, `T,healthy`) — the
+   firmware treats port-open as attention.
+
+### 8.2 · Upload + verify patterns (per family)
+
+- **ESP8266** (80 KB heap, flaky `mpremote cp`): raw-REPL chunked
+  writes. Ancestor: base64, 512-B chunks, 150 ms pacing, buffer drain,
+  verify = `os.stat` size + pattern check. Ours (survived the bench):
+  256-B escaped chunks + **full hexlify read-back compare per file**
+  (`scripts/push_firmware.py`). Keep ours; it verifies bytes, not
+  sizes.
+- **ESP32** (roomy): `mpremote cp` is fine **after** the REPL-ready
+  poll; **strip a UTF-8 BOM before upload** — MicroPython cannot parse
+  BOM'd files.
+- **Post-install boot.py check** (ancestor `Test-FireflyBootPy`):
+  read the file back, match the WiFi-disable pattern, re-upload **once**
+  on any failure, fail loudly if still wrong. Fireflies are
+  USB-tethered; a rogue AP advertising the garden is an operational
+  smell you want caught at install time, not weeks later.
+- **Ordering rule**: the ancestor picks the variant *before* any
+  destructive action, so a cancel leaves the device untouched. suzu
+  inherits this: faceplate selection before the first write, backup
+  before every replaced file.
+
+### 8.3 · Provisioning (the FIREFLY-0004 ritual → suzu adoption)
+
+- **Fresh GUIDv7 per provisioning** (RFC 9562 §5.7: 48-bit ms
+  timestamp, version 7, variant bits). Sorts chronologically by mint
+  time. suzu keeps this.
+- **Descriptor declares operator truth only** (family/variant/display/
+  capabilities); firmware overlays runtime truth (`hardware_id` from
+  the chip, `version` from a compile-time constant) at HELLO time.
+  Written UTF-8 **without BOM**. suzu.json inherits the shape.
+- **The roster keeps history**: re-provisioning appends a new entry,
+  never overwrites — "report history, never biography" made
+  mechanical. Host-side roster write is **write-then-rename** so a
+  crash can't corrupt it.
+- **Identity is preserved across migration** by carrying `device_id`
+  through; the final handshake must return the *same* device_id it had
+  before the write (§5 of this doc).
+
+### 8.4 · Detection table (from `Get-ConnectedDevices`)
+
+| Signal | Meaning |
+|---|---|
+| VID 2E8A or 239A | RP2040 (Pico / Adafruit) |
+| VID 1A86 PID 55D4 (CH9102) | ESP32 T-Display |
+| VID 1A86 PID 7523 (CH340) | ESP8266 NodeMCU |
+| Volume label `RPI-RP2` | RP2040 in bootloader |
+| Volume label `CIRCUITPY` | RP2040 running CircuitPython |
+| Friendly name `RP2|CircuitPython|Board CDC` / `CH9102` / `CH340` | fallback heuristics only |
+
+VID/PID is a hint; the probe is the authority (§1). Ports shuffle on
+replug — re-scan, never cache.

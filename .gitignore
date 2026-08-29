@@ -2,3 +2,4 @@ target/
 *.exe
 node_modules/
 __pycache__/
+backups/
