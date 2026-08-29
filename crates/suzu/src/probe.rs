@@ -89,20 +89,37 @@ fn strip_prefixes(line: &str) -> &str {
     l.trim()
 }
 
+/// suzu-t: a session frame may carry a trailing `*hh` xor checksum —
+/// the companion is required to send one on `OK,{…}` replies, so the
+/// host must accept it. Without this, every honest identity reply
+/// fails to parse as bare JSON and the probe calls a live face
+/// "fresh firmware" (proven on the bench, 2026-08-28).
+fn strip_checksum(line: &str) -> &str {
+    let l = line.trim();
+    if l.len() >= 3 {
+        let (body, sum) = l.split_at(l.len() - 2);
+        if body.ends_with('*') && sum.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return &body[..body.len() - 1];
+        }
+    }
+    l
+}
+
 pub fn try_identity(line: &str) -> Option<Value> {
-    let body = strip_prefixes(line);
+    let l = strip_checksum(line);
+    let body = strip_prefixes(l);
     if body.starts_with('{') {
         return serde_json::from_str(body).ok();
     }
     // Boot noise can glue itself onto the response line (no newline
     // between junk and `OK,{…}`) — parse from the first `{` to the
     // last `}` and let serde judge.
-    let start = line.find('{')?;
-    let end = line.rfind('}')? + 1;
+    let start = l.find('{')?;
+    let end = l.rfind('}')? + 1;
     if end <= start {
         return None;
     }
-    serde_json::from_str(&line[start..end]).ok()
+    serde_json::from_str(&l[start..end]).ok()
 }
 
 fn is_legacy(line: &str) -> bool {
@@ -163,8 +180,10 @@ pub fn probe_transcript(port_name: &str) -> Transcript {
     let _ = port.flush();
     std::thread::sleep(Duration::from_millis(2500));
 
-    // 1. Passive window — some firmware speaks first on boot.
-    let deadline = started + Duration::from_millis(2000);
+    // 1. Passive window — some firmware speaks first on boot. (The
+    // deadline starts NOW: anchoring it to `started` made this window
+    // unrunnable — it sat entirely inside the 5 s recovery preamble.)
+    let deadline = Instant::now() + Duration::from_millis(2000);
     while Instant::now() < deadline {
         match lines.poll(&mut port) {
             Ok(seen) => {

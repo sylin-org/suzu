@@ -44,9 +44,8 @@ impl Device {
 pub enum Outbound {
     Ground(Arc<MachineReport>),
     /// The pulse lane — fast atoms for faces that declared the extra.
-    /// Fields are read by faceplate sessions once they land; v0 drops
-    /// them at the boundary by design.
-    #[allow(dead_code)]
+    /// suzu sessions forward them as `A,<axis>,<value>`; ancestor
+    /// sessions drop them at this boundary.
     Pulse { axis: String, value: u8 },
     Close,
 }
@@ -128,15 +127,19 @@ impl Devices {
         }
 
         // The consumer: one session thread per live device, owning its
-        // port and translating ground → device-shaped data.
-        let (outbound, _close) = if Self::supports_consumer(facts.class.as_deref()) {
+        // port and translating ground → device-shaped data. A device
+        // answering suzu/1 gets the suzu surface; everything else with
+        // a known translation gets the ancestor vocabulary.
+        let suzu = facts.proto.as_deref() == Some("suzu/1");
+        let (outbound, _close) = if suzu || Self::supports_consumer(facts.class.as_deref())
+        {
             let (tx, rx) = std_mpsc::channel::<Outbound>();
             let close = Arc::new(AtomicBool::new(false));
             let port = facts.port.clone();
             let close2 = Arc::clone(&close);
             let _ = std::thread::Builder::new()
                 .name(format!("session:{port}"))
-                .spawn(move || session_thread(port, rx, close2));
+                .spawn(move || session_thread(port, rx, close2, suzu));
             (Some(tx), close)
         } else {
             // Minded, but no consumer translation yet — a known, named,
@@ -180,9 +183,8 @@ impl Devices {
         }
     }
 
-    /// v0: no faceplate declares `audio.level` yet — the lane flows up
-    /// to this boundary and stops, silently. When the pulse-bar
-    /// faceplate lands, consumers that declared the extra receive it.
+    /// The lane forwards to every live session; ancestors drop it at
+    /// the session boundary, suzu faces that declared the extra hear it.
     fn pulse(&mut self, axis: &str, value: u8) {
         let mut consumers = 0;
         for device in self.devices.values_mut() {
@@ -221,7 +223,12 @@ impl Devices {
 
 // ── the consumer — one session thread per device ───────────────────
 
-fn session_thread(port: String, rx: std_mpsc::Receiver<Outbound>, close: Arc<AtomicBool>) {
+fn session_thread(
+    port: String,
+    rx: std_mpsc::Receiver<Outbound>,
+    close: Arc<AtomicBool>,
+    suzu: bool,
+) {
     let mut serial = match open_serial(&port) {
         Ok(p) => p,
         Err(e) => {
@@ -229,11 +236,18 @@ fn session_thread(port: String, rx: std_mpsc::Receiver<Outbound>, close: Arc<Ato
             return; // rx dropped → the device is simply silent
         }
     };
-    println!("[sessions] {port}: consumer translating");
+    println!(
+        "[sessions] {port}: consumer translating ({})",
+        if suzu { "suzu/1" } else { "ancestor" }
+    );
 
-    // Greet: the ancestor firmware enters its dashboard on first data.
-    let _ = write_line(&mut serial, "H,thriving");
-    let _ = write_line(&mut serial, "G,0,1,0,0");
+    // The ancestor firmware enters its dashboard on first data; a suzu
+    // face needs no greeting — its context rides the first ground.
+    if !suzu {
+        let _ = write_line(&mut serial, "H,thriving");
+        let _ = write_line(&mut serial, "G,0,1,0,0");
+    }
+    let mut named: Option<String> = None;
 
     loop {
         if close.load(Ordering::Relaxed) {
@@ -241,27 +255,54 @@ fn session_thread(port: String, rx: std_mpsc::Receiver<Outbound>, close: Arc<Ato
         }
         match rx.recv_timeout(Duration::from_secs(5)) {
             Ok(Outbound::Ground(g)) => {
-                for frame in translate(&g) {
+                let frames = if suzu {
+                    translate_suzu(&g, &mut named)
+                } else {
+                    translate(&g)
+                };
+                for frame in frames {
                     if write_line(&mut serial, &frame).is_err() {
                         println!("[sessions] {port}: write failed — disposing");
                         return;
                     }
                 }
             }
-            // The pulse lane is consumed by the face's own code once a
-            // faceplate declares the extra; until then the session
-            // drops it silently (it never reaches pre-suzu firmware).
-            Ok(Outbound::Pulse { .. }) => {}
+            Ok(Outbound::Pulse { axis, value }) => {
+                // A suzu face that declared the extra hears the lane;
+                // others drop it silently at this boundary.
+                if suzu {
+                    let frame = format!("A,{axis},{value}");
+                    if write_line(&mut serial, &frame).is_err() {
+                        println!("[sessions] {port}: write failed — disposing");
+                        return;
+                    }
+                }
+            }
             Ok(Outbound::Close) => break,
-            // Keepalive: the ancestor idles to its fireflies after 10 s
-            // without comm — a redraw every 5 s holds the dashboard.
+            // Keepalive: a suzu face rests after 10 s of silence, the
+            // ancestor idles to its fireflies — a frame every 5 s
+            // holds either face.
             Err(std_mpsc::RecvTimeoutError::Timeout) => {
-                let _ = write_line(&mut serial, "R");
+                let keepalive = if suzu { "K" } else { "R" };
+                let _ = write_line(&mut serial, keepalive);
             }
             Err(std_mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }
     println!("[sessions] {port}: released — fireflies when idle");
+}
+
+/// The suzu/1 translation: context first (`J`, when the house name is
+/// new), then ground.set in the faceplate's declared slot order. GPU
+/// has no capture yet — 255 is "not measured"; the face draws a dash.
+fn translate_suzu(g: &MachineReport, named: &mut Option<String>) -> Vec<String> {
+    let mut frames = Vec::new();
+    if named.as_deref() != Some(g.name.as_str()) {
+        frames.push(format!("J,{{\"name\":\"{}\"}}", g.name.replace('"', "'")));
+        *named = Some(g.name.clone());
+    }
+    frames.push(format!("G,report,{},{},255", g.cpu, g.mem));
+    frames
 }
 
 /// The consumer translation: the published object → the surface this
