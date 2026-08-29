@@ -100,12 +100,27 @@ def glyph(u, v, ch, on=1):
             if bits & (1 << (14 - row * 3 - col)):
                 px(u + col, v + row, on)
 
+def band_glyph(u, v, ch, on=1):
+    """A microglyph rotated 90° clockwise — the spine convention.
+    The letter's 5-row height spans the band across (u 0..4), its
+    3-column width runs down it (v 0..2); the top of each letter
+    faces the band's outer edge."""
+    i = GLYPH_KEYS.find(ch)
+    if i < 0:
+        return
+    bits = (GLYPH_BITS[i * 2] << 8) | GLYPH_BITS[i * 2 + 1]
+    for row in range(5):
+        for col in range(3):
+            if bits & (1 << (14 - row * 3 - col)):
+                px(u + (4 - row), v + col, on)
+
 def draw_band():
-    """The yellow hardware zone: black name stacked down the band."""
+    """The yellow hardware zone: the name as spine text, black on
+    yellow, reading top -> bottom."""
     rect(BAND_U, 0, 16, H, 1)
-    x = BAND_U + 6                    # glyphs 3 wide, centered at u=56
-    for i, ch in enumerate(name.upper()[:20]):   # 5 + 19*6 <= 127
-        glyph(x, 5 + i * 6, ch, 0)
+    x = BAND_U + 5                    # rotated glyphs are 5 across
+    for i, ch in enumerate(name.upper()[:30]):   # 4 + 29*4 <= 127
+        band_glyph(x, 4 + i * 4, ch, 0)
 
 def draw_divider(v):
     """1-px divider; the lit run hangs off the name band, growing left."""
