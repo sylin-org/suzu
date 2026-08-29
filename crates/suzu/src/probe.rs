@@ -94,13 +94,21 @@ fn strip_prefixes(line: &str) -> &str {
 /// host must accept it. Without this, every honest identity reply
 /// fails to parse as bare JSON and the probe calls a live face
 /// "fresh firmware" (proven on the bench, 2026-08-28).
+/// Boot noise may end in a multi-byte character: the checksum is only
+/// stripped when the trailing bytes are ASCII hex (which is what the
+/// grammar allows anyway) — a byte-index split otherwise panics the
+/// whole probe task on a char boundary (also proven on the bench).
 fn strip_checksum(line: &str) -> &str {
     let l = line.trim();
-    if l.len() >= 3 {
-        let (body, sum) = l.split_at(l.len() - 2);
-        if body.ends_with('*') && sum.bytes().all(|b| b.is_ascii_hexdigit()) {
-            return &body[..body.len() - 1];
-        }
+    let b = l.as_bytes();
+    if b.len() >= 3
+        && b[b.len() - 3] == b'*'
+        && b[b.len() - 2].is_ascii_hexdigit()
+        && b[b.len() - 1].is_ascii_hexdigit()
+    {
+        // ASCII hex digits are one byte each — the boundary is safe.
+        // Three bytes go: `*` plus the two hex digits.
+        return std::str::from_utf8(&b[..b.len() - 3]).unwrap_or(l);
     }
     l
 }
@@ -250,4 +258,36 @@ pub fn probe(port_name: &str) -> Result<Outcome> {
         return Ok(Outcome::LegacyFirefly { line: line.clone() });
     }
     Ok(Outcome::Silent)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The exact shape the bench face answers (2026-08-28): a session
+    // reply with the *hh checksum the wire requires.
+    const HELLO: &str = "OK,{\"faceplate\": \"portrait-numerals\", \"device_id\": \"01a04aea-aa63-7be3-995e-96fe5522eeeb\", \"proto\": \"suzu/1\", \"version\": \"1.0.0\"}*2a";
+
+    #[test]
+    fn identity_with_checksum_parses() {
+        let json = try_identity(HELLO).expect("checksummed hello must parse");
+        assert_eq!(json.get("proto").and_then(|v| v.as_str()), Some("suzu/1"));
+    }
+
+    #[test]
+    fn identity_without_checksum_parses() {
+        let line = HELLO.trim_end_matches("*2a");
+        let json = try_identity(line).expect("bare hello must parse");
+        assert_eq!(json.get("proto").and_then(|v| v.as_str()), Some("suzu/1"));
+    }
+
+    #[test]
+    fn boot_noise_with_multibyte_tail_never_panics() {
+        // The watcher-killer from the bench: boot noise ending in a
+        // multi-byte character, sliced at a byte boundary by the old
+        // checksum strip.
+        let noise = "File \"_boot.py\", line 304, in\u{FFFD}";
+        let _ = try_identity(noise); // must return, not panic
+        assert!(try_identity("\u{FFFD}\u{FFFD}\u{FFFD}").is_none());
+    }
 }
