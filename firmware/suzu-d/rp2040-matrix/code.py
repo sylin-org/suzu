@@ -211,7 +211,7 @@ def transition(to, why=""):
 
 def on_signal(sig):
     if sig == "FRAME_G":
-        if state != WAKE:
+        if state == IDLE:   # only idle wakes; work takes the numbers
             transition(WAKE, "the house has numbers to show")
     elif sig == "TICK_POP":
         if state == WAKE:
@@ -452,6 +452,7 @@ def process(line):
             # the new value waits for the dark beat: a lit firefly never
             # changes speed or place mid-breath
             atom["pending"] = ground[i]
+        on_signal("FRAME_G")           # the house has numbers to show
         r("OK")
     elif c == "A" and len(a) >= 2 and a[0] == "audio.level":
         pulse = max(0, min(100, int(a[1])))
@@ -469,14 +470,17 @@ def process(line):
             latched = True
             latch_center = cy * COLS + cx
             latch_drop_t = time.monotonic()
+            on_signal("ALERT")         # the lake keeps ringing
         if verb.startswith("allclear"):
             latched = False
             if latch_center is not None:
                 cx, cy = xy(latch_center)   # the heal lands at the wound
+            on_signal("ALLCLEAR")
         r("OK," + (a[4] if len(a) > 4 else "0"))
     elif c == "X":
         latched = False
         latch_center = None
+        on_signal("ALLCLEAR")          # the host's heal: ring returns to work
         r("OK")
     elif c == "S":
         words = ",".join(a)
@@ -517,18 +521,23 @@ def main():
     buf = ""
     while True:
         t = time.monotonic()
-        if supervisor.runtime.serial_bytes_available:
+        # drain everything the wire holds: the pulse lane alone runs at
+        # 5 Hz, and one char per tick (~15 B/s) drowns the RX ring in
+        # seconds — the session dies of a host-side write timeout and
+        # the face gardens forever while its neighbors work
+        while supervisor.runtime.serial_bytes_available:
             ch = sys.stdin.read(1)
-            if ch:
-                if ch == "\r" or ch == "\n":
-                    # a lone `I`, `K` or `X` is a whole command: skip
-                    # only empty lines, never short ones
-                    if buf.strip():
-                        process(buf.strip())
-                        last_frame_t = time.monotonic()
-                    buf = ""
-                else:
-                    buf += ch
+            if not ch:
+                break
+            if ch == "\r" or ch == "\n":
+                # a lone `I`, `K` or `X` is a whole command: skip
+                # only empty lines, never short ones
+                if buf.strip():
+                    process(buf.strip())
+                    last_frame_t = time.monotonic()
+                buf = ""
+            else:
+                buf += ch
         machine_tick(t)
         render()
         time.sleep(TICK)
