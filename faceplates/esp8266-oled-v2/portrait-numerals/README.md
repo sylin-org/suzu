@@ -36,7 +36,7 @@ Fallback: if `digits_bebas.py` is missing, the face renders a built-in
 | `K` | keepalive → `OK`; also wakes the face from rest |
 | `G,report,<cpu>,<mem>,<gpu>` | ground.set in declared slot order; 255 = not measured → dash |
 | `A,audio.level,<0..100>` | fast atom → the pulse dividers (attack instant, decay exponential) |
-| `J,{json}` | context escape; `"name"` sets the band |
+| `J,{json}` | context escape; `"name"` sets the band, `"shot":1` writes the frame buffer to `/shot.tmp` (a copy of the screen — see `tools/screenshot.py`) |
 | `S,<name>` | compat alias for the band (dev convenience) |
 | `X` | overlay restore → `OK` (nothing overlaid yet) |
 | `R,<signal>,<urgency>,<hue>,<arc>,<seq>[,<label>]` | a ring → the dividers blink once; ack echoes `seq` with checksum |

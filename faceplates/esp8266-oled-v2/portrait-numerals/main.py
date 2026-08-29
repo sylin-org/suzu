@@ -217,6 +217,15 @@ def wake():
         resting = False
         oled.contrast(255)
 
+def dump_shot():
+    """A copy of the screen: the J escape's snapshot form. The frame
+    buffer is written in slices — no copy bigger than the heap floor."""
+    b = oled.buffer
+    f = open("/shot.tmp", "wb")
+    for i in range(0, len(b), 384):
+        f.write(b[i : i + 384])
+    f.close()
+
 # ── frames ──
 
 def cmd(line):
@@ -264,10 +273,13 @@ def cmd(line):
         elif c == "J":
             import ujson
             ctx = ujson.loads(a)
-            if isinstance(ctx, dict) and ctx.get("name") and ctx["name"] != name:
-                name = ctx["name"]
-                draw_band()
-                oled.show()
+            if isinstance(ctx, dict):
+                if ctx.get("shot"):
+                    dump_shot()           # a copy of the screen, to /shot.tmp
+                if ctx.get("name") and ctx["name"] != name:
+                    name = ctx["name"]
+                    draw_band()
+                    oled.show()
             r("OK")
         elif c == "S":                # compat alias: set the band
             if a and a != name:
