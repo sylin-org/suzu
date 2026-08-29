@@ -1,26 +1,23 @@
 # suzu firefly matrix - rp2040-matrix, suzu/1
-#
-# The light-sentence face: 25 RGB pixels, per-pixel color and intensity.
-# Hue carries valence, intensity carries urgency, tempo carries time -
-# the gloss (5-4 breath, 3 pulse, 2 blink, 1 strobe, 0 dark) rendered
-# literally. Text lives on other faces; this one tells with light.
+# The lake. The machine's numbers are fireflies that breathe with its
+# load; moments land as raindrops - a bright impact, then a colored
+# ring expanding and fading in the category's hue. Light adds: ripples
+# and fireflies compose without rules. The face contract lives in
+# docs/the-face-contract.md.
 #
 # Frames (suzu/1 suzu-t, newline-terminated):
-#   I                     -> OK,{descriptor}*hh
-#   K                     -> OK (keepalive; also feeds the idle clock)
-#   G,report,<cpu>,<mem>,<gpu> -> ground: the breath, hue by health fold
-#   A,audio.level,<0-100> -> the pulse lane: brightness follows the level
-#   R,<signal>,<urgency>,0,1,<seq>[,<words>] -> a ring: hue by valence,
-#                            tempo by urgency; alert latches, the rest
-#                            render ~5 s and the ground resumes
-#   X                     -> restore ground after a ring
-# Unknown frames -> ERR. Silence -> the fireflies come out (idle).
-# Boot opens with the fireflies too: the garden before the house.
+#   I                -> OK,{descriptor}
+#   K                -> OK
+#   G,report,c,m,g   -> ground: three atom fireflies breathe with the values
+#   A,audio.level,v  -> the pulse: the lake's brightness follows
+#   R,sig,urg,0,1,seq[,words] -> a raindrop: hue by verb, speed by urgency;
+#                      alert latches - the lake keeps ringing at its spot
+#   X                -> allclear lands at the wound; the ground resumes
+#   S,words          -> set the label (persisted; reserved in the contract)
 
 import board
 import json
 import neopixel
-import os
 import random
 import supervisor
 import sys
@@ -30,10 +27,36 @@ import microcontroller
 NUM = 25
 COLS = 5
 ROWS = 5
-
 pixels = neopixel.NeoPixel(board.GP16, NUM, brightness=0.3, auto_write=False)
 
 _VERSION = "1.0.0"
+TICK = 0.05
+IDLE_AFTER = 10.0
+LABEL_FILE = "/label.txt"
+VERBS = ("alert", "allclear", "completion", "discovery", "begin",
+         "departure", "tended", "transition", "heartbeat")
+
+HUES = {
+    "alert": (255, 25, 0),
+    "allclear": (0, 255, 90),
+    "completion": (0, 170, 255),
+    "discovery": (170, 60, 255),
+    "begin": (0, 200, 120),
+    "departure": (120, 120, 120),
+    "tended": (255, 150, 0),
+    "transition": (140, 90, 200),
+    "heartbeat": (0, 70, 25),
+    "info": (0, 170, 255),
+    "warn": (255, 190, 0),
+}
+
+# the label: persisted, restored at boot, never reverted (the contract)
+label = "suzu"
+try:
+    with open(LABEL_FILE) as f:
+        label = f.read().strip() or label
+except OSError:
+    pass
 
 
 def _load_descriptor():
@@ -53,117 +76,148 @@ def _descriptor():
         d["hardware_id"] = "rp2040-" + "".join("{:02x}".format(b) for b in uid)
     except AttributeError:
         pass
+    d["label"] = label
     d["coverage"] = {
         "grounds": ["report"],
         "slots": {"report": ["cpu", "mem", "gpu"]},
         "extras": ["audio.level"],
+        "rings": list(VERBS),
     }
     return json.dumps(d)
 
 
 _DESCRIPTOR = _load_descriptor()
 
-LABEL_FILE = "/label.txt"
-label = "suzu"
-try:
-    with open(LABEL_FILE) as f:
-        label = f.read().strip() or label
-except OSError:
-    pass
 
-mode = "idle"
-ring_hue = (200, 10, 0)
-ring_latch = False
-ring_until = 0.0
-ground = (50, 50, 50)
+def xy(pos):
+    return pos % COLS, pos // COLS
+
+
+def chebyshev(a, b):
+    ax, ay = xy(a)
+    bx, by = xy(b)
+    return max(abs(ax - bx), abs(ay - by))
+
+
+# ── the lake state ──
+mode = "idle"                  # idle | work
+ground = [10, 10, 10]          # the machine's numbers, as the fireflies breathe
+latched = False
+latch_center = None
 last_rx = None
 boot_t = time.monotonic()
-ff_t0 = boot_t
 
+# ── atom fireflies: the report's slots, one pixel each, breathing with
+# the values. value drives the breathing period; >=80 blinks at the top;
+# after each cycle the firefly pops to a new spot (guard-spaced). ──
+atoms = []
+for i in range(3):
+    atoms.append({
+        "pos": 6 + i * 7,               # spread around the lake
+        "value": 10,
+        "period": 6.0,
+        "t": i * 1.7,                   # staggered phase
+    })
+
+
+def atom_period(v):
+    return 6.0 - 5.0 * (v / 100.0) ** 2   # 10 pct -> ~6 s, 100 pct -> 1 s
+
+
+# ── raindrops: [pos, born, (r, g, b), urgency] - impact flash, ring ──
+drops = []
+DROP_LIFE = 1.1
+
+
+def drop_at(pos, color, urgency):
+    drops.append([pos, time.monotonic(), color, urgency])
+    if len(drops) > 4:
+        drops.pop(0)
+
+
+# ── fireflies (idle): three wanderers, the poc's garden ──
 flies = [[6, 1, 20], [18, -1, 90], [12, 1, 160]]
 
-TICK = 0.1
-IDLE_AFTER = 10.0
+
+def add(buf, pos, color):
+    r, g, b = buf[pos]
+    buf[pos] = (min(255, r + color[0]), min(255, g + color[1]),
+                min(255, b + color[2]))
+
+
+def render(t, dt):
+    buf = [(0, 0, 0)] * NUM
+
+    # the ground: atom fireflies breathe with the machine's numbers
+    if mode == "work":
+        for a in atoms:
+            a["t"] += dt
+            if a["t"] >= a["period"]:
+                a["pos"] = random.randrange(NUM)
+                for other in atoms:
+                    if other is not a and chebyshev(a["pos"], other["pos"]) < 2:
+                        a["pos"] = random.randrange(NUM)
+                a["t"] = 0.0
+            f = (a["t"] / a["period"]) % 1.0
+            if f < 0.30:                     # ramp up
+                k = f / 0.30
+            elif f < 0.45:                   # stay
+                if a["value"] >= 80:         # past the threshold: blink
+                    k = 1.0 if int(t * 8) % 2 == 0 else 0.55
+                else:
+                    k = 1.0
+            elif f < 0.75:                   # fade out
+                k = 1.0 - (f - 0.45) / 0.30
+            else:                            # quiet
+                k = 0.0
+            if k > 0:
+                x, y = xy(a["pos"])
+                warm = (255, 150, 30)
+                add(buf, a["pos"], (int(warm[0] * k),
+                                    int(warm[1] * k),
+                                    int(warm[2] * k)))
+
+    # idle: the wandering fireflies
+    if mode == "idle":
+        for fly in flies:
+            fly[0] += fly[1]
+            if fly[0] >= NUM or fly[0] < 0:
+                fly[1] = -fly[1]
+                fly[0] = max(0, min(NUM - 1, fly[0]))
+            glow = 100 + int(100 * abs((t % 2.0) - 1))
+            add(buf, fly[0], (glow // 3, glow, fly[2] // 4))
+
+    # raindrops: impact flash + expanding, fading rings (light adds)
+    for d in drops:
+        age = t - d[1]
+        color = d[2]
+        urgency = d[3]
+        cx, cy = xy(d[0])
+        radius = age * (3.0 + urgency)
+        fade = max(0.0, 1.0 - age / DROP_LIFE)
+        if fade <= 0:
+            continue
+        if age < 0.12:                       # the impact flash
+            add(buf, d[0], tuple(min(255, v * 2) for v in color))
+        for i in range(NUM):
+            x, y = xy(i)
+            dist = max(abs(x - cx), abs(y - cy))
+            if abs(dist - radius) <= 0.75:
+                k = fade * max(0.0, 1.0 - dist / 6.0)
+                add(buf, i, (int(color[0] * k), int(color[1] * k),
+                             int(color[2] * k)))
+
+    for i in range(NUM):
+        pixels[i] = buf[i]
+    pixels.show()
 
 
 def r(msg):
     print(msg)
 
 
-def breath_color():
-    worst = max(ground)
-    if worst < 60:
-        return (0, 120, 30)
-    if worst < 85:
-        return (160, 110, 0)
-    return (180, 20, 0)
-
-
-def ring_hue_for(signal):
-    s = signal.lower()
-    if s.startswith("alert"):
-        return (200, 10, 0)
-    if s.startswith("allclear"):
-        return (0, 180, 40)
-    if s.startswith("completion"):
-        return (0, 120, 200)
-    if s.startswith("discovery"):
-        return (120, 60, 200)
-    return (200, 140, 0)
-
-
-def render_breath(t):
-    hue = breath_color()
-    phase = (t % 4.0) / 4.0
-    k = 0.35 + 0.4 * abs(phase * 2 - 1)
-    c = tuple(int(v * k) for v in hue)
-    pixels.fill(c)
-    pixels.show()
-
-
-def render_ring(t):
-    left = ring_until - t
-    on = True
-    if ring_latch:
-        on = int(t * 4) % 2 == 0
-    elif int(t * 5) % 2 == 0:
-        on = left % 0.4 < 0.25
-    if on:
-        k = max(0.15, min(1.0, 0.15 + 4 * 0.17))
-        pixels.fill(tuple(int(v * k) for v in ring_hue))
-    else:
-        pixels.fill((0, 0, 0))
-    pixels.show()
-
-
-def render_idle(t):
-    px_new = [None] * NUM
-    for fly in flies:
-        fly[0] += fly[1]
-        if fly[0] >= NUM or fly[0] < 0:
-            fly[1] = -fly[1]
-            fly[0] = max(0, min(NUM - 1, fly[0]))
-        age = (t * 40 + fly[2]) % 255
-        g = 120 + int(90 * abs((t % 2) - 1))
-        px_new[fly[0]] = (g // 3, g, age // 3)
-    for i in range(NUM):
-        r, g, b = pixels[i]
-        pixels[i] = (max(0, r - 30), max(0, g - 30), max(0, b - 30))
-    for i in range(NUM):
-        if px_new[i] is not None:
-            pixels[i] = px_new[i]
-    pixels.show()
-
-
-def with_checksum(frame):
-    x = 0
-    for b in frame.encode():
-        x ^= b
-    return "{0}*{1:02x}".format(frame, x)
-
-
 def process(line):
-    global mode, ground, ring_hue, ring_latch, ring_until, last_rx, label
+    global mode, ground, label, latched, latch_center
     parts = line.split(",")
     c = parts[0].upper()
     a = parts[1:]
@@ -177,7 +231,10 @@ def process(line):
         for v in a[1:4]:
             vals.append(int(v) if v.isdigit() else 0)
         ground = vals
-        mode = "breath"
+        for i, atom in enumerate(atoms):
+            atom["value"] = ground[i]
+            atom["period"] = 6.0 - 5.0 * (atom["value"] / 100.0) ** 2
+        mode = "work"
         r("OK")
     elif c == "A" and len(a) >= 2 and a[0] == "audio.level":
         pulse = max(0, min(100, int(a[1])))
@@ -185,17 +242,24 @@ def process(line):
         r("OK")
     elif c == "R":
         signal = a[0].lower() if a else "transition"
-        urgency = int(a[1]) if len(a) > 1 and a[1].isdigit() else 3
-        seq_field = a[4] if len(a) > 4 else "0"
-        words = " ".join(a[5:])[:30]
-        ring_hue = ring_hue_for(signal)
-        ring_latch = signal.startswith("alert")
-        ring_until = time.monotonic() + (3600.0 if ring_latch else 5.0)
-        mode = "ring"
-        r("OK," + seq_field)
+        urgency = int(a[1]) if len(a) > 1 and a[1].isdigit() else 2
+        verb = signal.split(".")[0]
+        color = HUES.get(verb, HUES["transition"])
+        cx = random.randrange(COLS)
+        cy = random.randrange(ROWS)
+        if verb.startswith("alert"):
+            latched = True
+            latch_center = (cx, cy)
+        if verb.startswith("allclear"):
+            latched = False
+            if latch_center is not None:
+                cx, cy = latch_center       # the heal lands at the wound
+        drops.append([cy * COLS + cx, time.monotonic(), color, max(1, urgency)])
+        if len(drops) > 4:
+            drops.pop(0)
+        r("OK," + (a[4] if len(a) > 4 else "0"))
     elif c == "X":
-        ring_latch = False
-        mode = "breath"
+        latched = False
         r("OK")
     elif c == "S":
         label = ",".join(a) or label
@@ -213,38 +277,29 @@ def main():
     global last_rx, mode
     r("suzu firefly matrix - rp2040-matrix, suzu/1")
     r("OK," + _descriptor())
-    pixels.fill((0, 60, 20))
-    pixels.show()
-    time.sleep(0.4)
+    mode = "idle"
 
+    buf = ""
     while True:
         t = time.monotonic()
         if supervisor.runtime.serial_bytes_available:
             last_rx = t
-            line = ""
-            while True:
-                ch = sys.stdin.read(1)
+            ch = sys.stdin.read(1)
+            if ch:
                 if ch == "\r" or ch == "\n":
-                    break
-                line += ch
-            if line.strip():
-                process(line.strip())
+                    if len(buf) > 1:
+                        process(buf.strip())
+                    buf = ""
+                else:
+                    buf += ch
         else:
             if (last_rx is not None and t - last_rx > IDLE_AFTER) or (
                 last_rx is None and t - boot_t > IDLE_AFTER
             ):
-                if not ring_latch:    # an alert never idles away
+                if not latched:         # an alert never idles away
                     mode = "idle"
 
-        if mode == "idle":
-            render_idle(t)
-        elif mode == "ring":
-            if now() < ring_until or ring_latch:
-                render_ring(t)
-            else:
-                mode = "breath"
-        elif mode == "breath":
-            render_breath(t)
+        render(t, TICK)
         time.sleep(TICK)
 
 
