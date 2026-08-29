@@ -14,5 +14,6 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
 serialport = "4"
+gif = "0.13"
 [target."cfg(windows)".dependencies]
 windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_System_Performance"] }

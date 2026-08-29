@@ -287,15 +287,6 @@ def wake():
         idle = False
         redraw()
 
-def dump_shot():
-    """A copy of the screen: the J escape's snapshot form. The frame
-    buffer is written in slices — no copy bigger than the heap floor."""
-    b = oled.buffer
-    f = open("/shot.tmp", "wb")
-    for i in range(0, len(b), 384):
-        f.write(b[i : i + 384])
-    f.close()
-
 # ── frames ──
 
 def cmd(line):
@@ -344,7 +335,14 @@ def cmd(line):
             ctx = ujson.loads(a)
             if isinstance(ctx, dict):
                 if ctx.get("shot"):
-                    dump_shot()           # a copy of the screen, to /shot.tmp
+                    # a copy of the screen rides the ack itself:
+                    # base64 buffer, one ~120 ms write, no reboot —
+                    # the house can screenshot a live face.
+                    import ubinascii
+                    payload = str(
+                        ubinascii.b2a_base64(oled.buffer)[:-1], "ascii")
+                    r("OK," + payload, checksum=True)
+                    return
                 if ctx.get("name") and ctx["name"] != label:
                     label = ctx["name"]
                     save_label()

@@ -59,113 +59,222 @@ fn exec(port: &mut Box<dyn SerialPort>, code: &str) -> anyhow::Result<Vec<u8>> {
     bail!("no end-of-reply marker — framing unknown");
 }
 
-/// Pull the 1 KB frame from a live face on `port_name`.
+/// Pull the 1 KB frame from a live face — in-band. The face answers
+/// `J,{"shot":1}` with `OK,<base64>*hh` on the wire itself: no
+/// interrupt, no reboot, the dance goes on. Lines are dribbled and the
+/// reply read to its newline; the checksum is stripped and verified by
+/// the caller-side parser habits of the house.
 pub fn capture(port_name: &str) -> anyhow::Result<Vec<u8>> {
-    let mut port = serialport::new(port_name, 115_200)
+    let mut port = open_port(port_name)?;
+    let frame = capture_on(&mut port)?;
+    Ok(frame)
+}
+
+fn open_port(port_name: &str) -> anyhow::Result<Box<dyn SerialPort>> {
+    let port = serialport::new(port_name, 115_200)
         .timeout(Duration::from_millis(200))
         .open()
         .map_err(|e| anyhow!("{port_name}: {e}"))?;
     sleep_ms(2500); // boot wait if just plugged
-
-    // The shot request, dribbled — the UART RX FIFO overruns bursts.
-    // A bare newline first: the face ignores empty lines.
-    let mut ask = |frame: &str| -> anyhow::Result<bool> {
-        let mut data = format!("\r{frame}\n").into_bytes();
-        for chunk in data.chunks(16) {
-            port.write_all(chunk)?;
-            port.flush()?;
-            sleep_ms(4);
-        }
-        let mut line = Vec::new();
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while Instant::now() < deadline {
-            let mut scratch = [0u8; 128];
-            match port.read(&mut scratch) {
-                Ok(0) => {}
-                Ok(n) => line.extend_from_slice(&scratch[..n]),
-                Err(_) => {}
-            }
-            while let Some(pos) = line.iter().position(|&b| b == b'\n') {
-                let reply: Vec<u8> = line.drain(..=pos).collect();
-                let s = String::from_utf8_lossy(&reply[..reply.len() - 1]);
-                let s = s.trim();
-                if s.starts_with("ERR") {
-                    bail!("face said: {s}");
-                }
-                if s.starts_with("OK") {
-                    return Ok(true);
-                }
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        }
-        Ok(false)
-    };
-
-    if !ask("J,{\"shot\":1}")? {
-        bail!("face did not answer the shot request");
-    }
-
-    // Pause the face (it yields on KeyboardInterrupt, by design) and
-    // enter raw mode — verified, never assumed.
-    port.write_all(b"\r\x03\x03")?;
-    port.flush()?;
-    sleep_ms(700);
-    drain(&mut port, 200);
-    port.write_all(b"\x02")?;
-    port.flush()?;
-    sleep_ms(400);
-    drain(&mut port, 300);
-    port.write_all(b"\r\n")?;
-    port.flush()?;
-    // MicroPython's prompt is ">>> " — trailing space and all.
-    let mut sync = drain(&mut port, 1000);
-    while sync.last() == Some(&b' ') || sync.last() == Some(&b'\r') || sync.last() == Some(&b'\n') {
-        sync.pop();
-    }
-    if !sync.ends_with(b">>>") {
-        bail!("friendly prompt not answering");
-    }
-    port.write_all(b"\x01")?;
-    port.flush()?;
-    sleep_ms(300);
-    let banner = drain(&mut port, 300);
-    if !banner.windows(8).any(|w| w == b"raw REPL") {
-        bail!("could not confirm raw REPL");
-    }
-
-    // Lift the frame, sliced.
-    exec(&mut port, "f=open('/shot.tmp','rb')")?;
-    exec(&mut port, "import ubinascii")?;
-    let mut frame = Vec::with_capacity(FRAME);
-    while frame.len() < FRAME {
-        let reply = exec(
-            &mut port,
-            &format!("print(ubinascii.hexlify(f.read({SLICE})))"),
-        )?;
-        let text = String::from_utf8_lossy(&reply);
-        let start = text.find("b'").ok_or_else(|| anyhow!("unparseable slice"))? + 2;
-        let end = text[start..]
-            .find('\'')
-            .ok_or_else(|| anyhow!("unparseable slice"))?
-            + start;
-        for pair in text[start..end].as_bytes().chunks(2) {
-            frame.push(u8::from_str_radix(
-                std::str::from_utf8(pair).map_err(|e| anyhow!("{e}"))?,
-                16,
-            )?);
-        }
-    }
-    exec(&mut port, "f.close()")?;
-    exec(&mut port, "import os; os.remove('/shot.tmp')")?;
-
-    // Bring the face straight back up.
-    port.write_all(b"\x02\x04")?;
-    port.flush()?;
-    sleep_ms(2500);
-    Ok(frame)
+    Ok(port)
 }
 
-// ── 1-bit PNG, no dependencies: grayscale, stored-deflate IDAT ──
+/// One in-band shot on an open session: `J,{"shot":1}` dribbled, the
+/// reply read to its newline. The face answers `OK,<base64>*hh` —
+/// no interrupt, no reboot, the dance goes on.
+fn capture_on(port: &mut Box<dyn SerialPort>) -> anyhow::Result<Vec<u8>> {
+    let mut data = b"\rJ,{\"shot\":1}\n".to_vec();
+    for chunk in data.chunks(16) {
+        port.write_all(chunk)?;
+        port.flush()?;
+        sleep_ms(4);
+    }
+
+    // The reply is one long line among possible boot noise: opening
+    // the port can reset the board, and its spew misread at this baud
+    // produces shorter garbage lines. The only accepted reply is a
+    // line that actually decodes to a whole frame — everything else is
+    // scanned past (identity-parse lesson: extract, never anchor).
+    let mut acc = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(8);
+    while Instant::now() < deadline {
+        let mut scratch = [0u8; 512];
+        match port.read(&mut scratch) {
+            Ok(0) => {}
+            Ok(n) => acc.extend_from_slice(&scratch[..n]),
+            Err(_) => {}
+        }
+        while let Some(pos) = acc.iter().position(|&b| b == b'\n') {
+            let line: Vec<u8> = acc.drain(..=pos).collect();
+            let s = String::from_utf8_lossy(&line[..line.len() - 1])
+                .trim()
+                .to_string();
+            if let Some(body) = s.strip_prefix("OK,") {
+                let frame = decode_b64(strip_b64_checksum(body));
+                if frame.len() == FRAME {
+                    return Ok(frame);
+                }
+            }
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    bail!("no whole-frame reply within 8 s — face unreachable or mid-boot")
+}
+
+/// The trail camera: loop the in-band shot at the wire-respecting rate
+/// and leave the encoding to the host. The face keeps dancing — each
+/// shot costs it one write of ~120 ms, everything else is ours.
+/// `zones` (from the class manifest) color the frames; returns the
+/// frame count actually captured (the wire may be slower than the ask).
+pub fn record(
+    port_name: &str,
+    secs: u32,
+    fps: u32,
+    zones: &[(usize, usize, [u8; 3])],
+    out: &std::path::Path,
+) -> anyhow::Result<usize> {
+    let fps = fps.clamp(1, 5); // 5 fps ~= 7 KB/s — the wire's honest ceiling
+    let period = Duration::from_millis(1000 / fps as u64);
+    let mut port = open_port(port_name)?;
+
+    let mut frames: Vec<Vec<u8>> = Vec::new();
+    let mut next_at = Instant::now();
+    let end = next_at + Duration::from_secs(secs as u64);
+    while Instant::now() < end {
+        next_at += period;
+        let frame = capture_on(&mut port)?;
+        frames.push(index_frame(&frame, zones));
+        let now = Instant::now();
+        if next_at > now {
+            sleep_ms((next_at - now).as_millis() as u64);
+        } else {
+            next_at = now; // wire-bound: skip the missed slot, keep going
+        }
+    }
+
+    let delay_cs = (1000 / fps as u16) / 10;
+    crate::gif::write_gif(out, 128, 64, delay_cs.max(2), &GIF_PALETTE, &frames)?;
+    Ok(frames.len())
+}
+
+/// The panel's three truths + a spare: dark, yellow strip, cyan field.
+pub const GIF_PALETTE: [[u8; 3]; 4] =
+    [[0, 0, 0], [255, 221, 0], [0, 213, 255], [255, 255, 255]];
+
+fn index_frame(frame: &[u8], zones: &[(usize, usize, [u8; 3])]) -> Vec<u8> {
+    let w = 128usize;
+    let mut out = vec![0u8; w * 64];
+    for page in 0..8 {
+        for col in 0..w {
+            let bits = frame[page * w + col];
+            for b in 0..8u32 {
+                if bits & (1 << b) != 0 {
+                    let y = page * 8 + b as usize;
+                    let idx = zones
+                        .iter()
+                        .position(|(y0, y1, _)| y >= *y0 && y <= *y1)
+                        .map(|i| (i + 1).min(3) as u8)
+                        .unwrap_or(3);
+                    out[y * w + col] = idx;
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Strip a trailing `*hh` checksum — same grammar as the probe.
+fn strip_b64_checksum(line: &str) -> &str {
+    let l = line.trim();
+    let b = l.as_bytes();
+    if b.len() >= 3
+        && b[b.len() - 3] == b'*'
+        && b[b.len() - 2].is_ascii_hexdigit()
+        && b[b.len() - 1].is_ascii_hexdigit()
+    {
+        return std::str::from_utf8(&b[..b.len() - 3]).unwrap_or(l);
+    }
+    l
+}
+
+/// Base64 decode, whitespace-tolerant, no dependencies.
+pub fn decode_b64(s: &str) -> Vec<u8> {
+    fn val(b: u8) -> Option<u32> {
+        match b {
+            b'A'..=b'Z' => Some((b - b'A') as u32),
+            b'a'..=b'z' => Some((b - b'a' + 26) as u32),
+            b'0'..=b'9' => Some((b - b'0' + 52) as u32),
+            b'+' => Some(62),
+            b'/' => Some(63),
+            _ => None,
+        }
+    }
+    let bytes: Vec<u8> = s
+        .bytes()
+        .filter(|b| !b.is_ascii_whitespace() && *b != b'=')
+        .collect();
+    let mut out = Vec::with_capacity(bytes.len() * 3 / 4 + 3);
+    for chunk in bytes.chunks(4) {
+        let mut acc = 0u32;
+        for (i, b) in chunk.iter().enumerate() {
+            acc |= val(*b).unwrap_or(0) << (18 - 6 * i);
+        }
+        out.push((acc >> 16) as u8);
+        if chunk.len() > 2 {
+            out.push((acc >> 8) as u8);
+        }
+        if chunk.len() > 3 {
+            out.push(acc as u8);
+        }
+    }
+    out
+}
+
+
+/// PNG writer, no dependencies: 8-bit truecolor, stored-deflate IDAT.
+/// `px` is one RGB triple per pixel, `w` x `h`, scaled by integer
+/// replication (nearest-neighbour — the chunky look is the look).
+pub fn write_png(
+    path: &std::path::Path,
+    w: usize,
+    h: usize,
+    px: &[[u8; 3]],
+    scale: usize,
+) -> anyhow::Result<()> {
+    let sw = w * scale;
+    let mut raw = Vec::with_capacity(h * scale * (1 + sw * 3));
+    for y in 0..h * scale {
+        raw.push(0u8); // filter: none
+        let sy = y / scale;
+        for x in 0..sw {
+            raw.extend_from_slice(&px[sy * w + x / scale]);
+        }
+    }
+    let mut idat = vec![0x78, 0x01];
+    for block in raw.chunks(65535) {
+        let last = block.len() < 65535;
+        idat.push(if last { 1 } else { 0 });
+        idat.extend_from_slice(&(block.len() as u16).to_le_bytes());
+        idat.extend_from_slice(&(!(block.len() as u16)).to_le_bytes());
+        idat.extend_from_slice(block);
+    }
+    idat.extend_from_slice(&be32(adler32(&raw)));
+
+    let mut png = Vec::new();
+    png.extend_from_slice(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]);
+    let mut ihdr = Vec::new();
+    ihdr.extend_from_slice(&be32(sw as u32));
+    ihdr.extend_from_slice(&be32((h * scale) as u32));
+    ihdr.extend_from_slice(&[8, 2, 0, 0, 0]); // 8-bit truecolor RGB
+    for (kind, data) in [("IHDR", ihdr), ("IDAT", idat), ("IEND", vec![])] {
+        png.extend_from_slice(&be32(data.len() as u32));
+        png.extend_from_slice(kind.as_bytes());
+        png.extend_from_slice(&data);
+        png.extend_from_slice(&be32(crc32(&[kind.as_bytes(), &data].concat())));
+    }
+    std::fs::write(path, png)?;
+    Ok(())
+}
 
 fn crc32(data: &[u8]) -> u32 {
     let mut table = [0u32; 256];
@@ -194,50 +303,6 @@ fn adler32(data: &[u8]) -> u32 {
 
 fn be32(v: u32) -> [u8; 4] {
     v.to_be_bytes()
-}
-
-/// `px` is one RGB triple per pixel, `w` x `h`, scaled by integer
-/// replication (nearest-neighbour — the chunky look is the look).
-pub fn write_png(path: &std::path::Path, w: usize, h: usize, px: &[[u8; 3]], scale: usize) -> anyhow::Result<()> {
-    let sw = w * scale;
-    let stride = sw * 3;
-    let mut raw = Vec::with_capacity(h * scale * (1 + stride));
-    for y in 0..h * scale {
-        raw.push(0u8); // filter: none
-        let sy = y / scale;
-        for x in 0..sw {
-            let c = &px[sy * w + x / scale];
-            raw.extend_from_slice(c);
-        }
-    }
-
-    // zlib stream: header + stored deflate blocks + adler32.
-    let mut idat = vec![0x78, 0x01];
-    for block in raw.chunks(65535) {
-        let last = block.len() < 65535;
-        idat.push(if last { 1 } else { 0 });
-        idat.extend_from_slice(&(block.len() as u16).to_le_bytes());
-        idat.extend_from_slice(&(!(block.len() as u16)).to_le_bytes());
-        idat.extend_from_slice(block);
-    }
-    idat.extend_from_slice(&be32(adler32(&raw)));
-
-    let mut png = Vec::new();
-    png.extend_from_slice(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]);
-    let mut ihdr = Vec::new();
-    ihdr.extend_from_slice(&be32(sw as u32));
-    ihdr.extend_from_slice(&be32((h * scale) as u32));
-    ihdr.extend_from_slice(&[8, 2, 0, 0, 0]); // 8-bit truecolor RGB
-    for (kind, data) in [("IHDR", ihdr), ("IDAT", idat), ("IEND", vec![])] {
-        png.extend_from_slice(&be32(data.len() as u32));
-        png.extend_from_slice(kind.as_bytes());
-        png.extend_from_slice(&data);
-        png.extend_from_slice(&be32(crc32(
-            &[kind.as_bytes(), &data].concat(),
-        )));
-    }
-    std::fs::write(path, png)?;
-    Ok(())
 }
 
 /// Decode the MVLSB frame (column bytes, 8 vertical pixels, D0 = top)

@@ -12,6 +12,7 @@
 
 mod catalog;
 mod control;
+mod gif;
 mod mpush;
 mod probe;
 mod resident;
@@ -575,6 +576,24 @@ async fn main() -> anyhow::Result<()> {
         Some("detective") => detective(&catalog),
         Some("serve") => resident::run(catalog).await?,
         Some("screenshot") => screenshot(&catalog, args.get(2).map(|s| s.as_str())),
+        Some("record") => {
+            let secs: u32 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(10);
+            let fps: u32 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(3);
+            let entry = enumerate()
+                .into_iter()
+                .find(|e| e.usb.is_some())
+                .ok_or_else(|| anyhow::anyhow!("no USB serial device — plug a firefly in"))?;
+            let zones = entry
+                .usb
+                .as_ref()
+                .and_then(|u| catalog.class_by_vidpid(u.vid, u.pid))
+                .map(|c| c.id.clone())
+                .map(|id| catalog.display_zones(&id))
+                .unwrap_or_default();
+            let path = format!("record-{}.gif", entry.name);
+            let n = shot::record(&entry.name, secs, fps, &zones, std::path::Path::new(&path))?;
+            println!("{n} frames → {path}");
+        }
         Some("pause") => control::chirp("pause").await?,
         Some("resume") => control::chirp("resume").await?,
         Some("firmware") => {
