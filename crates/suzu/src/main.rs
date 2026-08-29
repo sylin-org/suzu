@@ -415,9 +415,27 @@ fn screenshot(filter: Option<&str>) {
             .chars()
             .take(8)
             .collect::<String>();
+        // The model, in the class-naming convention: family + variant
+        // with the shared tail deduped (esp8266-oled + oled-v2 ->
+        // esp8266-oled-v2), filename-safe.
+        let family = json.get("family").and_then(|v| v.as_str()).unwrap_or("firefly");
+        let variant = json.get("variant").and_then(|v| v.as_str()).unwrap_or("");
+        let mut model = match family.rsplit_once('-') {
+            Some((_, last)) if variant.starts_with(&format!("{last}-")) => {
+                format!("{family}-{}", &variant[last.len() + 1..])
+            }
+            _ => format!("{family}-{variant}"),
+        };
+        if variant.is_empty() {
+            model = family.to_string();
+        }
+        let model: String = model
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '-' })
+            .collect();
         match shot::capture(&e.name) {
             Ok(frame) => {
-                let base = format!("shot-{}-{device_id}", e.name);
+                let base = format!("shot-{}-{model}-{device_id}", e.name);
                 let portrait = std::path::PathBuf::from(format!("{base}.png"));
                 let native = std::path::PathBuf::from(format!("{base}-native.png"));
                 match shot::render(&frame, &portrait, &native) {
