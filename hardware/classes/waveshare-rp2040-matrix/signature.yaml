@@ -5,5 +5,6 @@ family: firefly                    # the suzu visual moniker — target of migra
 variant: matrix
 display: { type: rgb-matrix, resolution: "5x5" }
 match:
-  vid_pid: ["239a:80f4"]           # observed — CircuitPython CDC (Adafruit VID)
-  # suspected: ["2e8a:*"] — BOOTSEL/mass-storage mode is not a serial port
+  vid_pid: ["239a:80f4", "2e8a:*"] # CircuitPython CDC — Adafruit VID observed,
+                                   # Raspberry Pi VID observed 2026-08-29 (COM22;
+                                   # BOOTSEL mass-storage is not a serial port)

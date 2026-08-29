@@ -13,6 +13,15 @@ display:
   zones:
     - { rows: [0, 15], color: "#ffdd00" }    # yellow strip (native top)
     - { rows: [16, 63], color: "#00d5ff" }   # cyan field
+frame:
+  size: 1024                # bytes on the wire (base64-wrapped in the J ack)
+  format: mvlsb             # column bytes, 8 vertical px each, D0 = top of the byte
+  depth: 1                  # bits per pixel as shipped
+  order: column-major
+  width: 128
+  height: 64
+  render: { rotate: 90, scale: 3 }   # the panel stands on its long edge
+  palette: ["#000000", "#ffffff"]    # fallback when no zone claims a row; zones color the truth here
 sets: [os]
 boards:
   - name: "EstarDyn NodeMCU ESP8266 V3, Type-C"

@@ -8,6 +8,17 @@ flash:
     upgrade: circuitpy-drive-copy
     install: rp2040-bootsel
 sets: []
+display:
+  type: rgb-matrix
+  resolution: "5x5"
+frame:
+  size: 75                  # bytes on the wire: 25 px x 3 bytes rgb
+  format: rgb24             # 3 bytes per pixel, (r, g, b)
+  depth: 24
+  order: row-major
+  width: 5
+  height: 5
+  render: { rotate: 0, scale: 24 }
 constraints: "25 px; host-side frames engine"
 boards:
   - name: "Waveshare RP2040-Matrix, Type-C"
