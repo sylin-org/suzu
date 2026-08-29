@@ -114,9 +114,20 @@ impl Moments {
                             let n = self.coalesced;
                             if n > 0 {
                                 self.coalesced = 0;
-                                self.splash("coalesced-splash", Some(format!("{n} earlier notes + {}", label.unwrap_or_default())));
+                                let text = format!("{n} earlier notes + {}", label.unwrap_or_default());
+                                self.splash("coalesced-splash", Some(text.clone()));
+                                let _ = self.events_tx.send(HouseEvent::Ring {
+                                    label: text,
+                                    urgency: moment.urgency,
+                                });
                             } else {
-                                self.splash(&format!("{} ({}, urgency {})", moment.kind, moment.from, moment.urgency), label);
+                                self.splash(&format!("{} ({}, urgency {})", moment.kind, moment.from, moment.urgency), label.clone());
+                                if let Some(text) = label {
+                                    let _ = self.events_tx.send(HouseEvent::Ring {
+                                        label: text,
+                                        urgency: moment.urgency,
+                                    });
+                                }
                             }
                             self.last_splash = Some(Instant::now());
                         } else {

@@ -48,6 +48,8 @@ pub enum Outbound {
     /// suzu sessions forward them as `A,<axis>,<value>`; ancestor
     /// sessions drop them at this boundary.
     Pulse { axis: String, value: u8 },
+    /// A moment for faces: the ring overlay.
+    Ring { words: Vec<String>, urgency: u8 },
     Close,
 }
 
@@ -76,6 +78,8 @@ pub enum DevicesCmd {
     /// republish. In-memory only — it dies with the process.
     Pause,
     Resume,
+    /// A moment bound for faces: the band shows the label briefly.
+    Ring { label: String, urgency: u8 },
 }
 
 pub struct Devices {
@@ -115,6 +119,11 @@ impl Devices {
                 }
                 DevicesCmd::Pause => self.pause_stream(),
                 DevicesCmd::Resume => self.resume_stream().await,
+                DevicesCmd::Ring { label, urgency } => {
+                    if !self.paused {
+                        self.ring(&label, urgency)
+                    }
+                }
             }
         }
     }
@@ -143,6 +152,20 @@ impl Devices {
             .spawn(move || session_thread(port, rx, close2, suzu));
         if let Some(device) = self.devices.get_mut(&facts.port) {
             device.outbound = Some(tx);
+        }
+    }
+
+    /// A ring: every live session tells its face that something
+    /// happened. The frame carries the moment's words after the seq.
+    fn ring(&mut self, label: &str, urgency: u8) {
+        let words: Vec<&str> = label.split_whitespace().collect();
+        for device in self.devices.values_mut() {
+            if let Some(outbound) = &device.outbound {
+                let _ = outbound.send(Outbound::Ring {
+                    words: words.iter().map(|s| s.to_string()).collect(),
+                    urgency,
+                });
+            }
         }
     }
 
@@ -349,6 +372,7 @@ fn session_loop(
         let _ = write_line(serial, "G,0,1,0,0");
     }
     let mut named: Option<String> = None;
+    let mut seq: u8 = 0;
 
     loop {
         if close.load(Ordering::Relaxed) {
@@ -373,6 +397,24 @@ fn session_loop(
                 // others drop it silently at this boundary.
                 if suzu {
                     let frame = format!("A,{axis},{value}");
+                    if write_line(serial, &frame).is_err() {
+                        println!("[sessions] {port}: write failed — disposing");
+                        return;
+                    }
+                }
+            }
+            Ok(Outbound::Ring { words, urgency }) => {
+                if suzu {
+                    seq = seq.wrapping_add(1);
+                    let mut frame = format!(
+                        "R,info,{urgency},0,1,{seq},{}",
+                        words.join(",")
+                    );
+                    let mut x = 0u8;
+                    for b in frame.bytes() {
+                        x ^= b;
+                    }
+                    frame = with_checksum(&frame);
                     if write_line(serial, &frame).is_err() {
                         println!("[sessions] {port}: write failed — disposing");
                         return;
@@ -462,6 +504,15 @@ fn open_serial(port: &str) -> anyhow::Result<Box<dyn serialport::SerialPort>> {
     let _ = p.flush();
     std::thread::sleep(Duration::from_millis(300));
     Ok(p)
+}
+
+/// suzu-t session frames carry `*hh` — the xor of everything before.
+fn with_checksum(frame: &str) -> String {
+    let mut x = 0u8;
+    for b in frame.bytes() {
+        x ^= b;
+    }
+    format!("{frame}*{x:02x}")
 }
 
 fn write_line(serial: &mut Box<dyn serialport::SerialPort>, line: &str) -> anyhow::Result<()> {

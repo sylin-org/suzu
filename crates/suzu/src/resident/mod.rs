@@ -146,6 +146,10 @@ fn house_line(ev: &HouseEvent) {
                 gpu.map_or_else(|| "—".to_string(), |v| format!("{v}%"))
             ),
         ),
+        HouseEvent::Ring { label, urgency } => line(
+            "moments",
+            &format!("ring: {label} (urgency {urgency})"),
+        ),
         HouseEvent::Pulse { .. } => {} // the pulse lane is silent by design
         HouseEvent::SplashDecided { decision, label } => {
             line("moments", &format!("splash: {decision} {}", label.as_deref().unwrap_or("")))
@@ -300,7 +304,7 @@ pub async fn run(catalog: Arc<Catalog>) -> anyhow::Result<()> {
     spawn_publisher_supervised(Arc::clone(&house));
 
     // the control chirp: `suzu pause` / `suzu resume` from any shell
-    tokio::spawn(crate::control::listen(house.devices_tx()));
+    tokio::spawn(crate::control::listen(house.devices_tx(), house.moments_tx()));
 
     // the visitor door, by hand: `tell <label>`
     let (stdin_tx, mut stdin_rx) = mpsc::channel::<String>(16);

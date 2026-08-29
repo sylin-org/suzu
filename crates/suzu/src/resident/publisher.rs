@@ -79,6 +79,13 @@ impl Publisher {
                         self.distribute(Arc::clone(ground)).await;
                     }
                 }
+                HouseEvent::Ring { label, urgency } => {
+                    let _ = self
+                        .house
+                        .devices_tx()
+                        .send(super::devices::DevicesCmd::Ring { label, urgency })
+                        .await;
+                }
                 _ => {}
             }
         }

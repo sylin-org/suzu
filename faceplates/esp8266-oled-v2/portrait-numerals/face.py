@@ -27,6 +27,8 @@ boot_ms = None
 idle = False
 ff = ()                   # the fireflies: [u0, phase, speed, v] each
 label = "suzu"
+ring_label = None          # a moment's text, shown in the band briefly
+ring_until = None
 values = {"cpu": 255, "mem": 255, "gpu": 255}
 pulse_target = 0
 pulse_lit = 0
@@ -147,7 +149,8 @@ def draw_band():
     """The yellow strip, kept dark: the label as glowing spine text,
     reading top -> bottom. Lit letters outread black cutouts at 1 px."""
     x = BAND_U + 5                    # rotated glyphs are 5 across
-    for i, ch in enumerate(label.upper()[:30]):   # 4 + 29*4 <= 127
+    text = ring_label if ring_label else label
+    for i, ch in enumerate(text.upper()[:30]):   # 4 + 29*4 <= 127
         band_glyph(x, 4 + i * 4, ch, 1)
 
 def draw_divider(v):
@@ -237,7 +240,12 @@ def set_pulse(v):
         oled.show()
 
 def decay():
-    global pulse_lit, idle
+    global pulse_lit, idle, ring_label, ring_until
+    if ring_until is not None and time.ticks_diff(time.ticks_ms(), ring_until) > 0:
+        ring_label = None             # the moment passed; the house returns
+        ring_until = None
+        draw_band()
+        oled.show()
     if pulse_lit > pulse_target:      # decay exponential toward the target
         pulse_lit = pulse_target + (pulse_lit - pulse_target) * 3 // 4
         draw_divider(AREA_H - 1)
@@ -360,8 +368,13 @@ def cmd(line):
             r("OK")                   # nothing overlaid yet; ground is showing
         elif c == "R":
             p = a.split(",")
-            set_pulse(48)             # a ring blinks the dividers, once
+            global ring_label, ring_until
+            ring_label = " ".join(p[5:])[:30] or None
+            ring_until = time.ticks_add(time.ticks_ms(), 5000)
+            set_pulse(48)             # the dividers flash: something happened
             pulse_target = 0
+            draw_band()               # the moment takes the band
+            oled.show()
             ack = "OK," + p[4] if len(p) > 4 else "OK"   # echo the seq
             r(ack, checksum=True)
         else:

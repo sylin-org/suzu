@@ -104,17 +104,13 @@ mod pdh {
             for i in 0..count as usize {
                 let item = &*items.add(i);
                 let mut len = 0usize;
-                unsafe {
-                    while *item.szName.add(len) != 0 {
-                        len += 1;
-                    }
+                while *item.szName.add(len) != 0 {
+                    len += 1;
                 }
-                let name = String::from_utf16_lossy(unsafe {
-                    std::slice::from_raw_parts(item.szName, len)
-                })
-                .to_lowercase();
+                let name = String::from_utf16_lossy(std::slice::from_raw_parts(item.szName, len))
+                    .to_lowercase();
                 if name.contains("engtype_3d") && item.FmtValue.CStatus == 0 {
-                    sum += unsafe { item.FmtValue.Anonymous.doubleValue };
+                    sum += item.FmtValue.Anonymous.doubleValue;
                 }
             }
             Some(sum.clamp(0.0, 100.0).round() as u8)

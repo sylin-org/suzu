@@ -602,6 +602,13 @@ async fn main() -> anyhow::Result<()> {
             let n = shot::record(&entry.name, secs, fps, &zones, std::path::Path::new(&path))?;
             println!("{n} frames → {path}");
         }
+        Some("show") => {
+            let text = args[2..].join(" ");
+            if text.is_empty() {
+                anyhow::bail!("usage: suzu show <tag> <text ...>  (e.g. suzu show INFO.disk Disk at 50%)");
+            }
+            control::chirp(&format!("show {text}")).await?;
+        }
         Some("pause") => control::chirp("pause").await?,
         Some("resume") => control::chirp("resume").await?,
         Some("firmware") => {

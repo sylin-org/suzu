@@ -8,6 +8,7 @@
 //! "is `suzu serve` running?" instead of pretending.
 
 use crate::resident::devices::DevicesCmd;
+use crate::resident::moments::MomentsCmd;
 use anyhow::{anyhow, bail};
 use std::time::Duration;
 use tokio::net::UdpSocket;
@@ -15,16 +16,45 @@ use tokio::net::UdpSocket;
 pub const CONTROL_PORT: u16 = 7898; // S-U-Z-U on a phone keypad
 
 /// The Resident's ear: chirps in, commands out, acks back.
-pub async fn listen(mut tx: tokio::sync::mpsc::Sender<DevicesCmd>) -> anyhow::Result<()> {
+pub async fn listen(
+    mut tx: tokio::sync::mpsc::Sender<DevicesCmd>,
+    moments: tokio::sync::mpsc::Sender<MomentsCmd>,
+) -> anyhow::Result<()> {
     let socket = UdpSocket::bind(("127.0.0.1", CONTROL_PORT)).await?;
     println!(
         "[control] listening on 127.0.0.1:{CONTROL_PORT} — `suzu pause` / `suzu resume`"
     );
-    let mut buf = [0u8; 64];
+    let mut buf = [0u8; 1024]; // show carries text
     loop {
         let (n, peer) = socket.recv_from(&mut buf).await?;
         let msg = String::from_utf8_lossy(&buf[..n]).trim().to_lowercase();
         let reply = match msg.as_str() {
+            _ if msg.starts_with("show ") => {
+                // suzu show INFO.disk "Disk at 50%" — a moment for faces
+                let spec = msg["show ".len()..].trim();
+                let (tag, text) = spec
+                    .split_once(' ')
+                    .unwrap_or((spec, ""));
+                let kind = tag.split('.').next().unwrap_or("note").to_uppercase();
+                let urgency = match kind.as_str() {
+                    "WARN" => 3,
+                    "ALERT" | "CRIT" => 5,
+                    _ => 1,
+                };
+                let label = if text.is_empty() {
+                    tag.to_string()
+                } else {
+                    text.to_string()
+                };
+                if moments
+                    .send(MomentsCmd::tell("visitor", &kind, Some(label), urgency))
+                    .await
+                    .is_err()
+                {
+                    return Ok(());
+                }
+                "ok show"
+            }
             "pause" => {
                 if tx.send(DevicesCmd::Pause).await.is_err() {
                     return Ok(());
@@ -67,6 +97,9 @@ pub async fn chirp(word: &str) -> anyhow::Result<()> {
         }
         "ok resume" => {
             println!("resumed — sessions re-open and faces redress as the ground republishes");
+        }
+        "ok show" => {
+            println!("shown — faces ring the moment; the band returns to the house label");
         }
         other => return Err(anyhow!("unexpected ack: {other}")),
     }

@@ -6,7 +6,6 @@
 //! variable code width, clear code 1<<min, end code after, LSB-first
 //! bit packing into <=255-byte sub-blocks. ~80 lines, no dependencies.
 
-use std::io::Write;
 
 /// Write an animated GIF89a via the maintained `gif` crate — the LZW
 /// bit-level dance is someone else's proven code; ours is only the

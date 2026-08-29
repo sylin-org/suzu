@@ -51,6 +51,8 @@ pub enum HouseEvent {
 
     // moments → the house
     SplashDecided { decision: String, label: Option<String> },
+    /// A moment bound for faces: the band shows the label briefly.
+    Ring { label: String, urgency: u8 },
 
     // any domain, before tripping
     Degraded { domain: &'static str, reason: String },
