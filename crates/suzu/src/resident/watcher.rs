@@ -78,6 +78,11 @@ fn identify_facts(catalog: &Catalog, port: &str, vid: u16, pid: u16) -> Result<D
 impl Watcher {
     pub async fn run(self) {
         let mut seen: HashSet<String> = HashSet::new();
+        // Ports whose identification failed: retried every cycle, with
+        // the failure logged once (not per retry). A busy or wedged
+        // port is a moment, not a verdict — tonight's lesson: a port
+        // marked seen before a panicking probe never came back.
+        let mut failed: HashSet<String> = HashSet::new();
         loop {
             let ports = match tokio::task::spawn_blocking(serialport::available_ports).await {
                 Ok(Ok(ports)) => ports,
@@ -97,9 +102,14 @@ impl Watcher {
                     continue;
                 }
                 seen.insert(p.port_name.clone());
-                let _ = self.links.events.send(HouseEvent::DeviceSensed {
-                    port: p.port_name.clone(),
-                });
+                // `insert` answers false on retries: the first attempt
+                // announces itself, later retries stay quiet.
+                let first_attempt = failed.insert(p.port_name.clone());
+                if first_attempt {
+                    let _ = self.links.events.send(HouseEvent::DeviceSensed {
+                        port: p.port_name.clone(),
+                    });
+                }
 
                 // The ladder blocks (up to ~5.5 s) — off the async lane.
                 let catalog = self.catalog.clone();
@@ -113,12 +123,19 @@ impl Watcher {
                 // Report-before-minding: an unreachable port is a fact
                 // for the house, never a device to mind.
                 let facts = match identified {
-                    Ok(facts) => facts,
+                    Ok(facts) => {
+                        failed.remove(&p.port_name);
+                        facts
+                    }
                     Err(reason) => {
-                        let _ = self.links.events.send(HouseEvent::PortBusy {
-                            port: p.port_name.clone(),
-                            reason,
-                        });
+                        // Back in the queue — the next cycle retries.
+                        seen.remove(&p.port_name);
+                        if first_attempt {
+                            let _ = self.links.events.send(HouseEvent::PortBusy {
+                                port: p.port_name.clone(),
+                                reason,
+                            });
+                        }
                         continue;
                     }
                 };
@@ -138,6 +155,7 @@ impl Watcher {
 
             for gone in seen.difference(&present).cloned().collect::<Vec<_>>() {
                 seen.remove(&gone);
+                failed.remove(&gone);
                 let _ = self.links.events.send(HouseEvent::DeviceGone {
                     port: gone.clone(),
                 });

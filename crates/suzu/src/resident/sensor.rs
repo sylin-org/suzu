@@ -99,7 +99,23 @@ impl Sensor {
 
             // ── slow lane: the ground, on drift ──
             if ticks.is_multiple_of(GROUND_EVERY) {
-                let report = self.capture();
+                let captured = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                    || self.capture(),
+                ));
+                let report = match captured {
+                    Ok(report) => report,
+                    Err(_) => {
+                        // A capture that panics costs one cycle, not
+                        // the sensor: the house hears why and the
+                        // next tick tries again.
+                        let _ = self.events.send(HouseEvent::Degraded {
+                            domain: "sensor".into(),
+                            reason: "capture panicked — cycle skipped, retrying".into(),
+                        });
+                        tokio::time::sleep(FAST_TICK).await;
+                        continue;
+                    }
+                };
                 // Only publish on change — the ground drifts silently.
                 let changed = match &self.last {
                     None => true,

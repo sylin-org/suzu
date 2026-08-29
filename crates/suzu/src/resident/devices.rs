@@ -8,6 +8,7 @@
 use super::events::{DeviceFacts, HouseEvent};
 use super::sensor::MachineReport;
 use serde::Serialize;
+use serialport::SerialPort;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc as std_mpsc, Arc};
@@ -174,12 +175,24 @@ impl Devices {
     }
 
     /// Fan-out: every live consumer takes the full published object as
-    /// a cheap copy and translates on its own side.
+    /// a cheap copy and translates on its own side. A consumer whose
+    /// mailbox is gone (its thread died) is disposed here — the port
+    /// is released and the watcher's next cycle can re-mind it.
     fn publish(&mut self, ground: &Arc<MachineReport>) {
+        let mut dead: Vec<String> = Vec::new();
         for device in self.devices.values_mut() {
             if let Some(outbound) = &device.outbound {
-                let _ = outbound.send(Outbound::Ground(Arc::clone(ground)));
+                if outbound
+                    .send(Outbound::Ground(Arc::clone(ground)))
+                    .is_err()
+                {
+                    dead.push(device.facts.port.clone());
+                }
             }
+        }
+        for port in dead {
+            println!("[devices] {port}: consumer died — disposing");
+            self.gone(&port);
         }
     }
 
@@ -187,14 +200,24 @@ impl Devices {
     /// the session boundary, suzu faces that declared the extra hear it.
     fn pulse(&mut self, axis: &str, value: u8) {
         let mut consumers = 0;
+        let mut dead: Vec<String> = Vec::new();
         for device in self.devices.values_mut() {
             if let Some(outbound) = &device.outbound {
                 consumers += 1;
-                let _ = outbound.send(Outbound::Pulse {
-                    axis: axis.to_string(),
-                    value,
-                });
+                if outbound
+                    .send(Outbound::Pulse {
+                        axis: axis.to_string(),
+                        value,
+                    })
+                    .is_err()
+                {
+                    dead.push(device.facts.port.clone());
+                }
             }
+        }
+        for port in dead {
+            println!("[devices] {port}: consumer died — disposing");
+            self.gone(&port);
         }
         if !self.pulse_announced {
             self.pulse_announced = true;
@@ -241,11 +264,29 @@ fn session_thread(
         if suzu { "suzu/1" } else { "ancestor" }
     );
 
+    // A session that panics releases the port with a name on the way
+    // out — never a silent thread death holding hardware hostage.
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        session_loop(&mut serial, &rx, &close, suzu, &port);
+    }));
+    if outcome.is_err() {
+        println!("[sessions] {port}: session panicked — port released");
+    }
+    println!("[sessions] {port}: released — fireflies when idle");
+}
+
+fn session_loop(
+    serial: &mut Box<dyn SerialPort>,
+    rx: &std_mpsc::Receiver<Outbound>,
+    close: &Arc<AtomicBool>,
+    suzu: bool,
+    port: &str,
+) {
     // The ancestor firmware enters its dashboard on first data; a suzu
     // face needs no greeting — its context rides the first ground.
     if !suzu {
-        let _ = write_line(&mut serial, "H,thriving");
-        let _ = write_line(&mut serial, "G,0,1,0,0");
+        let _ = write_line(serial, "H,thriving");
+        let _ = write_line(serial, "G,0,1,0,0");
     }
     let mut named: Option<String> = None;
 
@@ -261,7 +302,7 @@ fn session_thread(
                     translate(&g)
                 };
                 for frame in frames {
-                    if write_line(&mut serial, &frame).is_err() {
+                    if write_line(serial, &frame).is_err() {
                         println!("[sessions] {port}: write failed — disposing");
                         return;
                     }
@@ -272,7 +313,7 @@ fn session_thread(
                 // others drop it silently at this boundary.
                 if suzu {
                     let frame = format!("A,{axis},{value}");
-                    if write_line(&mut serial, &frame).is_err() {
+                    if write_line(serial, &frame).is_err() {
                         println!("[sessions] {port}: write failed — disposing");
                         return;
                     }
@@ -284,12 +325,11 @@ fn session_thread(
             // holds either face.
             Err(std_mpsc::RecvTimeoutError::Timeout) => {
                 let keepalive = if suzu { "K" } else { "R" };
-                let _ = write_line(&mut serial, keepalive);
+                let _ = write_line(serial, keepalive);
             }
             Err(std_mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }
-    println!("[sessions] {port}: released — fireflies when idle");
 }
 
 /// The suzu/1 translation: context first (`J`, when the house name is
