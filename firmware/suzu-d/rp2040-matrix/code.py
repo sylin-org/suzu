@@ -228,6 +228,7 @@ def on_signal(sig):
 
 
 def machine_tick(t):
+    global latch_drop_t
     if state == WAKE and t - t_state >= WAKE_TOTAL:
         on_signal("TICK_POP")
     if (state != IDLE and not latched and
@@ -344,9 +345,8 @@ def step_atom(a, dt):
 
 def tick_work(t, dt):
     buf = [(0, 0, 0)] * NUM
-    for i, a in enumerate(atoms):
-        others = [o["pos"] for j, o in enumerate(atoms) if j != i]
-        k = step_atom(a, others, dt)
+    for a in atoms:
+        k = step_atom(a, dt)
         if k > 0:
             x, y = xy(a["pos"])
             warm = (255, 150, 30)
@@ -364,6 +364,7 @@ ENTER = {IDLE: enter_idle, WAKE: enter_wake, WORK: enter_work, RING: enter_ring}
 
 def tick_ring(t, dt):
     """A latched alert: the lake dims and keeps ringing at the wound."""
+    global latch_drop_t
     buf = [(0, 0, 0)] * NUM
     base = 12
     for i in range(NUM):
@@ -396,7 +397,11 @@ def tick_ring(t, dt):
 TICKS = {IDLE: tick_idle, WAKE: tick_wake, WORK: tick_work, RING: tick_ring}
 
 
+frame = bytearray(NUM * 3)         # the shot: flat rgb75, row-major
+
+
 def render():
+    global frame
     buf = TICKS[state](time.monotonic(), TICK)
     # the raindrop layer lands in every state: moments reach the face
     # wherever it is
@@ -418,14 +423,18 @@ def render():
                     add(buf, i, (int(d[2][0] * k), int(d[2][1] * k),
                                  int(d[2][2] * k)))
     for i in range(NUM):
-        pixels[i] = buf[i]
+        px_ = buf[i]
+        frame[i * 3] = px_[0]
+        frame[i * 3 + 1] = px_[1]
+        frame[i * 3 + 2] = px_[2]
+        pixels[i] = px_
     pixels.show()
 
 
 # ── frames ──
 
 def process(line):
-    global latched, latch_center, latch_drop_t
+    global latched, latch_center, latch_drop_t, label
     parts = line.split(",")
     c = parts[0].upper()
     a = parts[1:]
@@ -472,35 +481,49 @@ def process(line):
     elif c == "S":
         words = ",".join(a)
         if words:
-            label = words
+            label = ",".join(a) or label
             try:
                 with open(LABEL_FILE, "w") as f:
                     f.write(label)
             except OSError:
                 pass
         r("OK")
+    elif c == "J":
+        # the shot: the frame rides the ack itself - base64 rgb75, no
+        # reboot, the lake keeps dancing while the camera reads it.
+        # CircuitPython dialect: binascii (no ubinascii alias here)
+        import binascii
+        payload = str(binascii.b2a_base64(frame)[:-1], "ascii")
+        r("OK," + payload, checksum=True)
     else:
         r("ERR,unknown:" + c)
 
 
-def r(msg):
+def r(msg, checksum=False):
+    if checksum:
+        x = 0
+        for c in msg:
+            x ^= ord(c)
+        msg += "*%02x" % x
     print(msg)
 
 
 def main():
+    global last_frame_t
     r("suzu firefly matrix - rp2040-matrix, suzu/1")
     r("OK," + _descriptor())
     set_state(IDLE)
 
     buf = ""
-    last = time.monotonic()
     while True:
         t = time.monotonic()
         if supervisor.runtime.serial_bytes_available:
             ch = sys.stdin.read(1)
             if ch:
                 if ch == "\r" or ch == "\n":
-                    if len(buf) > 1:
+                    # a lone `I`, `K` or `X` is a whole command: skip
+                    # only empty lines, never short ones
+                    if buf.strip():
                         process(buf.strip())
                         last_frame_t = time.monotonic()
                     buf = ""
