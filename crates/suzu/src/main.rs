@@ -14,6 +14,7 @@ mod catalog;
 mod control;
 mod gif;
 mod mpush;
+mod prepare;
 mod probe;
 mod resident;
 mod servicing;
@@ -576,6 +577,7 @@ async fn main() -> anyhow::Result<()> {
         Some("detective") => detective(&catalog),
         Some("serve") => resident::run(catalog).await?,
         Some("screenshot") => screenshot(&catalog, args.get(2).map(|s| s.as_str())),
+        Some("prepare") => prepare::run(&catalog)?,
         Some("record") => {
             // Reasonable limits, stated out loud when an ask exceeds
             // them: the wire caps fps, the host and GIF viewers cap

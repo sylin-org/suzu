@@ -1,6 +1,6 @@
 name: portrait-numerals
 status: beta                      # live on the bench since 2026-08-28
-class: esp8266-oled-v2
+class: esp8266-oled-v2-class
 aesthetic: striking
 
 # Ground "report" slots, in the order the face reads them.

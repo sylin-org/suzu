@@ -1,379 +1,251 @@
-# Firefly V0 Firmware for Waveshare RP2040-Matrix
-# the suzu project
+# suzu firefly matrix - rp2040-matrix, suzu/1
 #
-# Protocol: Text-based serial commands (115200 baud)
-# Commands:
-#   P,x,y,r,g,b   - Set pixel at (x,y) to RGB color
-#   F,r,g,b       - Fill all pixels with RGB color
-#   C             - Clear (all off)
-#   B,percent     - Set brightness (0-100)
-#   A,name        - Play animation (rainbow|pulse|chase|sparkle)
-#   S             - Stop animation
-#   T,status      - Show status (healthy|warning|error|offline)
-#   I             - Info (returns device info)
-#   ?             - Help
+# The light-sentence face: 25 RGB pixels, per-pixel color and intensity.
+# Hue carries valence, intensity carries urgency, tempo carries time -
+# the gloss (5-4 breath, 3 pulse, 2 blink, 1 strobe, 0 dark) rendered
+# literally. Text lives on other faces; this one tells with light.
+#
+# Frames (suzu/1 suzu-t, newline-terminated):
+#   I                     -> OK,{descriptor}*hh
+#   K                     -> OK (keepalive; also feeds the idle clock)
+#   G,report,<cpu>,<mem>,<gpu> -> ground: the breath, hue by health fold
+#   A,audio.level,<0-100> -> the pulse lane: brightness follows the level
+#   R,<signal>,<urgency>,0,1,<seq>[,<words>] -> a ring: hue by valence,
+#                            tempo by urgency; alert latches, the rest
+#                            render ~5 s and the ground resumes
+#   X                     -> restore ground after a ring
+# Unknown frames -> ERR. Silence -> the fireflies come out (idle).
+# Boot opens with the fireflies too: the garden before the house.
 
 import board
-import microcontroller
+import json
 import neopixel
-import time
+import os
+import random
 import supervisor
 import sys
-import json
+import time
+import microcontroller
 
+NUM = 25
+COLS = 5
+ROWS = 5
 
-# firmware-side runtime truth only. Everything else
-# (family, variant, display, capabilities) lives in /suzu.json
-# on the CIRCUITPY drive — written at provisioning time by
-# NewFirefly.ps1.
-_FW_VERSION = "1.0.0"
-_PROCESSOR = "rp2040"
+pixels = neopixel.NeoPixel(board.GP16, NUM, brightness=0.3, auto_write=False)
+
+_VERSION = "1.0.0"
 
 
 def _load_descriptor():
     try:
-        with open("/suzu.json", "r") as f:
+        with open("/suzu.json") as f:
             return json.loads(f.read())
     except (OSError, ValueError):
         return {}
 
 
-def _hardware_id():
+def _descriptor():
+    d = dict(_DESCRIPTOR)
+    d["proto"] = "suzu/1"
+    d["version"] = _VERSION
     try:
         uid = microcontroller.cpu.uid
-        return "rp2040-" + "".join("{:02x}".format(b) for b in uid)
-    except Exception:
-        return ""
+        d["hardware_id"] = "rp2040-" + "".join("{:02x}".format(b) for b in uid)
+    except AttributeError:
+        pass
+    d["coverage"] = {
+        "grounds": ["report"],
+        "slots": {"report": ["cpu", "mem", "gpu"]},
+        "extras": ["audio.level"],
+    }
+    return json.dumps(d)
 
 
 _DESCRIPTOR = _load_descriptor()
 
+LABEL_FILE = "/label.txt"
+label = "suzu"
+try:
+    with open(LABEL_FILE) as f:
+        label = f.read().strip() or label
+except OSError:
+    pass
 
-def descriptor_json():
-    """Merge runtime-truth fields into the provisioned descriptor."""
-    d = dict(_DESCRIPTOR)
-    d["hardware_id"] = _hardware_id()
-    d["version"] = _FW_VERSION
-    d["proto"] = "suzu/1"
-    d["processor"] = _PROCESSOR
-    return json.dumps(d)
+mode = "idle"
+ring_hue = (200, 10, 0)
+ring_latch = False
+ring_until = 0.0
+ground = (50, 50, 50)
+last_rx = None
+boot_t = time.monotonic()
+ff_t0 = boot_t
+
+flies = [[6, 1, 20], [18, -1, 90], [12, 1, 160]]
+
+TICK = 0.1
+IDLE_AFTER = 10.0
 
 
-def hello_frame():
-    """Unsolicited HELLO emitted on boot."""
-    return "* HELLO," + descriptor_json()
+def r(msg):
+    print(msg)
 
-# Configuration
-NUM_LEDS = 25
-ROWS = 5
-COLS = 5
-LED_PIN = board.GP16  # WS2812 data pin on RP2040-Matrix
 
-# Initialize NeoPixels
-pixels = neopixel.NeoPixel(LED_PIN, NUM_LEDS, brightness=0.3, auto_write=False)
+def breath_color():
+    worst = max(ground)
+    if worst < 60:
+        return (0, 120, 30)
+    if worst < 85:
+        return (160, 110, 0)
+    return (180, 20, 0)
 
-# State
-current_animation = None
-animation_frame = 0
-last_frame_time = 0
-blink_state = True
 
-# Color presets for status
-STATUS_COLORS = {
-    "healthy": (0, 180, 0),
-    "warning": (200, 150, 0),
-    "error": (200, 0, 0),
-    "offline": (0, 0, 0),
-}
+def ring_hue_for(signal):
+    s = signal.lower()
+    if s.startswith("alert"):
+        return (200, 10, 0)
+    if s.startswith("allclear"):
+        return (0, 180, 40)
+    if s.startswith("completion"):
+        return (0, 120, 200)
+    if s.startswith("discovery"):
+        return (120, 60, 200)
+    return (200, 140, 0)
 
-def xy_to_index(x, y):
-    """Convert x,y coordinates to LED index (row-major, top-left origin)."""
-    if 0 <= x < COLS and 0 <= y < ROWS:
-        return y * COLS + x
-    return None
 
-def fill_color(r, g, b):
-    """Fill all pixels with a color."""
-    pixels.fill((r, g, b))
+def render_breath(t):
+    hue = breath_color()
+    phase = (t % 4.0) / 4.0
+    k = 0.35 + 0.4 * abs(phase * 2 - 1)
+    c = tuple(int(v * k) for v in hue)
+    pixels.fill(c)
     pixels.show()
 
-def set_pixel(x, y, r, g, b):
-    """Set a single pixel."""
-    idx = xy_to_index(x, y)
-    if idx is not None:
-        pixels[idx] = (r, g, b)
-        pixels.show()
-        return True
-    return False
 
-def clear():
-    """Turn off all pixels."""
-    pixels.fill((0, 0, 0))
-    pixels.show()
-
-def set_brightness(percent):
-    """Set global brightness (0-100)."""
-    pixels.brightness = max(0, min(100, percent)) / 100.0
-    pixels.show()
-
-def show_status(status):
-    """Show a status indicator."""
-    global current_animation, blink_state
-    color = STATUS_COLORS.get(status.lower(), (100, 100, 100))
-    if status.lower() == "error":
-        current_animation = ("blink", color)
-        blink_state = True
-    else:
-        current_animation = None
-        fill_color(*color)
-
-def wheel(pos):
-    """Generate rainbow colors across 0-255 positions."""
-    if pos < 85:
-        return (pos * 3, 255 - pos * 3, 0)
-    elif pos < 170:
-        pos -= 85
-        return (255 - pos * 3, 0, pos * 3)
-    else:
-        pos -= 170
-        return (0, pos * 3, 255 - pos * 3)
-
-def animate_rainbow(frame):
-    """Rainbow cycle animation."""
-    for i in range(NUM_LEDS):
-        pixel_index = (i * 256 // NUM_LEDS + frame) % 256
-        pixels[i] = wheel(pixel_index)
-    pixels.show()
-
-def animate_pulse(frame):
-    """Breathing/pulse animation."""
-    # Sine-ish brightness curve using frame
-    brightness = abs((frame % 100) - 50) / 50.0
-    brightness = 0.1 + brightness * 0.5  # Range 0.1 to 0.6
-    pixels.brightness = brightness
-    if frame == 0:
-        pixels.fill((0, 180, 0))  # Green pulse
-    pixels.show()
-
-def animate_chase(frame):
-    """Single LED chasing around perimeter."""
-    # Perimeter indices: top row, right col, bottom row reversed, left col reversed
-    perimeter = [0, 1, 2, 3, 4, 9, 14, 19, 24, 23, 22, 21, 20, 15, 10, 5]
-    pixels.fill((0, 0, 0))
-    idx = perimeter[frame % len(perimeter)]
-    pixels[idx] = (0, 150, 255)
-    # Trail
-    trail_idx = perimeter[(frame - 1) % len(perimeter)]
-    pixels[trail_idx] = (0, 50, 80)
-    trail_idx2 = perimeter[(frame - 2) % len(perimeter)]
-    pixels[trail_idx2] = (0, 20, 30)
-    pixels.show()
-
-def animate_sparkle(frame):
-    """Random sparkle effect."""
-    import random
-    # Dim all pixels slightly
-    for i in range(NUM_LEDS):
-        r, g, b = pixels[i]
-        pixels[i] = (max(0, r - 20), max(0, g - 20), max(0, b - 20))
-    # Add random sparkles
-    for _ in range(3):
-        idx = random.randint(0, NUM_LEDS - 1)
-        pixels[idx] = (255, 255, 255)
-    pixels.show()
-
-def animate_blink(frame, color):
-    """Blinking animation for error status."""
-    global blink_state
-    if frame % 10 == 0:
-        blink_state = not blink_state
-    if blink_state:
-        pixels.fill(color)
+def render_ring(t):
+    left = ring_until - t
+    on = True
+    if ring_latch:
+        on = int(t * 4) % 2 == 0
+    elif int(t * 5) % 2 == 0:
+        on = left % 0.4 < 0.25
+    if on:
+        k = max(0.15, min(1.0, 0.15 + 4 * 0.17))
+        pixels.fill(tuple(int(v * k) for v in ring_hue))
     else:
         pixels.fill((0, 0, 0))
     pixels.show()
 
-def start_animation(name):
-    """Start a named animation."""
-    global current_animation, animation_frame
-    name = name.lower()
-    if name in ("rainbow", "pulse", "chase", "sparkle"):
-        current_animation = (name, None)
-        animation_frame = 0
-        return True
-    return False
 
-def stop_animation():
-    """Stop current animation."""
-    global current_animation
-    current_animation = None
-    clear()
-
-def update_animation():
-    """Update animation frame if one is running."""
-    global animation_frame, last_frame_time
-
-    if current_animation is None:
-        return
-
-    now = time.monotonic()
-    frame_delay = 0.03  # ~30fps
-
-    if now - last_frame_time < frame_delay:
-        return
-
-    last_frame_time = now
-    anim_type, anim_data = current_animation
-
-    if anim_type == "rainbow":
-        animate_rainbow(animation_frame)
-    elif anim_type == "pulse":
-        animate_pulse(animation_frame)
-    elif anim_type == "chase":
-        animate_chase(animation_frame)
-    elif anim_type == "sparkle":
-        animate_sparkle(animation_frame)
-    elif anim_type == "blink":
-        animate_blink(animation_frame, anim_data)
-
-    animation_frame += 1
-
-def parse_color(value):
-    """Parse color value - either hex (ff0000) or decimal (255)."""
-    value = value.strip()
-    if len(value) == 6:
-        # Hex color
-        try:
-            r = int(value[0:2], 16)
-            g = int(value[2:4], 16)
-            b = int(value[4:6], 16)
-            return r, g, b
-        except ValueError:
-            pass
-    return None
-
-def process_command(line):
-    """Process a single command line."""
-    global current_animation
-
-    line = line.strip()
-    if not line:
-        return None
-
-    parts = line.split(",")
-    cmd = parts[0].upper()
-    args = parts[1:] if len(parts) > 1 else []
-
-    try:
-        if cmd == "P" and len(args) >= 5:
-            # Pixel: P,x,y,r,g,b
-            x, y = int(args[0]), int(args[1])
-            r, g, b = int(args[2]), int(args[3]), int(args[4])
-            current_animation = None
-            if set_pixel(x, y, r, g, b):
-                return "OK"
-            return "ERR,invalid coordinates"
-
-        elif cmd == "F" and len(args) >= 3:
-            # Fill: F,r,g,b
-            r, g, b = int(args[0]), int(args[1]), int(args[2])
-            current_animation = None
-            fill_color(r, g, b)
-            return "OK"
-
-        elif cmd == "C":
-            # Clear
-            current_animation = None
-            clear()
-            return "OK"
-
-        elif cmd == "B" and len(args) >= 1:
-            # Brightness: B,percent
-            percent = int(args[0])
-            set_brightness(percent)
-            return "OK"
-
-        elif cmd == "A" and len(args) >= 1:
-            # Animate: A,name
-            name = args[0].strip()
-            if start_animation(name):
-                return "OK"
-            return "ERR,unknown animation"
-
-        elif cmd == "S":
-            # Stop animation
-            stop_animation()
-            return "OK"
-
-        elif cmd == "T" and len(args) >= 1:
-            # Status: T,status
-            status = args[0].strip()
-            show_status(status)
-            return "OK"
-
-        elif cmd == "I":
-            # suzu identity structured descriptor (JSON).
-            return "OK," + descriptor_json()
-
-        elif cmd == "?":
-            # Help
-            return "OK,P|F|C|B|A|S|T|I|?"
-
-        else:
-            return "ERR,unknown command"
-
-    except (ValueError, IndexError) as e:
-        return f"ERR,parse error: {e}"
-
-def boot_animation():
-    """Play a brief boot animation."""
-    # Quick rainbow sweep
-    for frame in range(50):
-        animate_rainbow(frame * 5)
-        time.sleep(0.02)
-
-    # Fade to green
-    for brightness in range(60, 10, -5):
-        pixels.brightness = brightness / 100.0
-        pixels.fill((0, 180, 0))
-        pixels.show()
-        time.sleep(0.05)
-
-    # Settle to dim green (idle)
-    pixels.brightness = 0.2
-    pixels.fill((0, 80, 0))
+def render_idle(t):
+    px_new = [None] * NUM
+    for fly in flies:
+        fly[0] += fly[1]
+        if fly[0] >= NUM or fly[0] < 0:
+            fly[1] = -fly[1]
+            fly[0] = max(0, min(NUM - 1, fly[0]))
+        age = (t * 40 + fly[2]) % 255
+        g = 120 + int(90 * abs((t % 2) - 1))
+        px_new[fly[0]] = (g // 3, g, age // 3)
+    for i in range(NUM):
+        r, g, b = pixels[i]
+        pixels[i] = (max(0, r - 30), max(0, g - 30), max(0, b - 30))
+    for i in range(NUM):
+        if px_new[i] is not None:
+            pixels[i] = px_new[i]
     pixels.show()
-    time.sleep(0.3)
-    clear()
 
-# Main
-print("Firefly V0 - suzu LED Controller")
-print("Ready. Send ? for help.")
-# unsolicited HELLO frame for the device bus. Bus opens
-# the port after CircuitPython has auto-started this script, so the
-# frame fits within the 3s listen window before the `I` fallback.
-print(hello_frame())
 
-boot_animation()
+def with_checksum(frame):
+    x = 0
+    for b in frame.encode():
+        x ^= b
+    return "{0}*{1:02x}".format(frame, x)
 
-# Input buffer
-input_buffer = ""
 
-while True:
-    # Update animation if running
-    update_animation()
+def process(line):
+    global mode, ground, ring_hue, ring_latch, ring_until, last_rx, label
+    parts = line.split(",")
+    c = parts[0].upper()
+    a = parts[1:]
 
-    # Check for serial input (non-blocking)
-    if supervisor.runtime.serial_bytes_available:
-        char = sys.stdin.read(1)
-        if char == "\n" or char == "\r":
-            if input_buffer:
-                response = process_command(input_buffer)
-                if response:
-                    print(response)
-                input_buffer = ""
+    if c == "I":
+        r("OK," + _descriptor())
+    elif c == "K":
+        r("OK")
+    elif c == "G" and a and a[0] == "report":
+        vals = []
+        for v in a[1:4]:
+            vals.append(int(v) if v.isdigit() else 0)
+        ground = vals
+        mode = "breath"
+        r("OK")
+    elif c == "A" and len(a) >= 2 and a[0] == "audio.level":
+        pulse = max(0, min(100, int(a[1])))
+        pixels.brightness = 0.1 + (pulse / 100.0) * 0.5
+        r("OK")
+    elif c == "R":
+        signal = a[0].lower() if a else "transition"
+        urgency = int(a[1]) if len(a) > 1 and a[1].isdigit() else 3
+        seq_field = a[4] if len(a) > 4 else "0"
+        words = " ".join(a[5:])[:30]
+        ring_hue = ring_hue_for(signal)
+        ring_latch = signal.startswith("alert")
+        ring_until = time.monotonic() + (3600.0 if ring_latch else 5.0)
+        mode = "ring"
+        r("OK," + seq_field)
+    elif c == "X":
+        ring_latch = False
+        mode = "breath"
+        r("OK")
+    elif c == "S":
+        label = ",".join(a) or label
+        try:
+            with open(LABEL_FILE, "w") as f:
+                f.write(label)
+        except OSError:
+            pass
+        r("OK")
+    else:
+        r("ERR,unknown:" + c)
+
+
+def main():
+    global last_rx, mode
+    r("suzu firefly matrix - rp2040-matrix, suzu/1")
+    r("OK," + _descriptor())
+    pixels.fill((0, 60, 20))
+    pixels.show()
+    time.sleep(0.4)
+
+    while True:
+        t = time.monotonic()
+        if supervisor.runtime.serial_bytes_available:
+            last_rx = t
+            line = ""
+            while True:
+                ch = sys.stdin.read(1)
+                if ch == "\r" or ch == "\n":
+                    break
+                line += ch
+            if line.strip():
+                process(line.strip())
         else:
-            input_buffer += char
+            if (last_rx is not None and t - last_rx > IDLE_AFTER) or (
+                last_rx is None and t - boot_t > IDLE_AFTER
+            ):
+                mode = "idle"
 
-    # Small delay to prevent busy-waiting
-    time.sleep(0.001)
+        if mode == "idle":
+            render_idle(t)
+        elif mode == "ring":
+            if now() < ring_until or ring_latch:
+                render_ring(t)
+            else:
+                mode = "breath"
+        elif mode == "breath":
+            render_breath(t)
+        time.sleep(TICK)
+
+
+boot_t = time.monotonic()
+main()
