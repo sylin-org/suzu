@@ -45,58 +45,87 @@ The language between them is the **contract**, versioned `suzu/1`. Producers
 knock; the Resident answers; the faces render. No producer talks to a
 companion directly, and no companion needs to know where an event came from.
 
+## The CLI
+
+One binary. Plain words.
+
+`suzu` with no arguments becomes a watch mode: it polls for hotplug,
+identifies what appears, and offers a servicing menu. Everything else is a
+verb you can guess. Here is a real transcript, taken on the bench:
+
+```text
+$ suzu scan
+catalog: 4 class signature(s) from hardware/classes
+  COM22          NEW     waveshare-rp2040-matrix (firefly/matrix)
+      no identity response — fresh firmware
+  COM12          unreachable
+      (stale, busy, or non-responding port)
+  COM6           non-USB serial port
+  ⋮
 ```
- producers                 the host                      companions
- (backup, CI,        ( suzu serve — the Resident:    (a matrix on the shelf,
-  Zen Garden,         senses the house,                an OLED with a face,
-  an agent)      →    minds moments,             →     a bell on a speaker )
-                      tends companions )
-                 └───────── suzu/1 over the wire ─────────┘
+
+Every device gets an honest state — `NEW`, `fresh firmware`, `unreachable`,
+`stale`, `busy` — because adoption starts with telling the truth about what is
+plugged in. Adoption itself is one verb, with a backup and a verification
+receipt at the end of it:
+
+```text
+$ suzu prepare
 ```
+
+You pick the device, pick a faceplate, confirm, and watch it install. Then the
+Resident takes the night shift, and the house learns to speak:
+
+```text
+$ suzu serve                                   # the Resident: sense, mind, render
+$ suzu say completion A backup committed       # send a moment by hand
+$ suzu show INFO.disk Disk at 50%              # or just a string for the face
+$ suzu pause                                   # one UDP datagram: hold your breath
+```
+
+(`pause` dials `127.0.0.1:7898` — S-U-Z-U on a phone keypad. `suzu resume`
+lets it breathe again.)
+
+The whole vocabulary:
+
+| Verb | What it does |
+| --- | --- |
+| `suzu scan` | Identify every serial port, joined with the hardware catalog |
+| `suzu detective` | Full fact dump per device, ending in a draft `signature.yaml` for a new board class |
+| `suzu serve` | The Resident: watcher, sessions, moments, host sensing, publishing, supervised domains |
+| `suzu screenshot [port]` | In-band frame grab from every firefly — no reboot — as portrait and native PNGs |
+| `suzu record <secs> <fps>` | The trail camera: the grab loop becomes a GIF, clamped to what the wire allows |
+| `suzu prepare` | Adoption: list, choose, back up, install, verify |
+| `suzu say <ring> [text]` | Send a moment by hand; `suzu say allclear` heals a latched alert |
+| `suzu show <tag> <text>` | Send a display string for the face |
+| `suzu pause` / `suzu resume` | Hold and release the Resident, one datagram each |
+| `suzu firmware <port>` | Migrate a harvested device to `suzu/1` in place, `device_id` preserved |
+| `suzu restore <port>` | Un-migrate from the per-device backup. Refuses without one |
 
 ## The contract (`suzu/1`)
 
-The contract is transport-agnostic and versioned; if the shapes change, the
-version bumps. [`CONTRACT.md`](CONTRACT.md) fixes the three message types —
-the event envelope, the command manifest ("one declaration, many mouths": a
-CLI generates subcommands, an MCP server generates tools, a web API generates
-endpoints), and the identity handshake. The concrete wire language below is
-specified in [`docs/message-inventory.md`](docs/message-inventory.md) and
-[`docs/wire-protocol.md`](docs/wire-protocol.md), and is being ratified into
-the contract document.
+The contract is small on purpose: three transport-agnostic message types,
+fixed in [`CONTRACT.md`](CONTRACT.md) — an event envelope, a command manifest
+("one declaration, many mouths": a CLI generates subcommands, an MCP server
+generates tools, a web API generates endpoints), and an identity handshake.
+Identifying a companion is one letter: write `I` to the serial port, receive a
+JSON hello within four seconds — a deadline the host asserts at compile time,
+not a comment.
 
-### Grounds
+A companion's whole world is three kinds of thing:
 
-A companion always stands on exactly one **ground** — a state class it can
-hold indefinitely. Grounds are self-healing: the host re-sends them, so a
-companion that missed a frame is correct again on the next one.
+**Grounds** are the state a companion stands on and can hold indefinitely —
+`report` (how the house feels: cpu, mem, disk, stones, the hour), `run`
+(something is in progress, with a label and a progress), `rest` (nothing
+asked; be dark and quiet). Grounds are self-healing: the host re-sends them,
+so a companion that missed a frame is correct again on the next one.
 
-| Ground | Meaning | Slots |
-| --- | --- | --- |
-| `report` | "Here is how the house feels" | subject, health, uptime, cpu, mem, disk, io, offerings, stones, seed_bank, hour |
-| `run` | "Something is in progress" | label, progress, hue |
-| `rest` | "Nothing asked for; be dark and quiet" | — |
+**Data atoms** travel on a vitality scale of `0`–`5`, with `6` for plain
+information. When several atoms describe one thing they **fold** — worst part
+wins. A machine with nine healthy disks and one dying one reports the dying
+one, because that is the atom the room needed.
 
-### Data atoms and the fold law
-
-Health and load travel as **data atoms** on a vitality scale of `0`–`5`
-(5 operational … 0 offline), with off-scale `6` for plain information.
-Wire form:
-
-```
-S,<set>,<axis>,<level>[,<fraction>[,<min>,<max>,<unit>]][,<text>]*hh
-```
-
-When several atoms describe one thing, they **fold**: the result is the
-minimum level ≤ 5. Worst part wins. A machine with nine healthy disks and one
-dying one reports the dying one — that is the atom the room needed.
-
-### The nine rings
-
-Where grounds are state, **rings** are moments: transient events that overlay
-the ground, splash, and fade. Nine of them, each with a valence, an urgency,
-and a session-scoped arc handle (`0`–`255`) so related moments can be tracked
-and silenced individually.
+**Rings** are the nine moments that splash over a ground, linger, and fade:
 
 | Ring | The moment it names |
 | --- | --- |
@@ -114,45 +143,11 @@ Ring urgency reuses the vitality scale as **tempo**: `5`–`4` breath, `3`
 pulse, `2` blink, `1` strobe, `0` dark. Urgent is faster; calm is slower;
 nothing is loud.
 
-### The wire
-
-The first transport is ordinary text over serial — 115200 8N1,
-newline-terminated frames, XOR checksum (`*hh`) where it matters. One frame
-per idea, readable from a plain terminal:
-
-```
-I                                            # who's there?
-{"proto":"suzu/1","companion":"firefly","family":"waveshare-rp2040-matrix",
- "device_id":"…","firmware":"…","pixels":25}  # the answer, within 4 seconds
-G,report,12,64,3                             # ground: cpu 12, mem 64, gpu 3
-R,completion,3,60,1,7,A backup committed*hh  # a ring, with a label
-X                                            # silence the latched alert
-```
-
-The 4-second handshake deadline is a compile-time assert in the host, not a
-comment. An optional binary dialect (`suzu-b`: COBS framing, CRC8, CBOR) is
-specified for when text is too dear; the host offers it, the companion may
-decline. Deliberately absent: per-frame version negotiation, timing-dependent
-framing, and anything that needs a state machine to say hello.
-
-## The CLI
-
-One Rust binary, `suzu`. With no arguments it becomes a watch mode: polling
-for hotplug, identifying what appears, offering a servicing menu.
-
-| Command | What it does |
-| --- | --- |
-| `suzu scan` | Identify every serial port: USB descriptor ladder joined with the hardware catalog |
-| `suzu detective` | Full fact dump per device — descriptors, probe transcript, catalog verdict, and a draft `signature.yaml` ready to paste for a new board class |
-| `suzu serve` | The Resident: watcher, per-device sessions, moments, host sensing, publishing; supervised domains that announce degradation before tripping, plus a stdin door (`tell <label>`, `status`, `q`) |
-| `suzu screenshot [port]` | In-band frame grab from every firefly — no reboot — written as portrait and native PNGs, colored by the class manifest's phosphor zones |
-| `suzu record <secs> <fps>` | The trail camera: loops the in-band grab into a GIF, clamped to ≤ 60 s and ≤ 5 fps — the wire decides |
-| `suzu prepare` | Adoption: lists CircuitPython drives and serial candidates with honest states, offers faceplates, backs up, installs, verifies |
-| `suzu say <ring> [text]` | Send a moment by hand (`suzu say allclear` heals a latched alert) |
-| `suzu show <tag> <text>` | Send a display string (`suzu show INFO.disk Disk at 50%`) |
-| `suzu pause` / `suzu resume` | One UDP datagram to `127.0.0.1:7898` — S-U-Z-U on a phone keypad — asking the Resident to hold its breath |
-| `suzu firmware <port>` | Migrate a harvested device to `suzu/1` in place: backup, push via raw REPL, soft reboot, verify identity *and* the preserved `device_id` |
-| `suzu restore <port>` | Un-migrate, from the per-device backup. Refuses without one |
+The wire format itself stays in the technical documents, where spec material
+belongs: [`docs/wire-protocol.md`](docs/wire-protocol.md) carries the frame
+grammar, checksums and the optional binary dialect, and
+[`docs/message-inventory.md`](docs/message-inventory.md) is the complete
+reference for every frame, awaiting ratification into the contract document.
 
 ## The fleet
 
