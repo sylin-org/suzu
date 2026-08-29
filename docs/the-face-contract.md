@@ -98,3 +98,34 @@ complementary; the communication is the contract.
 7. **Art is data** — the tool installs sprites, fonts, bytecode; it
    never interprets them.
 8. **Verify, then say so** — no success claims ahead of the handshake.
+
+## 6 · The shot law (the trail camera)
+
+A face answers
+
+```
+J,{"shot":1}
+```
+
+with `OK,<base64(raw framebuffer)>*hh` inside its normal poll loop —
+no reboot, no mode change, the animation keeps dancing while the host
+reads it. The `*hh` xor checksum covers the whole outgoing line
+(everything before the `*`). The J reply **is** the liveness proof:
+no identity probe gates a shot, and a port that doesn't answer gets
+one honest line.
+
+Devices ship RAW memory; the host interprets (ADR-0001). Only the
+frame bytes differ per device, and the class manifest's `frame:`
+section is the only per-device knowledge — size, format, depth,
+order, palette — plus a `render:` hint (mount rotation, upscale) so
+the host shows what the eye sees. One generic decoder; a new face
+ships with a manifest entry, never a host code change.
+
+- **`suzu screenshot [port]`** — one PNG per connected face
+  (`shot-<port>.png`), decoded per *that device's* manifest; suzu
+  coordinates, the caller never walks ports or formats.
+- **`suzu record <secs> <fps> [port]`** — the same in-band capture
+  looped at a wire-respecting rate (clamps: 1–60 s, 1–5 fps) against
+  the first answering face, assembled as an animated GIF
+  (`record-<port>.gif`). Each shot costs the face one ack-sized write
+  (~120 ms) — the wire, not the encoder, is the tax.

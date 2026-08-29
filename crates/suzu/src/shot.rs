@@ -1,100 +1,53 @@
-//! The screenshot — a copy of the screen, pulled from a live face.
+//! The trail camera — screenshots and recordings of live faces.
 //!
-//! `J,{"shot":1}` (the complex-value escape's snapshot form) makes the
-//! face write its frame buffer to /shot.tmp WITHOUT stopping — pulse
-//! and all. This module lifts that file over a read-only raw-REPL
-//! session (the install path's slice sizes, never trusting a blind
-//! read), encodes 1-bit PNGs with no dependencies (stored deflate),
-//! and reboots the face so it comes straight back up.
+//! `J,{"shot":1}` (the snapshot form of the complex-value escape) makes
+//! a face answer with its RAW frame buffer in its poll ack —
+//! `OK,<base64>*hh` on the wire itself: no interrupt, no mode change,
+//! no reboot; the animation keeps dancing. The bytes are device-shaped:
+//! the class manifest's `frame:` section is the only per-device
+//! knowledge, and one generic decoder turns them into pixels (ADR-0001:
+//! devices ship raw memory; the host interprets).
 
-use anyhow::{anyhow, bail};
+use crate::catalog::{parse_color, FrameSpec};
+use anyhow::{anyhow, bail, Result};
 use serialport::SerialPort;
 use std::io::Write;
 use std::time::{Duration, Instant};
-
-const SLICE: usize = 384; // hexlify doubles it on-device — the heap floor
-const FRAME: usize = 1024; // 128 x 64 / 8
-
-fn drain(port: &mut Box<dyn SerialPort>, ms: u64) -> Vec<u8> {
-    let mut out = Vec::new();
-    let end = Instant::now() + Duration::from_millis(ms);
-    while Instant::now() < end {
-        let mut scratch = [0u8; 512];
-        match port.read(&mut scratch) {
-            Ok(0) => {}
-            Ok(n) => out.extend_from_slice(&scratch[..n]),
-            Err(_) => {}
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    out
-}
 
 fn sleep_ms(ms: u64) {
     std::thread::sleep(Duration::from_millis(ms));
 }
 
-/// One raw-REPL round trip: code + Ctrl-D, reply ends with the
-/// `\x04>` pair (a bare `\x04` check only passes on a lucky split).
-fn exec(port: &mut Box<dyn SerialPort>, code: &str) -> anyhow::Result<Vec<u8>> {
-    port.write_all(code.as_bytes())?;
-    port.write_all(b"\x04")?;
-    port.flush()?;
-    let mut out = Vec::new();
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while Instant::now() < deadline {
-        let mut scratch = [0u8; 512];
-        match port.read(&mut scratch) {
-            Ok(0) => {}
-            Ok(n) => out.extend_from_slice(&scratch[..n]),
-            Err(_) => {}
-        }
-        if out.ends_with(b"\x04>") {
-            if out.windows(9).any(|w| w == b"Traceback") {
-                bail!("device raised: {}", String::from_utf8_lossy(&out));
-            }
-            return Ok(out);
-        }
-    }
-    bail!("no end-of-reply marker — framing unknown");
-}
-
-/// Pull the 1 KB frame from a live face — in-band. The face answers
-/// `J,{"shot":1}` with `OK,<base64>*hh` on the wire itself: no
-/// interrupt, no reboot, the dance goes on. Lines are dribbled and the
-/// reply read to its newline; the checksum is stripped and verified by
-/// the caller-side parser habits of the house.
-pub fn capture(port_name: &str) -> anyhow::Result<Vec<u8>> {
-    let mut port = open_port(port_name)?;
-    let frame = capture_on(&mut port)?;
-    Ok(frame)
-}
-
-fn open_port(port_name: &str) -> anyhow::Result<Box<dyn SerialPort>> {
-    let port = serialport::new(port_name, 115_200)
+/// Open a port at the suzu baud and let it settle: opening can reset
+/// the board (the CH340 hard-resets, the CDC soft-resets), and a
+/// mid-boot face answers nothing.
+pub fn open_port(port_name: &str) -> Result<Box<dyn SerialPort>> {
+    let mut port = serialport::new(port_name, 115_200)
         .timeout(Duration::from_millis(200))
         .open()
         .map_err(|e| anyhow!("{port_name}: {e}"))?;
+    // CircuitPython gates its CDC console on DTR: without it the face
+    // hears nothing and answers nothing (proven on the bench, 2026-08-29
+    // — the matrix was 0 bytes at DTR low, its whole frame at DTR high).
+    let _ = port.write_data_terminal_ready(true);
     sleep_ms(2500); // boot wait if just plugged
     Ok(port)
 }
 
-/// One in-band shot on an open session: `J,{"shot":1}` dribbled, the
-/// reply read to its newline. The face answers `OK,<base64>*hh` —
-/// no interrupt, no reboot, the dance goes on.
-fn capture_on(port: &mut Box<dyn SerialPort>) -> anyhow::Result<Vec<u8>> {
-    let mut data = b"\rJ,{\"shot\":1}\n".to_vec();
-    for chunk in data.chunks(16) {
+/// One in-band shot on an open session: `J,{"shot":1}` dribbled 16
+/// bytes at a time (the device's UART RX FIFO overruns bursts), the
+/// reply scanned out of accumulated newline-terminated lines — never
+/// anchored on the first (boot noise produces shorter lines). The only
+/// accepted reply is a line that decodes to a whole frame at `expected`
+/// bytes; its `*hh` xor checksum is verified when present.
+pub fn capture_on(port: &mut Box<dyn SerialPort>, expected: usize) -> Result<Vec<u8>> {
+    let request = b"\rJ,{\"shot\":1}\n";
+    for chunk in request.chunks(16) {
         port.write_all(chunk)?;
         port.flush()?;
         sleep_ms(4);
     }
 
-    // The reply is one long line among possible boot noise: opening
-    // the port can reset the board, and its spew misread at this baud
-    // produces shorter garbage lines. The only accepted reply is a
-    // line that actually decodes to a whole frame — everything else is
-    // scanned past (identity-parse lesson: extract, never anchor).
     let mut acc = Vec::new();
     let deadline = Instant::now() + Duration::from_secs(8);
     while Instant::now() < deadline {
@@ -106,14 +59,9 @@ fn capture_on(port: &mut Box<dyn SerialPort>) -> anyhow::Result<Vec<u8>> {
         }
         while let Some(pos) = acc.iter().position(|&b| b == b'\n') {
             let line: Vec<u8> = acc.drain(..=pos).collect();
-            let s = String::from_utf8_lossy(&line[..line.len() - 1])
-                .trim()
-                .to_string();
-            if let Some(body) = s.strip_prefix("OK,") {
-                let frame = decode_b64(strip_b64_checksum(body));
-                if frame.len() == FRAME {
-                    return Ok(frame);
-                }
+            let s = String::from_utf8_lossy(&line[..line.len() - 1]).to_string();
+            if let Some(frame) = parse_reply(&s, expected) {
+                return Ok(frame);
             }
         }
         std::thread::sleep(Duration::from_millis(20));
@@ -121,80 +69,42 @@ fn capture_on(port: &mut Box<dyn SerialPort>) -> anyhow::Result<Vec<u8>> {
     bail!("no whole-frame reply within 8 s — face unreachable or mid-boot")
 }
 
-/// The trail camera: loop the in-band shot at the wire-respecting rate
-/// and leave the encoding to the host. The face keeps dancing — each
-/// shot costs it one write of ~120 ms, everything else is ours.
-/// `zones` (from the class manifest) color the frames; returns the
-/// frame count actually captured (the wire may be slower than the ask).
-pub fn record(
-    port_name: &str,
-    secs: u32,
-    fps: u32,
-    zones: &[(usize, usize, [u8; 3])],
-    out: &std::path::Path,
-) -> anyhow::Result<usize> {
-    let fps = fps.clamp(1, 5); // 5 fps ~= 7 KB/s — the wire's honest ceiling
-    let period = Duration::from_millis(1000 / fps as u64);
+/// One in-band shot on a port by name (opens and settles it first).
+pub fn capture(port_name: &str, expected: usize) -> Result<Vec<u8>> {
     let mut port = open_port(port_name)?;
-
-    let mut frames: Vec<Vec<u8>> = Vec::new();
-    let mut next_at = Instant::now();
-    let end = next_at + Duration::from_secs(secs as u64);
-    while Instant::now() < end {
-        next_at += period;
-        let frame = capture_on(&mut port)?;
-        frames.push(index_frame(&frame, zones));
-        let now = Instant::now();
-        if next_at > now {
-            sleep_ms((next_at - now).as_millis() as u64);
-        } else {
-            next_at = now; // wire-bound: skip the missed slot, keep going
-        }
-    }
-
-    let delay_cs = (1000 / fps as u16) / 10;
-    crate::gif::write_gif(out, 128, 64, delay_cs.max(2), &GIF_PALETTE, &frames)?;
-    Ok(frames.len())
+    capture_on(&mut port, expected)
 }
 
-/// The panel's three truths + a spare: dark, yellow strip, cyan field.
-pub const GIF_PALETTE: [[u8; 3]; 4] =
-    [[0, 0, 0], [255, 221, 0], [0, 213, 255], [255, 255, 255]];
-
-fn index_frame(frame: &[u8], zones: &[(usize, usize, [u8; 3])]) -> Vec<u8> {
-    let w = 128usize;
-    let mut out = vec![0u8; w * 64];
-    for page in 0..8 {
-        for col in 0..w {
-            let bits = frame[page * w + col];
-            for b in 0..8u32 {
-                if bits & (1 << b) != 0 {
-                    let y = page * 8 + b as usize;
-                    let idx = zones
-                        .iter()
-                        .position(|(y0, y1, _)| y >= *y0 && y <= *y1)
-                        .map(|i| (i + 1).min(3) as u8)
-                        .unwrap_or(3);
-                    out[y * w + col] = idx;
+/// Pull the frame out of one candidate line: an `OK,`-prefixed reply
+/// decoding to exactly `expected` bytes. A trailing `*hh` xor checksum
+/// — computed over everything from `OK,` to before the `*`, per the
+/// wire grammar — is verified when present. Boot noise and
+/// CircuitPython's console-title escapes glue onto reply lines, so
+/// every `OK,` in the line is a candidate (extract, never anchor —
+/// the identity-parse lesson). Anything else is `None`.
+fn parse_reply(line: &str, expected: usize) -> Option<Vec<u8>> {
+    let line = line.trim();
+    for (start, _) in line.match_indices("OK,") {
+        let rest = &line[start..];
+        let body = match rest.rsplit_once('*') {
+            Some((b, s)) if s.len() == 2 && s.bytes().all(|c| c.is_ascii_hexdigit()) => {
+                let mut x = 0u8;
+                for c in b.bytes() {
+                    x ^= c;
                 }
+                if format!("{x:02x}") != s {
+                    continue; // wrong anchor or corrupted — try the next
+                }
+                b
             }
+            _ => rest,
+        };
+        let frame = decode_b64(&body[3..]);
+        if frame.len() == expected {
+            return Some(frame);
         }
     }
-    out
-}
-
-/// Strip a trailing `*hh` checksum — same grammar as the probe.
-fn strip_b64_checksum(line: &str) -> &str {
-    let l = line.trim();
-    let b = l.as_bytes();
-    if b.len() >= 3
-        && b[b.len() - 3] == b'*'
-        && b[b.len() - 2].is_ascii_hexdigit()
-        && b[b.len() - 1].is_ascii_hexdigit()
-    {
-        return std::str::from_utf8(&b[..b.len() - 3]).unwrap_or(l);
-    }
-    l
+    None
 }
 
 /// Base64 decode, whitespace-tolerant, no dependencies.
@@ -230,6 +140,212 @@ pub fn decode_b64(s: &str) -> Vec<u8> {
     out
 }
 
+/// The manifest-driven decoder: raw frame bytes → native RGBA. This is
+/// the one place format knowledge lives, and the manifest is the only
+/// thing it reads.
+pub fn decode_frame(
+    frame: &[u8],
+    spec: &FrameSpec,
+    zones: &[(usize, usize, [u8; 3])],
+) -> Result<(usize, usize, Vec<u8>)> {
+    let (w, h) = (spec.width, spec.height);
+    // The declared order must agree with the format it decorates — a
+    // manifest that lies about its bytes decodes to noise.
+    let order_ok = match (spec.format.as_str(), spec.order.as_deref()) {
+        ("mvlsb", Some("column-major")) | ("rgb24", Some("row-major")) => true,
+        (f, o) if f == "mvlsb" || f == "rgb24" => o.is_none(),
+        _ => true, // unknown format: rejected below with its own message
+    };
+    if !order_ok {
+        bail!(
+            "manifest frame law contradicts itself: {} with order {:?}",
+            spec.format,
+            spec.order
+        );
+    }
+    match (spec.format.as_str(), spec.depth) {
+        ("rgb24", 24) => {
+            if frame.len() != w * h * 3 {
+                bail!("rgb24: {} B is not a whole {w}x{h} frame", frame.len());
+            }
+            let mut rgba = Vec::with_capacity(w * h * 4);
+            for px in frame.chunks_exact(3) {
+                rgba.extend_from_slice(&[px[0], px[1], px[2], 255]);
+            }
+            Ok((w, h, rgba))
+        }
+        ("mvlsb", 1) => {
+            if frame.len() != w * h / 8 {
+                bail!("mvlsb: {} B is not a whole {w}x{h} frame", frame.len());
+            }
+            // Lit pixels shine their zone's phosphor; the manifest
+            // palette (index 1) backs zones-less panels; unlit is
+            // palette[0] — black, for an OLED's off state.
+            let off = spec
+                .palette
+                .first()
+                .map(|c| parse_color(c))
+                .unwrap_or([0, 0, 0]);
+            let lit = spec.palette.get(1).map(|c| parse_color(c));
+            let mut rgba = Vec::with_capacity(w * h * 4);
+            for y in 0..h {
+                for x in 0..w {
+                    let color = if frame[(y / 8) * w + x] & (1 << (y % 8)) != 0 {
+                        zones
+                            .iter()
+                            .find(|(y0, y1, _)| y >= *y0 && y <= *y1)
+                            .map(|(_, _, c)| *c)
+                            .or(lit)
+                            .unwrap_or([230, 230, 230])
+                    } else {
+                        off
+                    };
+                    rgba.extend_from_slice(&[color[0], color[1], color[2], 255]);
+                }
+            }
+            Ok((w, h, rgba))
+        }
+        (f, d) => bail!("frame format {f:?} at {d} bpp is not decodable — fix the manifest"),
+    }
+}
+
+/// Rotate 90° clockwise: dst(u, v) = src(x = v, y = h-1-u) — how a
+/// panel standing on its long edge meets the eye.
+fn rotate90(rgba: &[u8], w: usize, h: usize) -> (usize, usize, Vec<u8>) {
+    let mut out = vec![0u8; rgba.len()];
+    for y in 0..h {
+        for x in 0..w {
+            let (u, v) = (h - 1 - y, x);
+            let dst = (v * h + u) * 4;
+            let src = (y * w + x) * 4;
+            out[dst..dst + 4].copy_from_slice(&rgba[src..src + 4]);
+        }
+    }
+    (h, w, out)
+}
+
+/// Raw frame → the view: native decode, then the manifest's rotation.
+/// Returns (w, h, flat RGBA) in display orientation.
+pub fn render_view(
+    spec: &FrameSpec,
+    zones: &[(usize, usize, [u8; 3])],
+    frame: &[u8],
+) -> Result<(usize, usize, Vec<u8>)> {
+    let (w, h, rgba) = decode_frame(frame, spec, zones)?;
+    match spec.render.as_ref().map(|r| r.rotate).unwrap_or(0) {
+        0 => Ok((w, h, rgba)),
+        90 => Ok(rotate90(&rgba, w, h)),
+        r => bail!("rotate {r} not supported — declare 0 or 90 in the manifest"),
+    }
+}
+
+/// The view's upscale, from the manifest (1 if undeclared).
+fn view_scale(spec: &FrameSpec) -> usize {
+    spec.render.as_ref().map(|r| r.scale).unwrap_or(1).max(1)
+}
+
+/// Integer nearest-neighbour upscale of a flat RGBA view.
+fn scale_rgba(rgba: &[u8], w: usize, h: usize, scale: usize) -> Vec<u8> {
+    let mut out = Vec::with_capacity(rgba.len() * scale * scale);
+    for y in 0..h {
+        for _ in 0..scale {
+            for x in 0..w {
+                let px = &rgba[(y * w + x) * 4..(y * w + x) * 4 + 4];
+                for _ in 0..scale {
+                    out.extend_from_slice(px);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// One face view → a truecolor PNG (upscale from the manifest).
+pub fn render_png(
+    path: &std::path::Path,
+    spec: &FrameSpec,
+    zones: &[(usize, usize, [u8; 3])],
+    frame: &[u8],
+) -> Result<()> {
+    let (w, h, rgba) = render_view(spec, zones, frame)?;
+    let rgb: Vec<[u8; 3]> = rgba.chunks_exact(4).map(|p| [p[0], p[1], p[2]]).collect();
+    write_png(path, w, h, &rgb, view_scale(spec))
+}
+
+/// A decodable face: its port and the manifest knowledge that names
+/// its bytes.
+pub struct Face {
+    pub port: String,
+    pub class: String,
+    pub spec: FrameSpec,
+    pub zones: Vec<(usize, usize, [u8; 3])>,
+}
+
+/// The trail camera: loop the in-band shot against the first answering
+/// face. Each shot costs the face one ack-sized write (~120 ms) — the
+/// wire, not the encoder, is the tax — so the loop is wire-bound:
+/// missed slots are skipped and the dance goes on. Frames are decoded
+/// per the face's manifest and written as an animated GIF (truecolor
+/// in; the gif crate quantizes). Returns (path, frames captured).
+pub fn record_first(
+    faces: &[Face],
+    secs: u32,
+    fps: u32,
+    prefix: &str,
+) -> Result<(std::path::PathBuf, usize)> {
+    let fps = fps.clamp(1, 5); // 5 fps ~= 7 KB/s — the wire's honest ceiling
+    let period = Duration::from_millis(1000 / fps as u64);
+    let delay_cs = ((1000 / fps as u16) / 10).max(2);
+
+    for face in faces {
+        let mut port = match open_port(&face.port) {
+            Ok(p) => p,
+            Err(e) => {
+                println!("  {}: skipped ({e})", face.port);
+                continue;
+            }
+        };
+        let first = match capture_on(&mut port, face.spec.size) {
+            Ok(f) => f,
+            Err(e) => {
+                println!("  {}: no shot ({e})", face.port);
+                continue;
+            }
+        };
+
+        // This face answered: it is the subject.
+        println!("  {} [{}] answers — the subject", face.port, face.class);
+        let (w, h, rgba) = render_view(&face.spec, &face.zones, &first)?;
+        let scale = view_scale(&face.spec);
+        let mut frames = vec![scale_rgba(&rgba, w, h, scale)];
+        let mut next_at = Instant::now();
+        let end = next_at + Duration::from_secs(secs as u64);
+        while Instant::now() < end {
+            next_at += period;
+            match capture_on(&mut port, face.spec.size) {
+                Ok(f) => {
+                    let (_, _, v) = render_view(&face.spec, &face.zones, &f)?;
+                    frames.push(scale_rgba(&v, w, h, scale));
+                }
+                Err(e) => {
+                    println!("  {} went quiet mid-record ({e})", face.port);
+                    break;
+                }
+            }
+            let now = Instant::now();
+            if next_at > now {
+                sleep_ms((next_at - now).as_millis() as u64);
+            } else {
+                next_at = now; // wire-bound: skip the missed slot, keep going
+            }
+        }
+
+        let out = std::path::PathBuf::from(format!("{prefix}-{}.gif", face.port));
+        crate::gif::write_gif_rgba(&out, w * scale, h * scale, delay_cs, &frames)?;
+        return Ok((out, frames.len()));
+    }
+    bail!("no face answered the shot request — nothing to record")
+}
 
 /// PNG writer, no dependencies: 8-bit truecolor, stored-deflate IDAT.
 /// `px` is one RGB triple per pixel, `w` x `h`, scaled by integer
@@ -240,7 +356,7 @@ pub fn write_png(
     h: usize,
     px: &[[u8; 3]],
     scale: usize,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     let sw = w * scale;
     let mut raw = Vec::with_capacity(h * scale * (1 + sw * 3));
     for y in 0..h * scale {
@@ -303,66 +419,4 @@ fn adler32(data: &[u8]) -> u32 {
 
 fn be32(v: u32) -> [u8; 4] {
     v.to_be_bytes()
-}
-
-/// Decode the MVLSB frame (column bytes, 8 vertical pixels, D0 = top)
-/// and render the face as the eye sees it: each native row shines in
-/// its phosphor zone's color (dual-zone panels: a yellow strip above a
-/// cyan field). `zones` is (first_row, last_row, rgb); rows outside
-/// any zone fall back to a neutral white.
-pub fn render(
-    frame: &[u8],
-    zones: &[(usize, usize, [u8; 3])],
-    out_portrait: &std::path::Path,
-    out_native: &std::path::Path,
-) -> anyhow::Result<()> {
-    let w = 128usize;
-    let neutral = [230u8, 230, 230];
-    // An OLED's off state is black; lit pixels shine their zone's color.
-    let off = [0u8, 0, 0];
-    let shade = |y: usize| -> [u8; 3] {
-        zones
-            .iter()
-            .find(|(y0, y1, _)| y >= *y0 && y <= *y1)
-            .map(|(_, _, c)| *c)
-            .unwrap_or(neutral)
-    };
-    let mut native = vec![off; w * 64];
-    for page in 0..8 {
-        for col in 0..128usize {
-            let bits = frame[page * 128 + col];
-            for b in 0..8u32 {
-                if bits & (1 << b) != 0 {
-                    native[(page * 8 + b as usize) * w + col] = shade(page * 8 + b as usize);
-                }
-            }
-        }
-    }
-    // The panel stands on its long edge: portrait(u,v) -> native(v, 63-u).
-    // Row-major portrait: index = v * 64 + u.
-    let mut portrait = vec![off; 64 * 128];
-    for u in 0..64usize {
-        for v in 0..128usize {
-            let src = native[(63 - u) * w + v];
-            if src != off {
-                portrait[v * 64 + u] = src;
-            }
-        }
-    }
-    write_png(out_portrait, 64, 128, &portrait, 3)?;
-    write_png(out_native, w, 64, &native, 4)?;
-    Ok(())
-}
-
-/// `#rrggbb` -> RGB triple; unparsable colors fall back to white.
-pub fn parse_color(s: &str) -> [u8; 3] {
-    let hex = s.trim_start_matches('#');
-    if hex.len() != 6 {
-        return [230, 230, 230];
-    }
-    let mut out = [230u8, 230, 230];
-    for (i, pair) in hex.as_bytes().chunks(2).enumerate() {
-        out[i] = u8::from_str_radix(std::str::from_utf8(pair).unwrap_or("e6"), 16).unwrap_or(230);
-    }
-    out
 }

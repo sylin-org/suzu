@@ -160,7 +160,14 @@ pub fn probe_transcript(port_name: &str) -> Transcript {
         .timeout(Duration::from_millis(200))
         .open()
     {
-        Ok(p) => p,
+        Ok(mut p) => {
+            // CircuitPython gates its CDC console on DTR — without it a
+            // live face is deaf and mute (the matrix's "silent to I",
+            // proven 2026-08-29: 0 bytes at DTR low, full frame at DTR
+            // high). Bridges that ignore it lose nothing.
+            let _ = p.write_data_terminal_ready(true);
+            p
+        }
         Err(e) => {
             t.error = Some(format!("{port_name}: {e}"));
             return t;

@@ -93,8 +93,8 @@ The whole vocabulary:
 | `suzu scan` | Identify every serial port, joined with the hardware catalog |
 | `suzu detective` | Full fact dump per device, ending in a draft `signature.yaml` for a new board class |
 | `suzu serve` | The Resident: watcher, sessions, moments, host sensing, publishing, supervised domains |
-| `suzu screenshot [port]` | In-band frame grab from every firefly — no reboot — as portrait and native PNGs |
-| `suzu record <secs> <fps>` | The trail camera: the grab loop becomes a GIF, clamped to what the wire allows |
+| `suzu screenshot [port]` | In-band frame grab from every firefly — no reboot — one manifest-decoded PNG per face |
+| `suzu record <secs> <fps> [port]` | The trail camera: the grab loop becomes a GIF of the first answering face, clamped to what the wire allows |
 | `suzu prepare` | Adoption: list, choose, back up, install, verify |
 | `suzu say <ring> [text]` | Send a moment by hand; `suzu say allclear` heals a latched alert |
 | `suzu show <tag> <text>` | Send a display string for the face |

@@ -41,6 +41,43 @@ pub struct DisplaySpec {
     pub zones: Vec<DisplayZone>,
 }
 
+/// The parsed `frame:` section — what raw bytes a J shot carries and
+/// how the host turns them into pixels. This is the only per-device
+/// decoding knowledge in the whole tool: one generic decoder reads it,
+/// so a new face ships with a manifest entry, never a code change.
+#[derive(Debug, Clone, Deserialize)]
+pub struct FrameSpec {
+    /// Bytes on the wire — the whole-frame gate for the J ack.
+    pub size: usize,
+    /// `mvlsb` (1-bit column bytes, 8 vertical px, D0 = top) | `rgb24`.
+    pub format: String,
+    /// Bits per pixel as shipped: 1 | 24.
+    pub depth: u8,
+    /// `row-major` | `column-major`.
+    #[serde(default)]
+    pub order: Option<String>,
+    /// Native pixel width.
+    pub width: usize,
+    /// Native pixel height.
+    pub height: usize,
+    /// Colors for low depths: index 0 = off, index 1 = lit. Zones
+    /// (display section) override the lit color per row when present.
+    #[serde(default)]
+    pub palette: Vec<String>,
+    /// Output view hints: rotation (deg cw) and integer upscale.
+    pub render: Option<RenderHint>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RenderHint {
+    /// 0 | 90 (clockwise) — how the panel is mounted.
+    #[serde(default)]
+    pub rotate: i32,
+    /// Integer nearest-neighbour upscale so a 5×5 is lookable-at.
+    #[serde(default)]
+    pub scale: usize,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct MatchRules {
     /// `"1a86:7523"` (exact) or `"2e8a:*"` (vendor-wide).
@@ -53,6 +90,7 @@ pub struct MatchRules {
 pub struct ClassManifest {
     pub id: String,
     pub display: Option<DisplaySpec>,
+    pub frame: Option<FrameSpec>,
 }
 
 #[derive(Clone)]
@@ -103,6 +141,7 @@ impl Catalog {
         }
         roots.push(PathBuf::from("hardware/classes"));
         roots.push(PathBuf::from("../hardware/classes"));
+        roots.push(PathBuf::from("../../hardware/classes"));
 
         for root in &roots {
             let Ok(entries) = std::fs::read_dir(root) else {
@@ -176,6 +215,20 @@ impl Catalog {
             .iter()
             .find(|(mp, _)| mp.is_none_or(|p| p == pid))
             .map(|(_, idx)| &self.classes[*idx])
+    }
+
+    /// The class id a port belongs to: signature match first, seed
+    /// hints second. What screenshots key their manifest lookup on.
+    pub fn class_id_for(&self, vid: u16, pid: u16) -> Option<String> {
+        self.class_by_vidpid(vid, pid)
+            .map(|c| c.id.clone())
+            .or_else(|| seed_class_for(vid, pid))
+    }
+
+    /// The frame law of a class: what its J shot carries and how to
+    /// decode it.
+    pub fn frame(&self, class_id: &str) -> Option<&FrameSpec> {
+        self.manifests.get(class_id).and_then(|m| m.frame.as_ref())
     }
 
     /// The display zones of a class's manifest: (first_row, last_row,

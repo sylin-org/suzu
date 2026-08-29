@@ -1,48 +1,34 @@
 //! Animated GIF89a — the recorder's output format.
 //!
-//! The face is a three-color instrument (dark, yellow strip, cyan
-//! field), so the palette is four entries and the indices are one
-//! byte-snack per pixel. The LZW encoder here is the GIF variant:
-//! variable code width, clear code 1<<min, end code after, LSB-first
-//! bit packing into <=255-byte sub-blocks. ~80 lines, no dependencies.
+//! Frames arrive as truecolor RGBA views (decoded per the class
+//! manifest); the maintained `gif` crate quantizes and LZW-encodes —
+//! the bit-level dance is proven code, ours is only the timing and
+//! the loop.
 
+use anyhow::Result;
 
-/// Write an animated GIF89a via the maintained `gif` crate — the LZW
-/// bit-level dance is someone else's proven code; ours is only the
-/// palette and the frames.
-pub fn write_gif(
+/// Write an animated, infinitely-looping GIF89a. `frames` are flat
+/// RGBA buffers of `w * h * 4` bytes each; `delay_cs` is per-frame
+/// delay in centiseconds.
+pub fn write_gif_rgba(
     path: &std::path::Path,
     w: usize,
     h: usize,
     delay_cs: u16,
-    palette: &[[u8; 3]],
     frames: &[Vec<u8>],
-) -> anyhow::Result<()> {
-    use gif::Frame;
+) -> Result<()> {
+    use gif::{Encoder, Frame, Repeat};
     use std::fs::File;
 
-    let mut colors = Vec::with_capacity(palette.len() * 3);
-    for c in palette {
-        colors.extend_from_slice(c);
-    }
-    while colors.len() < 3 * 4 {
-        colors.push(0); // the palette pads to 4 entries
-    }
-
     let file = File::create(path)?;
-    let mut encoder =
-        gif::Encoder::new(file, w as u16, h as u16, &colors[..])?;
-    encoder.set_repeat(gif::Repeat::Infinite)?;
+    let mut encoder = Encoder::new(file, w as u16, h as u16, &[])?;
+    encoder.set_repeat(Repeat::Infinite)?;
 
     for frame in frames {
-        let mut f = Frame {
-            width: w as u16,
-            height: h as u16,
-            buffer: std::borrow::Cow::Borrowed(frame),
-            delay: delay_cs,
-            ..Default::default()
-        };
-        encoder.write_frame(&mut f)?;
+        let mut indexed = frame.clone(); // from_rgba quantizes in place
+        let mut f = Frame::from_rgba(w as u16, h as u16, &mut indexed);
+        f.delay = delay_cs;
+        encoder.write_frame(&f)?;
     }
     Ok(())
 }

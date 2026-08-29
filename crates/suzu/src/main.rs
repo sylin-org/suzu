@@ -385,8 +385,10 @@ fn run_test(port: &str) {
 }
 
 /// One PNG per connected firefly. The capture rides the wire
-/// (J,{"shot":1}); only suzu/1 faces answer it — everyone else gets
-/// one honest line and untouched ports.
+/// (J,{"shot":1}) and the J reply is the liveness proof — no probe, no
+/// identity gate, no reboot. Each port's bytes are decoded per its
+/// class manifest's frame law; anything that doesn't answer or has no
+/// declared frame gets one honest line and an untouched port.
 fn screenshot(catalog: &Catalog, filter: Option<&str>) {
     println!("suzu screenshot — one png per connected firefly");
     let ports: Vec<_> = enumerate()
@@ -400,70 +402,33 @@ fn screenshot(catalog: &Catalog, filter: Option<&str>) {
     }
     let mut shots = 0;
     for e in &ports {
-        println!("  {} …", e.name);
+        print!("  {} … ", e.name);
         let _ = io::stdout().flush();
-        let t = probe::probe_transcript(&e.name);
-        if let Some(err) = &t.error {
-            println!("    probe failed: {err}");
-            continue;
-        }
-        let Some(json) = &t.identity else {
-            println!("    no shot: no identity response (fresh or foreign firmware)");
+        let u = e.usb.as_ref().expect("filtered to USB above");
+        let Some(class_id) = catalog.class_id_for(u.vid, u.pid) else {
+            println!("no shot: {:04x}:{:04x} is not in the catalog — no manifest to decode with", u.vid, u.pid);
             continue;
         };
-        // The panel's phosphor zones, from the class manifest: a
-        // screenshot colors what the eye sees (dual-zone panels shine
-        // yellow above cyan).
-        let zones = e
-            .usb
-            .as_ref()
-            .and_then(|u| catalog.class_by_vidpid(u.vid, u.pid))
-            .map(|c| c.id.clone())
-            .map(|id| catalog.display_zones(&id))
-            .unwrap_or_default();
-
-        let device_id = json
-            .get("device_id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown")
-            .chars()
-            .take(8)
-            .collect::<String>();
-        // The model, in the class-naming convention: family + variant
-        // with the shared tail deduped (esp8266-oled + oled-v2 ->
-        // esp8266-oled-v2), filename-safe.
-        let family = json.get("family").and_then(|v| v.as_str()).unwrap_or("firefly");
-        let variant = json.get("variant").and_then(|v| v.as_str()).unwrap_or("");
-        let mut model = match family.rsplit_once('-') {
-            Some((_, last)) if variant.starts_with(&format!("{last}-")) => {
-                format!("{family}-{}", &variant[last.len() + 1..])
-            }
-            _ => format!("{family}-{variant}"),
+        let Some(spec) = catalog.frame(&class_id).cloned() else {
+            println!("no shot: class {class_id} declares no frame law");
+            continue;
         };
-        if variant.is_empty() {
-            model = family.to_string();
-        }
-        let model: String = model
-            .chars()
-            .map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '-' })
-            .collect();
-        match shot::capture(&e.name) {
+        let zones = catalog.display_zones(&class_id);
+        match shot::capture(&e.name, spec.size) {
             Ok(frame) => {
-                let base = format!("shot-{}-{model}-{device_id}", e.name);
-                let portrait = std::path::PathBuf::from(format!("{base}.png"));
-                let native = std::path::PathBuf::from(format!("{base}-native.png"));
-                match shot::render(&frame, &zones, &portrait, &native) {
+                let path = std::path::PathBuf::from(format!("shot-{}.png", e.name));
+                match shot::render_png(&path, &spec, &zones, &frame) {
                     Ok(()) => {
-                        println!("    shot → {}", portrait.display());
+                        println!("shot → {} [{class_id}]", path.display());
                         shots += 1;
                     }
-                    Err(err) => println!("    frame lifted, render failed: {err}"),
+                    Err(err) => println!("frame lifted, render failed: {err}"),
                 }
             }
-            Err(err) => println!("    no shot: {err}"),
+            Err(err) => println!("no shot: {err}"),
         }
     }
-    println!("{shots} png(s) — faces were rebooted to clean up; `suzu serve` dresses them again");
+    println!("{shots} png(s) — shots are in-band; the faces never stopped dancing");
 }
 
 fn servicing_menu(port: &str) {
@@ -586,23 +551,39 @@ async fn main() -> anyhow::Result<()> {
             let secs: u32 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(10);
             let fps: u32 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(3);
             let (secs, fps) = (secs.clamp(1, 60), fps.clamp(1, 5));
+            let want_port = args.get(4).map(|s| s.as_str());
             if args.len() > 2 {
                 println!("recording {secs} s at {fps} fps (limits: ≤60 s, ≤5 fps — the wire decides)");
             }
-            let entry = enumerate()
-                .into_iter()
-                .find(|e| e.usb.is_some())
-                .ok_or_else(|| anyhow::anyhow!("no USB serial device — plug a firefly in"))?;
-            let zones = entry
-                .usb
-                .as_ref()
-                .and_then(|u| catalog.class_by_vidpid(u.vid, u.pid))
-                .map(|c| c.id.clone())
-                .map(|id| catalog.display_zones(&id))
-                .unwrap_or_default();
-            let path = format!("record-{}.gif", entry.name);
-            let n = shot::record(&entry.name, secs, fps, &zones, std::path::Path::new(&path))?;
-            println!("{n} frames → {path}");
+            // Every decodable face on the bench, in enumeration order;
+            // `suzu record 4 3 COM22` may aim the camera at one port.
+            let mut faces: Vec<shot::Face> = Vec::new();
+            for e in enumerate().into_iter().filter(|e| e.usb.is_some()) {
+                if let Some(w) = want_port {
+                    if e.name != w {
+                        continue;
+                    }
+                }
+                let u = e.usb.as_ref().expect("filtered to USB above");
+                let Some(class_id) = catalog.class_id_for(u.vid, u.pid) else {
+                    continue;
+                };
+                let Some(spec) = catalog.frame(&class_id).cloned() else {
+                    continue;
+                };
+                let zones = catalog.display_zones(&class_id);
+                faces.push(shot::Face {
+                    port: e.name.clone(),
+                    class: class_id,
+                    spec,
+                    zones,
+                });
+            }
+            if faces.is_empty() {
+                anyhow::bail!("no decodable face — plug a firefly in, and check its class manifest declares a frame");
+            }
+            let (path, n) = shot::record_first(&faces, secs, fps, "record")?;
+            println!("{n} frames → {}", path.display());
         }
         Some("say") | Some("show") => {
             let text = args[2..].join(" ");
