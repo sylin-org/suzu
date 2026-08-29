@@ -293,15 +293,21 @@ fn session_thread(
 }
 
 /// The suzu/1 translation: context first (`J`, when the house name is
-/// new), then ground.set in the faceplate's declared slot order. GPU
-/// has no capture yet — 255 is "not measured"; the face draws a dash.
+/// new), then ground.set in the faceplate's declared slot order. A
+/// slot the house doesn't measure is 255 — the face draws a dash,
+/// never a zero.
 fn translate_suzu(g: &MachineReport, named: &mut Option<String>) -> Vec<String> {
     let mut frames = Vec::new();
     if named.as_deref() != Some(g.name.as_str()) {
         frames.push(format!("J,{{\"name\":\"{}\"}}", g.name.replace('"', "'")));
         *named = Some(g.name.clone());
     }
-    frames.push(format!("G,report,{},{},255", g.cpu, g.mem));
+    frames.push(format!(
+        "G,report,{},{},{}",
+        g.cpu,
+        g.mem,
+        g.gpu.unwrap_or(255)
+    ));
     frames
 }
 

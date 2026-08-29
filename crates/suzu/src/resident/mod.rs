@@ -11,6 +11,7 @@
 
 pub mod devices;
 pub mod events;
+pub mod gpu;
 pub mod moments;
 pub mod publisher;
 pub mod sensor;
@@ -137,10 +138,12 @@ fn house_line(ev: &HouseEvent) {
             cpu,
             mem,
             disk,
+            gpu,
         } => line(
             "sensor",
             &format!(
-                "ground: {name} · cpu {cpu}% · mem {mem}% · disk {disk}% · up {uptime_s}s"
+                "ground: {name} · cpu {cpu}% · gpu {} · mem {mem}% · disk {disk}% · up {uptime_s}s",
+                gpu.map_or_else(|| "—".to_string(), |v| format!("{v}%"))
             ),
         ),
         HouseEvent::Pulse { .. } => {} // the pulse lane is silent by design

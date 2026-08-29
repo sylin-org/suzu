@@ -50,6 +50,7 @@ impl Publisher {
                     cpu,
                     mem,
                     disk,
+                    gpu,
                 } => {
                     let ground = Arc::new(MachineReport {
                         name,
@@ -57,6 +58,7 @@ impl Publisher {
                         cpu,
                         mem,
                         disk,
+                        gpu,
                     });
                     self.last = Some(Arc::clone(&ground));
                     self.distribute(ground).await;

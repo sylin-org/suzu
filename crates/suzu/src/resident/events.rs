@@ -37,7 +37,15 @@ pub enum HouseEvent {
     DeviceHomecoming { port: String, device_id: String },
 
     // sensor → the house
-    GroundChanged { name: String, uptime_s: u64, cpu: u8, mem: u8, disk: u8 },
+    GroundChanged {
+        name: String,
+        uptime_s: u64,
+        cpu: u8,
+        mem: u8,
+        disk: u8,
+        /// `None` is "not measured" — dash on the face, never zero.
+        gpu: Option<u8>,
+    },
     /// The pulse lane — fast, cheap, drift-or-value atoms.
     Pulse { axis: &'static str, value: u8 },
 

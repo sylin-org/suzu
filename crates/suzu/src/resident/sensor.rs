@@ -14,6 +14,8 @@ pub struct MachineReport {
     pub cpu: u8,
     pub mem: u8,
     pub disk: u8,
+    /// `None` is "not measured" — the face draws a dash, never a zero.
+    pub gpu: Option<u8>,
 }
 
 const FAST_TICK: Duration = Duration::from_millis(200);
@@ -71,6 +73,7 @@ impl Sensor {
             cpu,
             mem,
             disk,
+            gpu: super::gpu::capture(),
         }
     }
 
@@ -104,6 +107,7 @@ impl Sensor {
                         prev.cpu != report.cpu
                             || prev.mem != report.mem
                             || prev.disk != report.disk
+                            || prev.gpu != report.gpu
                             || prev.name != report.name
                     }
                 };
@@ -115,6 +119,7 @@ impl Sensor {
                         cpu: report.cpu,
                         mem: report.mem,
                         disk: report.disk,
+                        gpu: report.gpu,
                     });
                 }
             }
