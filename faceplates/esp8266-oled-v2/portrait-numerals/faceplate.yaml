@@ -16,7 +16,8 @@ frames: [I, K, G, A, J, S, X, R]
 # verbatim, never interpreted. Art lives in the files, not in the tool.
 resources:
   install:
-    - { from: main.py, to: main.py }
+    - { from: main.py, to: main.py }      # bootstrap: imports face
+    - { from: face.mpy, to: face.mpy }    # the face, as bytecode
     - { from: digits_bebas.bin, to: digits_bebas.bin }
 
 # Provenance of the digit art (regenerate, never hand-edit). The raw
@@ -27,6 +28,8 @@ font:
   family: Bebas Neue
   license: SIL-OFL-1.1
   source: tools/fonts/BebasNeue-Regular.ttf
+  bytecode: face.mpy — python -m mpy_cross -march=xtensa face.py -o face.mpy
+  (this firmware auto-runs main.py only; face.py is the human source)
   generator: tools/font2sprites.py
   data: digits_bebas.bin
   cap-height: 24

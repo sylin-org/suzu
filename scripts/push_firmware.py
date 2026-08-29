@@ -289,12 +289,24 @@ def main():
         ("icons.py", open(base + "icons.py", "rb").read()),
         ("profont_10.py", open(base + "profont_10.py", "rb").read()),
         ("suzu.json", json.dumps(suzu).encode()),
+        # The face ships as BYTECODE: a 13.7 KB source recompiled its
+        # parse tree past this 80 KB-heap board's boot (MemoryError at
+        # 436 B). mpy-cross -march=xtensa, 5.2 KB, zero parse peak.
+        # This firmware auto-runs main.py only, so main.py is a
+        # two-line bootstrap importing face (face.mpy).
         ("main.py", open(
             "faceplates/esp8266-oled-v2/portrait-numerals/main.py", "rb").read()),
+        ("face.mpy", open(
+            "faceplates/esp8266-oled-v2/portrait-numerals/face.mpy",
+            "rb").read()),
         ("digits_bebas.bin", open(
             "faceplates/esp8266-oled-v2/portrait-numerals/digits_bebas.bin",
             "rb").read()),
     ]
+    for stale in ("main.mpy", "face.py"):
+        if stale in repl.list_files():
+            print("  removing stale %s ..." % stale)
+            repl.exec("import os; os.remove('%s')" % stale)
     print("pushing %d files to %s ..." % (len(payload), port))
     for name, data in payload:
         repl.exec("import gc; gc.collect()")       # fresh heap per file
