@@ -604,7 +604,7 @@ async fn main() -> anyhow::Result<()> {
             let n = shot::record(&entry.name, secs, fps, &zones, std::path::Path::new(&path))?;
             println!("{n} frames → {path}");
         }
-        Some("show") => {
+        Some("say") | Some("show") => {
             let text = args[2..].join(" ");
             if text.is_empty() {
                 anyhow::bail!("usage: suzu show <tag> <text ...>  (e.g. suzu show INFO.disk Disk at 50%)");

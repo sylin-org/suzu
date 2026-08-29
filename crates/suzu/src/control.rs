@@ -29,6 +29,28 @@ pub async fn listen(
         let (n, peer) = socket.recv_from(&mut buf).await?;
         let msg = String::from_utf8_lossy(&buf[..n]).trim().to_lowercase();
         let reply = match msg.as_str() {
+            _ if msg.starts_with("say ") || msg.starts_with("show ") => {
+                // suzu say alert.disk "Disk at 95%" — the nine-ring
+                // vocabulary; urgency comes from the ring's own story.
+                let spec = msg["say ".len()..].trim();
+                let (tag, text) = spec.split_once(' ').unwrap_or((spec, ""));
+                let verb = tag.split('.').next().unwrap_or(tag).to_lowercase();
+                let urgency = match verb.as_str() {
+                    "alert" => 4,
+                    "heartbeat" => 0,
+                    "tended" | "begin" | "completion" | "discovery" | "departure" | "allclear" => 2,
+                    _ => 1,
+                };
+                let label = if text.is_empty() { tag.to_string() } else { text.to_string() };
+                if moments
+                    .send(MomentsCmd::tell("keeper", &verb, Some(label), urgency))
+                    .await
+                    .is_err()
+                {
+                    return Ok(());
+                }
+                "ok say"
+            }
             _ if msg.starts_with("show ") => {
                 // suzu show INFO.disk "Disk at 50%" — a moment for faces
                 let spec = msg["show ".len()..].trim();
@@ -100,6 +122,9 @@ pub async fn chirp(word: &str) -> anyhow::Result<()> {
         }
         "ok show" => {
             println!("shown — faces ring the moment; the band returns to the house label");
+        }
+        "ok say" => {
+            println!("said — the ring rides the wire; the face carries the story");
         }
         other => return Err(anyhow!("unexpected ack: {other}")),
     }

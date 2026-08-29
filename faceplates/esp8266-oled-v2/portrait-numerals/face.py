@@ -29,7 +29,11 @@ ff = ()                   # the fireflies: [u0, phase, speed, v] each
 label = "suzu"
 ring_label = None          # a moment's text, shown in the band briefly
 ring_icon = None           # its icon's index, when the signal has one
-ring_until = None
+ring_verb = None           # the objective: alert latches, the rest bloom
+latch = False              # True while an alert is up
+band_lit = True            # the band's blink phase during a latched alert
+last_blink = 0
+ring_verb = None           # the ring objective: alert latches, others bloom
 values = {"cpu": 255, "mem": 255, "gpu": 255}
 pulse_target = 0
 pulse_lit = 0
@@ -45,6 +49,14 @@ DIG_H = 24
 DIG_STRIDE = 1 + DIG_H * 2
 DIG_FILE = "/digits_bebas.bin"
 NUM_H = DIG_H
+
+# ── the say vocabulary: the nine rings. Each names its objective —
+# alert latches (the only sustained-fast state), allclear heals,
+# momentary rings bloom for ~5 s and return. Urgency is the 0-5
+# vitality scale rendered as tempo. Icons: the signal's qualifier may
+# name one; the objective never depends on it. ──
+RING_VERBS = ("alert", "allclear", "completion", "discovery", "begin",
+              "departure", "tended", "transition", "heartbeat")
 
 # ── moment icons: icons.bin — 8x8 sprites, 8 bytes each, MSB-left
 # rows, in ICON_KEYS order. A ring's signal names one; the icon rides
@@ -262,7 +274,7 @@ def decay():
     quiet_for = (REST_MS if last_rx is not None
                  else BOOT_IDLE_MS + REST_MS)
     anchor = last_rx if last_rx is not None else boot_ms
-    if time.ticks_diff(now, anchor) > quiet_for and not idle:
+    if time.ticks_diff(now, anchor) > quiet_for and not idle and not latch:
         idle_start()
 
 def idle_start():
@@ -398,14 +410,23 @@ def cmd(line):
         elif c == "X":
             r("OK")                   # nothing overlaid yet; ground is showing
         elif c == "R":
+            global ring_label, ring_until, ring_icon, ring_verb, band_lit, latch
             p = a.split(",")
-            global ring_label, ring_until, ring_icon
-            ring_icon = ICON_KEYS.find(p[0].lower())
-            ring_label = " ".join(p[5:])[:30] or None
-            ring_until = time.ticks_add(time.ticks_ms(), 5000)
-            set_pulse(48)             # the dividers flash: something happened
-            pulse_target = 0
-            ring_draw()               # the moment takes the column + band
+            signal = p[0].lower()
+            verb = next((v for v in RING_VERBS if signal.startswith(v)), "transition")
+            ring_verb = verb
+            qual = signal.split(".", 1)[1] if "." in signal else ""
+            keys = ICON_KEYS.split()
+            ring_icon = keys.index(qual) if qual in keys else -1
+            ring_label = " ".join(p[6:])[:30] or None
+            if verb == "alert":
+                latch = True                    # alert latches until allclear
+                ring_until = None
+            else:
+                latch = False
+                ring_until = time.ticks_add(time.ticks_ms(), 5000)
+            band_lit = True
+            ring_draw()
             oled.show()
             ack = "OK," + p[4] if len(p) > 4 else "OK"   # echo the seq
             r(ack, checksum=True)

@@ -233,7 +233,8 @@ def main():
             if (last_rx is not None and t - last_rx > IDLE_AFTER) or (
                 last_rx is None and t - boot_t > IDLE_AFTER
             ):
-                mode = "idle"
+                if not ring_latch:    # an alert never idles away
+                    mode = "idle"
 
         if mode == "idle":
             render_idle(t)
