@@ -970,7 +970,10 @@ body.readonly #form-destroy { display: none !important; }
   display: flex; flex-direction: column; gap: 9px; align-items: flex-start;
 }
 .media-frame {
-  width: 100%; image-rendering: pixelated; border-radius: 8px;
+  /* The manifest's upscale is for files; on screen the frames render
+     at a humane size and stay pixel-crisp while doing it. */
+  width: auto; max-width: 100%; max-height: 300px;
+  image-rendering: pixelated; border-radius: 8px;
   background: #000; min-height: 60px; border: 1px solid var(--line);
 }
 .media-age { font-size: 11px; color: var(--muted); flex: 1 1 auto; text-align: right; }
