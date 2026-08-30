@@ -41,12 +41,7 @@ pub fn open_port(port_name: &str) -> Result<Box<dyn SerialPort>> {
 /// accepted reply is a line that decodes to a whole frame at `expected`
 /// bytes; its `*hh` xor checksum is verified when present.
 pub fn capture_on(port: &mut Box<dyn SerialPort>, expected: usize) -> Result<Vec<u8>> {
-    let request = b"\rJ,{\"shot\":1}\n";
-    for chunk in request.chunks(16) {
-        port.write_all(chunk)?;
-        port.flush()?;
-        sleep_ms(4);
-    }
+    dribble_line(port, "J,{\"shot\":1}")?;
 
     let mut acc = Vec::new();
     let deadline = Instant::now() + Duration::from_secs(8);
@@ -73,6 +68,18 @@ pub fn capture_on(port: &mut Box<dyn SerialPort>, expected: usize) -> Result<Vec
 pub fn capture(port_name: &str, expected: usize) -> Result<Vec<u8>> {
     let mut port = open_port(port_name)?;
     capture_on(&mut port, expected)
+}
+
+/// One wire-shaped request, dribbled 16 bytes at a time — the device's
+/// UART RX FIFO overruns bursts (the shared pacing, one place).
+pub fn dribble_line(serial: &mut Box<dyn SerialPort>, line: &str) -> Result<()> {
+    let mut request = format!("\r{line}\n").into_bytes();
+    for chunk in request.chunks_mut(16) {
+        serial.write_all(chunk)?;
+        serial.flush()?;
+        sleep_ms(4);
+    }
+    Ok(())
 }
 
 /// Pull the frame out of one candidate line: an `OK,`-prefixed reply
@@ -267,9 +274,23 @@ pub fn render_png(
     zones: &[(usize, usize, [u8; 3])],
     frame: &[u8],
 ) -> Result<()> {
+    let png = render_png_bytes(spec, zones, frame)?;
+    std::fs::write(path, png)?;
+    Ok(())
+}
+
+/// One frame → the finished PNG bytes: decode per the manifest,
+/// orient, upscale, encode. What the workbench's shot endpoint serves.
+pub fn render_png_bytes(
+    spec: &FrameSpec,
+    zones: &[(usize, usize, [u8; 3])],
+    frame: &[u8],
+) -> Result<Vec<u8>> {
     let (w, h, rgba) = render_view(spec, zones, frame)?;
-    let rgb: Vec<[u8; 3]> = rgba.chunks_exact(4).map(|p| [p[0], p[1], p[2]]).collect();
-    write_png(path, w, h, &rgb, view_scale(spec))
+    let scale = view_scale(spec);
+    let scaled = scale_rgba(&rgba, w, h, scale);
+    let rgb: Vec<[u8; 3]> = scaled.chunks_exact(4).map(|p| [p[0], p[1], p[2]]).collect();
+    png_bytes(w * scale, h * scale, &rgb, 1)
 }
 
 /// A decodable face: its port and the manifest knowledge that names
@@ -348,16 +369,13 @@ pub fn record_first(
 }
 
 /// PNG writer, no dependencies: 8-bit truecolor, stored-deflate IDAT.
-/// `px` is one RGB triple per pixel, `w` x `h`, scaled by integer
-/// replication (nearest-neighbour — the chunky look is the look).
-pub fn write_png(
-    path: &std::path::Path,
-    w: usize,
-    h: usize,
-    px: &[[u8; 3]],
-    scale: usize,
-) -> Result<()> {
-    let sw = w * scale;
+/// `px` is one RGB triple per pixel, `w` x `h`, at scale 1 (the
+/// caller upscales first — `render_png_bytes` is the usual front).
+
+/// PNG encoder, no dependencies: 8-bit truecolor, stored-deflate IDAT.
+/// `px` is one RGB triple per pixel, `w` x `h`, at scale 1 (the
+/// caller upscales first — `render_png_bytes` is the usual front).
+pub fn png_bytes(w: usize, h: usize, px: &[[u8; 3]], scale: usize) -> Result<Vec<u8>> {    let sw = w * scale;
     let mut raw = Vec::with_capacity(h * scale * (1 + sw * 3));
     for y in 0..h * scale {
         raw.push(0u8); // filter: none
@@ -388,8 +406,7 @@ pub fn write_png(
         png.extend_from_slice(&data);
         png.extend_from_slice(&be32(crc32(&[kind.as_bytes(), &data].concat())));
     }
-    std::fs::write(path, png)?;
-    Ok(())
+    Ok(png)
 }
 
 fn crc32(data: &[u8]) -> u32 {

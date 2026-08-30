@@ -61,4 +61,60 @@ pub enum HouseEvent {
 
     // any domain, before tripping
     Degraded { domain: &'static str, reason: String },
+
+    // roster → the house: the device lifecycle (ADR-0003)
+    /// An individual was placed in Convalescing: admitted to the roster,
+    /// not yet trusted with the stream.
+    IndividualHeld {
+        device_id: String,
+        port: String,
+        class: Option<String>,
+    },
+    /// The admission test's verdict, step by step. Only a pass grants a
+    /// stream subscription.
+    AdmissionReport {
+        device_id: String,
+        port: String,
+        passed: bool,
+        steps: Vec<AdmissionStep>,
+    },
+    /// A subscription was granted: ground, pulses and rings now route.
+    StreamAttached { device_id: String, port: String },
+    /// A subscription was withdrawn (maintenance, departure, failed
+    /// admission). The face falls to its own honesty: idle.
+    StreamDetached {
+        device_id: String,
+        port: String,
+        reason: String,
+    },
+    /// The maintenance saga's spine — the workbench renders these as
+    /// the step-by-step, the log keeps them as the record.
+    MaintenanceStarted {
+        device_id: String,
+        port: String,
+        kind: String,
+    },
+    MaintenanceStep {
+        device_id: String,
+        step: String,
+        ok: bool,
+        detail: String,
+    },
+    MaintenanceCompleted {
+        device_id: String,
+        kind: String,
+        ok: bool,
+    },
+    /// The keeper retired the individual — deliberate, final.
+    /// (The retire verb lands with the servicing engine's UI.)
+    #[allow(dead_code)]
+    Retired { device_id: String },
+}
+
+/// One admission-test step's shape — cheap, serializable, honest.
+#[derive(Debug, Clone, Serialize)]
+pub struct AdmissionStep {
+    pub name: String,
+    pub ok: bool,
+    pub detail: String,
 }

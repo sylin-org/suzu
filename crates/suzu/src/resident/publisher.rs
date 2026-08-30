@@ -67,7 +67,7 @@ impl Publisher {
                     // Fast lane: forward to consumers that declared it.
                     let _ = self
                         .house
-                        .devices_tx()
+                        .devices_door()
                         .send(super::devices::DevicesCmd::Pulse { axis: axis.to_string(), value })
                         .await;
                 }
@@ -82,7 +82,7 @@ impl Publisher {
                 HouseEvent::Ring { signal, label, urgency } => {
                     let _ = self
                         .house
-                        .devices_tx()
+                        .devices_door()
                         .send(super::devices::DevicesCmd::Ring { signal, label, urgency })
                         .await;
                 }
@@ -94,7 +94,7 @@ impl Publisher {
     async fn distribute(&self, ground: Arc<MachineReport>) {
         let _ = self
             .house
-            .devices_tx()
+            .devices_door()
             .send(super::devices::DevicesCmd::Publish(ground))
             .await;
     }

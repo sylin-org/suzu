@@ -9,17 +9,23 @@
 //! - events: `HouseEvent` on one broadcast bus, past tense
 //! - cheap objects: `DeviceRow` snapshots via the command door
 
+pub mod admission;
+pub mod api;
 pub mod devices;
 pub mod events;
 pub mod gpu;
+pub mod maintenance;
 pub mod moments;
 pub mod publisher;
+pub mod roster;
 pub mod sensor;
 pub mod watcher;
 
+use api::Journal;
 use devices::{DeviceRow, Devices, DevicesCmd};
 use events::HouseEvent;
 use moments::{Moments, MomentsCmd};
+use roster::{Roster, SagaStep};
 use sensor::Sensor;
 use std::io::{self, Write};
 use std::sync::{Arc, RwLock};
@@ -46,7 +52,8 @@ impl House {
         }
     }
 
-    fn devices_tx(&self) -> mpsc::Sender<DevicesCmd> {
+    /// The devices door — the read API and the control chirps use it.
+    pub fn devices_door(&self) -> mpsc::Sender<DevicesCmd> {
         self.devices.read().expect("house devices lock").clone()
     }
 
@@ -54,7 +61,8 @@ impl House {
         *self.devices.write().expect("house devices lock") = tx;
     }
 
-    fn moments_tx(&self) -> mpsc::Sender<MomentsCmd> {
+    /// The moments door — visitors speak here.
+    pub fn moments_door(&self) -> mpsc::Sender<MomentsCmd> {
         self.moments.read().expect("house moments lock").clone()
     }
 
@@ -64,13 +72,13 @@ impl House {
 
     /// The visitor door — one command, from any surface.
     pub async fn tell(&self, moment: MomentsCmd) {
-        let _ = self.moments_tx().send(moment).await;
+        let _ = self.moments_door().send(moment).await;
     }
 
     /// Cheap snapshot: a copy, taken by the owning domain.
     pub async fn snapshot_devices(&self) -> anyhow::Result<Vec<DeviceRow>> {
         let (tx, mut rx) = mpsc::channel(1);
-        self.devices_tx()
+        self.devices_door()
             .send(DevicesCmd::Snapshot { reply: tx })
             .await
             .map_err(|_| anyhow::anyhow!("devices domain is not running"))?;
@@ -85,18 +93,22 @@ fn line(domain: &str, text: &str) {
     let _ = io::stdout().flush();
 }
 
-fn house_line(ev: &HouseEvent) {
+fn house_line(ev: &HouseEvent, journal: &Journal) {
+    let say = |domain: &str, text: String| {
+        line(domain, &text);
+        journal.record(domain, &text);
+    };
     match ev {
-        HouseEvent::DeviceSensed { port } => line("watcher", &format!("sensed {port}")),
+        HouseEvent::DeviceSensed { port } => say("watcher", format!("sensed {port}")),
         HouseEvent::DeviceIdentified(f) => {
             let version = f
                 .version
                 .as_deref()
                 .map(|v| format!(" v{v}"))
                 .unwrap_or_default();
-            line(
+            say(
                 "watcher",
-                &format!(
+                format!(
                     "identified {} → {} · {}/{}{}",
                     f.port,
                     f.class.as_deref().unwrap_or("no class"),
@@ -106,29 +118,29 @@ fn house_line(ev: &HouseEvent) {
                 ),
             );
         }
-        HouseEvent::DeviceGone { port } => line("watcher", &format!("gone {port}")),
-        HouseEvent::PortBusy { port, reason } => line(
+        HouseEvent::DeviceGone { port } => say("watcher", format!("gone {port}")),
+        HouseEvent::PortBusy { port, reason } => say(
             "watcher",
-            &format!("{port} is busy — not minding ({reason})"),
+            format!("{port} is busy — not minding ({reason})"),
         ),
         HouseEvent::DeviceMinded {
             port,
             device_id,
             class,
             state,
-        } => line(
+        } => say(
             "devices",
-            &format!(
+            format!(
                 "minding {port} as {class:?} ({device_id:?}) — state {state}"
             ),
         ),
-        HouseEvent::DeviceHomecoming { port, device_id } => line(
+        HouseEvent::DeviceHomecoming { port, device_id } => say(
             "devices",
-            &format!("homecoming — {device_id} is back on {port}"),
+            format!("homecoming — {device_id} is back on {port}"),
         ),
-        HouseEvent::DeviceReleased { port, device_id } => line(
+        HouseEvent::DeviceReleased { port, device_id } => say(
             "devices",
-            &format!(
+            format!(
                 "released {port} ({device_id:?}) — the roster remembers them"
             ),
         ),
@@ -139,34 +151,87 @@ fn house_line(ev: &HouseEvent) {
             mem,
             disk,
             gpu,
-        } => line(
+        } => say(
             "sensor",
-            &format!(
+            format!(
                 "ground: {name} · cpu {cpu}% · gpu {} · mem {mem}% · disk {disk}% · up {uptime_s}s",
                 gpu.map_or_else(|| "—".to_string(), |v| format!("{v}%"))
             ),
         ),
-        HouseEvent::Ring { signal, label, urgency } => line(
+        HouseEvent::Ring { signal, label, urgency } => say(
             "moments",
-            &format!("ring: [{signal}] {label} (urgency {urgency})"),
+            format!("ring: [{signal}] {label} (urgency {urgency})"),
         ),
         HouseEvent::Pulse { .. } => {} // the pulse lane is silent by design
         HouseEvent::SplashDecided { decision, label } => {
-            line("moments", &format!("splash: {decision} {}", label.as_deref().unwrap_or("")))
+            say("moments", format!("splash: {decision} {}", label.as_deref().unwrap_or("")))
         }
         HouseEvent::Degraded { domain, reason } => {
-            line(domain, &format!("!! degraded: {reason}"))
+            say(domain, format!("!! degraded: {reason}"))
         }
+        HouseEvent::IndividualHeld { device_id, port, class } => say(
+            "roster",
+            format!(
+                "held {device_id} on {port} ({}) — admission decides the stream",
+                class.as_deref().unwrap_or("?")
+            ),
+        ),
+        HouseEvent::AdmissionReport { device_id, port, passed, steps } => say(
+            "roster",
+            format!(
+                "admission {} for {device_id} on {port} — {}",
+                if *passed { "PASSED" } else { "FAILED" },
+                steps
+                    .iter()
+                    .map(|s| format!("{}{}", if s.ok { "" } else { "✗ " }, s.name))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        ),
+        HouseEvent::StreamAttached { device_id, port } => say(
+            "roster",
+            format!("stream attached — {device_id} on {port}"),
+        ),
+        HouseEvent::StreamDetached { device_id, port, reason } => say(
+            "roster",
+            format!("stream detached — {device_id} on {port} ({reason})"),
+        ),
+        HouseEvent::MaintenanceStarted { device_id, port, kind } => say(
+            "maintenance",
+            format!("{kind} saga owns {device_id} on {port} — the stream is withdrawn"),
+        ),
+        HouseEvent::MaintenanceStep { device_id, step, ok, detail } => say(
+            "maintenance",
+            format!(
+                "{device_id} · {step}{} {}",
+                if *ok { "" } else { " ✗" },
+                detail
+            ),
+        ),
+        HouseEvent::MaintenanceCompleted { device_id, kind, ok } => say(
+            "maintenance",
+            format!(
+                "{kind} saga {} for {device_id} — admission decides the stream",
+                if *ok { "done" } else { "failed" }
+            ),
+        ),
+        HouseEvent::Retired { device_id } => say(
+            "roster",
+            format!("{device_id} retired — the roster keeps the name, never the stream"),
+        ),
     }
 }
-
-// ── supervision — a domain reports before it trips, then restarts ──
 //
 // The supervised loop owns its domain's command channel: on restart it
 // creates a fresh channel and re-wires the house door, so every sender
 // (including the watcher's) lands on the living receiver again.
 
-fn spawn_devices_supervised(house: Arc<House>, rx: mpsc::Receiver<DevicesCmd>) {
+fn spawn_devices_supervised(
+    house: Arc<House>,
+    rx: mpsc::Receiver<DevicesCmd>,
+    roster: Arc<RwLock<Roster>>,
+    catalog: Arc<Catalog>,
+) {
     tokio::spawn(async move {
         let mut rx = Some(rx);
         let mut backoff = 1u64;
@@ -175,8 +240,15 @@ fn spawn_devices_supervised(house: Arc<House>, rx: mpsc::Receiver<DevicesCmd>) {
                 return;
             };
             let house2 = Arc::clone(&house);
-            let handle =
-                tokio::spawn(async move { Devices::new(house2.events.clone()).run(current).await });
+            let roster2 = Arc::clone(&roster);
+            let catalog2 = Arc::clone(&catalog);
+            let bus = house2.events.subscribe();
+            let door = house2.devices_door();
+            let handle = tokio::spawn(async move {
+                Devices::new(house2.events.clone(), door, catalog2, roster2)
+                    .run(current, bus)
+                    .await
+            });
             let reason = match handle.await {
                 Ok(()) => "command channel closed".to_string(),
                 Err(e) => format!("panic: {e}"),
@@ -228,6 +300,85 @@ fn spawn_moments_supervised(house: Arc<House>, rx: mpsc::Receiver<MomentsCmd>) {
     });
 }
 
+/// The roster's task: it consumes the house's facts and answers with
+/// the lifecycle's verdicts. StreamAttached / StreamDetached are its
+/// words — the devices domain opens and closes its gates to them.
+fn spawn_roster(house: Arc<House>, roster: Arc<RwLock<Roster>>) {
+    tokio::spawn(async move {
+        let mut bus = house.events.subscribe();
+        loop {
+            match bus.recv().await {
+                Ok(ev) => {
+                    let derived = process_roster_event(&roster, ev);
+                    if let Some(d) = derived {
+                        let _ = house.events.send(d);
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(_) => break,
+            }
+        }
+    });
+}
+
+fn process_roster_event(
+    roster: &Arc<RwLock<Roster>>,
+    ev: HouseEvent,
+) -> Option<HouseEvent> {
+    let mut r = roster.write().ok()?;
+    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    match ev {
+        HouseEvent::DeviceMinded { port, device_id: Some(id), class, .. } => {
+            r.hold_for_admission(&id, &port, class.as_deref(), &now).ok()?;
+            Some(HouseEvent::IndividualHeld { device_id: id, port, class })
+        }
+        HouseEvent::AdmissionReport { device_id, port, passed, steps } => {
+            let record = roster::AdmissionRecord { passed, at: now, steps };
+            match r.admission_result(&device_id, record) {
+                Ok(roster::Lifecycle::Streaming) => {
+                    Some(HouseEvent::StreamAttached { device_id, port })
+                }
+                Ok(_) => Some(HouseEvent::StreamDetached {
+                    device_id,
+                    port,
+                    reason: "admission failed".into(),
+                }),
+                Err(_) => None,
+            }
+        }
+        HouseEvent::DeviceReleased { port, device_id } => {
+            let id = device_id.or_else(|| {
+                r.by_port(&port).map(|i| i.device_id.clone())
+            })?;
+            let was_streaming =
+                r.individual(&id).is_some_and(|i| i.lifecycle == roster::Lifecycle::Streaming);
+            r.departed(&id).ok()?;
+            was_streaming.then(|| HouseEvent::StreamDetached {
+                device_id: id,
+                port,
+                reason: "departed".into(),
+            })
+        }
+        HouseEvent::MaintenanceStarted { device_id, kind, .. } => {
+            r.maintenance_started(&device_id, &kind).ok()?;
+            None
+        }
+        HouseEvent::MaintenanceStep { device_id, step, ok, detail } => {
+            r.maintenance_step(&device_id, SagaStep { name: step, ok, detail });
+            None
+        }
+        HouseEvent::MaintenanceCompleted { device_id, ok, .. } => {
+            r.maintenance_completed(&device_id, ok).ok()?;
+            None
+        }
+        HouseEvent::Retired { device_id } => {
+            r.retire(&device_id).ok()?;
+            None
+        }
+        _ => None,
+    }
+}
+
 fn spawn_sensor_supervised(house: Arc<House>) {
     tokio::spawn(async move {
         let mut backoff = 1u64;
@@ -276,8 +427,10 @@ fn spawn_publisher_supervised(house: Arc<House>) {
 }
 
 pub async fn run(catalog: Arc<Catalog>) -> anyhow::Result<()> {
-    let (events, _) = broadcast::channel(128);
+    let (events, _) = broadcast::channel(256);
     let house = Arc::new(House::new(events.clone()));
+    let roster = Arc::new(RwLock::new(Roster::new()));
+    let journal = Arc::new(Journal::new());
 
     // Create the domain doors once; the supervised loops only recreate
     // them on restart (and re-wire the house at that moment), so every
@@ -292,19 +445,28 @@ pub async fn run(catalog: Arc<Catalog>) -> anyhow::Result<()> {
         let watcher = watcher::Watcher {
             links: watcher::WatcherLinks {
                 events: house.events.clone(),
-                devices: house.devices_tx(),
+                devices: house.devices_door(),
             },
-            catalog,
+            catalog: Arc::clone(&catalog),
         };
         tokio::spawn(watcher.run());
     }
-    spawn_devices_supervised(Arc::clone(&house), devices_rx);
+    spawn_devices_supervised(Arc::clone(&house), devices_rx, Arc::clone(&roster), catalog);
     spawn_moments_supervised(Arc::clone(&house), moments_rx);
     spawn_sensor_supervised(Arc::clone(&house));
     spawn_publisher_supervised(Arc::clone(&house));
+    spawn_roster(Arc::clone(&house), Arc::clone(&roster));
 
     // the control chirp: `suzu pause` / `suzu resume` from any shell
-    tokio::spawn(crate::control::listen(house.devices_tx(), house.moments_tx()));
+    tokio::spawn(crate::control::listen(house.devices_door(), house.moments_door()));
+
+    // the workbench's door: the loopback read API (ADR-0002)
+    tokio::spawn(api::listen(Arc::new(api::Ctx {
+        devices: house.devices_door(),
+        moments: house.moments_door(),
+        roster: Arc::clone(&roster),
+        journal: Arc::clone(&journal),
+    })));
 
     // the visitor door, by hand: `tell <label>`
     let (stdin_tx, mut stdin_rx) = mpsc::channel::<String>(16);
@@ -344,7 +506,7 @@ pub async fn run(catalog: Arc<Catalog>) -> anyhow::Result<()> {
                         last_ground_line = Some(std::time::Instant::now());
                     }
                     if !throttle {
-                        house_line(&ev);
+                        house_line(&ev, &journal);
                     }
                 }
                 Err(broadcast::error::RecvError::Lagged(n)) => {
