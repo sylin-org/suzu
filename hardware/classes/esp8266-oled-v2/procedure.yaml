@@ -30,3 +30,41 @@ procedures:
           args: ["--port {port}", "--baud 460800", "write_flash", "--flash_size=detect", "0", "{micropython_bin}"]
       - poll-repl: { command: "print('mpready')", expect: mpready, timeout: 30s }
       - use: upgrade                    # compose the shared push tail
+
+  # Files back to ship state: the proven push re-runs (it is backup-
+  # first inside the script); the MicroPython runtime is untouched.
+  soft:
+    pre: "device runs MicroPython and answers the handshake"
+    steps:
+      - push-chunked: { via: scripts/push_firmware.py, fresh: false }
+      - admission-test: {}
+
+  # The true factory reset: the ROM bootloader erases every flash
+  # sector (the CH340's DTR/RTS circuit enters it - no button), the
+  # MicroPython runtime is re-flashed from the vendored artifact, and
+  # the face is pushed with the individual's preserved device_id.
+  factory:
+    pre: "device answers or auto-resets into the ROM bootloader; esptool on PATH"
+    steps:
+      - backup-identity: { keep: [device_id] }
+      - backend: { tool: esptool, args: ["--port {port}", "--chip esp8266", "erase_flash"] }
+      - backend: { tool: esptool, args: ["--port {port}", "--chip esp8266", "write_flash",
+                                         "--flash_size=detect", "0", "{micropython_bin}"] }
+      - push-chunked: { via: scripts/push_firmware.py, fresh: true }
+      - admission-test: {}
+
+  # The exam a face takes before the stream may flow to it (ADR-0003).
+  # display-truth draws a known ground pattern (G,report,88,77,66) and
+  # asserts the decoded shot lights the cyan field beyond anything
+  # three idle fireflies could light. The label round-trip is skipped:
+  # this face's descriptor declares no label key.
+  admission_test:
+    display_truth: ground-pattern
+    assert: "at least 150 lit pixels in the cyan field of the decoded shot"
+
+artifacts:
+  - file: micropython-esp8266-1mib.bin
+    version: pending-pin                 # the 1 MiB build; pin + vendor before the first factory run
+    source: https://micropython.org/download/ESP8266_GENERIC/
+    sha256: pending-first-fetch
+    role: the MicroPython runtime
