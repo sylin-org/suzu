@@ -41,6 +41,29 @@ struct Saga<'a> {
     total: u32,
 }
 
+/// A long step's voice: handed to the step's closure, it announces
+/// where the work is while the work runs. The plan's numbers hold —
+/// this is the same step, saying what it is doing.
+struct StepVoice<'a> {
+    events: &'a Sender<HouseEvent>,
+    device_id: &'a str,
+    index: u32,
+    total: u32,
+}
+
+impl StepVoice<'_> {
+    fn speak(&self, text: &str) {
+        let _ = self.events.send(HouseEvent::MaintenanceStep {
+            device_id: self.device_id.to_string(),
+            step: text.to_string(),
+            index: self.index,
+            total: self.total,
+            ok: true,
+            detail: String::new(),
+        });
+    }
+}
+
 impl<'a> Saga<'a> {
     fn new(events: &'a Sender<HouseEvent>, device_id: &str, total: u32) -> Self {
         Self { events, device_id: device_id.to_string(), index: 0, total }
@@ -48,10 +71,10 @@ impl<'a> Saga<'a> {
 
     /// Announce a step, run it, and keep the announcement either way —
     /// the workbench shows the step while it runs, and the failure if
-    /// it fails.
+    /// it fails. The closure speaks through the step's voice.
     fn step<T, F>(&mut self, label: &str, run: F) -> Result<T>
     where
-        F: FnOnce() -> Result<T>,
+        F: FnOnce(&StepVoice<'_>) -> Result<T>,
     {
         self.index += 1;
         let _ = self.events.send(HouseEvent::MaintenanceStep {
@@ -62,7 +85,13 @@ impl<'a> Saga<'a> {
             ok: true,
             detail: String::new(),
         });
-        match run() {
+        let voice = StepVoice {
+            events: self.events,
+            device_id: &self.device_id,
+            index: self.index,
+            total: self.total,
+        };
+        match run(&voice) {
             Ok(v) => Ok(v),
             Err(e) => {
                 let _ = self.events.send(HouseEvent::MaintenanceStep {
@@ -276,20 +305,86 @@ fn force_reload(port: &str) -> Result<()> {
     Ok(())
 }
 
-fn run_tool(mut command: std::process::Command, what: &str) -> Result<String> {
-    let out = command.output().map_err(|e| anyhow!("{what}: {e}"))?;
-    let text = format!(
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
-    if !out.status.success() {
-        bail!("{what} failed: {}", text.lines().last().unwrap_or("no output").trim());
-    }
-    Ok(text)
+/// The calmest a tool's voice may pulse — a burst (esptool's progress
+/// bar speaks in `\r` ticks) collapses to its latest line at this
+/// cadence, so the journal stays a story, not a firehose.
+const SPEAK_MIN_INTERVAL: Duration = Duration::from_millis(1000);
+
+/// A tool line worth speaking: the tail after any carriage return (a
+/// progress bar redraws one line in place), trimmed of frame noise.
+fn speakable(line: &str) -> &str {
+    line.rsplit('\r').next().unwrap_or("").trim()
 }
 
-fn esptool(port: &str, args: &[&str]) -> Result<String> {
+/// Run a tool with its voice on: every line it speaks becomes a step
+/// announcement as it lands (coalesced — see SPEAK_MIN_INTERVAL), so a
+/// long step is never a silent step. Returns the tool's own last line.
+fn run_tool(voice: &StepVoice<'_>, mut command: std::process::Command, what: &str) -> Result<String> {
+    use std::io::{BufRead, BufReader};
+    use std::sync::mpsc;
+    command
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let mut child = command.spawn().map_err(|e| anyhow!("{what}: {e}"))?;
+    let (tx, rx) = mpsc::channel::<String>();
+    let mut pipes: Vec<Box<dyn std::io::Read + Send>> = Vec::new();
+    if let Some(p) = child.stdout.take() {
+        pipes.push(Box::new(p));
+    }
+    if let Some(p) = child.stderr.take() {
+        pipes.push(Box::new(p));
+    }
+    for pipe in pipes {
+        let tx = tx.clone();
+        std::thread::spawn(move || {
+            for line in BufReader::new(pipe).lines() {
+                if tx.send(line.unwrap_or_default()).is_err() {
+                    return;
+                }
+            }
+        });
+    }
+    drop(tx);
+
+    let mut last = String::new();
+    let mut pending: Option<String> = None;
+    let mut last_spoke = Instant::now() - SPEAK_MIN_INTERVAL;
+    loop {
+        match rx.recv_timeout(Duration::from_millis(200)) {
+            Ok(line) => {
+                let text = speakable(&line);
+                if text.is_empty() {
+                    continue;
+                }
+                last = text.to_string();
+                if last_spoke.elapsed() >= SPEAK_MIN_INTERVAL {
+                    voice.speak(text);
+                    pending = None;
+                    last_spoke = Instant::now();
+                } else {
+                    pending = Some(text.to_string());
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                if let Some(text) = pending.take() {
+                    voice.speak(&text);
+                    last_spoke = Instant::now();
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    if let Some(text) = pending.take() {
+        voice.speak(&text);
+    }
+    let status = child.wait().map_err(|e| anyhow!("{what}: wait failed — {e}"))?;
+    if !status.success() {
+        bail!("{what} failed: {}", if last.is_empty() { format!("exited with {status}") } else { last });
+    }
+    Ok(last)
+}
+
+fn esptool(voice: &StepVoice<'_>, port: &str, args: &[&str]) -> Result<String> {
     for exe in ["esptool", "esptool.py"] {
         let mut cmd = std::process::Command::new(exe);
         cmd.arg("--port").arg(port).arg("--chip");
@@ -297,7 +392,7 @@ fn esptool(port: &str, args: &[&str]) -> Result<String> {
         let chip = all.remove(0);
         cmd.arg(chip);
         cmd.args(&all);
-        match run_tool(cmd, exe) {
+        match run_tool(voice, cmd, exe) {
             Ok(text) => return Ok(text),
             Err(e) if exe == "esptool.py" => return Err(e),
             Err(_) => continue, // no `esptool` on PATH — try `esptool.py`
@@ -306,13 +401,13 @@ fn esptool(port: &str, args: &[&str]) -> Result<String> {
     unreachable!()
 }
 
-fn push_face_files(port: &str, device_id: &str, fresh: bool) -> Result<String> {
+fn push_face_files(voice: &StepVoice<'_>, port: &str, device_id: &str, fresh: bool) -> Result<String> {
     let mut cmd = std::process::Command::new("python");
     cmd.args(["scripts/push_firmware.py", port, device_id]);
     if fresh {
         cmd.arg("--fresh");
     }
-    run_tool(cmd, "push_firmware.py")
+    run_tool(voice, cmd, "push_firmware.py")
 }
 
 fn rp2040_port() -> Result<String> {
@@ -344,21 +439,21 @@ fn rp2040_fresh(
     device_id: &str,
     _catalog: &Catalog,
 ) -> Result<()> {
-    saga.step("Preparing the board", || {
+    saga.step("Preparing the board", |_voice| {
         if !circuitpy_drives().is_empty() {
             bail!("a CIRCUITPY drive is already mounted — this board is not fresh; use Reinstall");
         }
         Ok(())
     })?;
-    saga.step("Waiting for BOOTSEL", || {
+    saga.step("Waiting for BOOTSEL", |_voice| {
         wait_mount("RPI-RP2", 600).map(|_| ())
     })?;
-    saga.step("Flashing CircuitPython", || {
+    saga.step("Flashing CircuitPython", |_voice| {
         let mount = wait_mount("RPI-RP2", 60)?;
         copy_uf2("circuitpython-raspberry_pi_pico.uf2", &mount)?;
         wait_circuitpy(120).map(|_| ())
     })?;
-    saga.step("Writing the face", || {
+    saga.step("Writing the face", |_voice| {
         let drive = find_circuitpy_drive()
             .ok_or_else(|| anyhow!("the drive vanished before the face could be written"))?;
         write_face_files(&drive, device_id)
@@ -381,20 +476,20 @@ fn rp2040_soft(
         .into_iter()
         .next()
         .ok_or_else(|| anyhow!("no CIRCUITPY drive — replug the device"))?;
-    saga.step("Checking the drive", || {
+    saga.step("Checking the drive", |_voice| {
         if Path::new(&format!("{drive}/boot_out.txt")).exists() {
             Ok(())
         } else {
             bail!("{drive} does not look like a CircuitPython board");
         }
     })?;
-    saga.step("Backing up identity", || {
+    saga.step("Backing up identity", |_voice| {
         backup_drive_identity(&drive, device_id)
     })?;
-    saga.step("Writing the face", || {
+    saga.step("Writing the face", |_voice| {
         write_face_files(&drive, device_id)
     })?;
-    saga.step("Nudging the face", || force_reload(&rp2040_port()?))?;
+    saga.step("Nudging the face", |_voice| force_reload(&rp2040_port()?))?;
     Ok(())
 }
 
@@ -408,25 +503,25 @@ fn rp2040_factory(
 ) -> Result<()> {
     let drive = find_circuitpy_drive()
         .ok_or_else(|| anyhow!("no CIRCUITPY drive — replug the device first so identity can be backed up"))?;
-    saga.step("Backing up identity", || {
+    saga.step("Backing up identity", |_voice| {
         backup_drive_identity(&drive, device_id)
     })?;
-    saga.step("Waiting for BOOTSEL", || {
+    saga.step("Waiting for BOOTSEL", |_voice| {
         println!("[maintenance] hold BOOTSEL and replug — waiting up to 10 minutes for RPI-RP2");
         wait_mount("RPI-RP2", 600).map(|_| ())
     })?;
-    saga.step("Erasing the flash", || {
+    saga.step("Erasing the flash", |_voice| {
         let mount = wait_mount("RPI-RP2", 60)?;
         copy_uf2("flash_nuke.uf2", &mount)?;
         std::thread::sleep(Duration::from_millis(2500));
         wait_mount("RPI-RP2", 60).map(|_| ()) // the nuke reboots into its bootloader
     })?;
-    saga.step("Flashing CircuitPython", || {
+    saga.step("Flashing CircuitPython", |_voice| {
         let mount = wait_mount("RPI-RP2", 60)?;
         copy_uf2("circuitpython-raspberry_pi_pico.uf2", &mount)?;
         wait_circuitpy(120).map(|_| ())
     })?;
-    saga.step("Writing the face", || {
+    saga.step("Writing the face", |_voice| {
         let drive = find_circuitpy_drive()
             .ok_or_else(|| anyhow!("the drive vanished before the face could be written"))?;
         write_face_files(&drive, device_id)
@@ -444,8 +539,8 @@ fn esp8266_adopt(
     device_id: &str,
     _catalog: &Catalog,
 ) -> Result<()> {
-    saga.step("Installing the suzu face", || {
-        push_face_files(port, device_id, true).map(|out| last_line(&out))
+    saga.step("Installing the suzu face", |voice| {
+        push_face_files(voice, port, device_id, true).map(|out| last_line(&out))
     })?;
     Ok(())
 }
@@ -456,8 +551,8 @@ fn esp8266_factory(
     device_id: &str,
     _catalog: &Catalog,
 ) -> Result<()> {
-    saga.step("Erasing the flash", || {
-        esptool(port, &["esp8266", "erase_flash"]).map(|_| ())
+    saga.step("Erasing the flash", |voice| {
+        esptool(voice, port, &["esp8266", "erase_flash"]).map(|_| ())
     })?;
     let bin = Path::new(ARTIFACTS).join("micropython-esp8266-1mib.bin");
     if !bin.exists() {
@@ -465,11 +560,11 @@ fn esp8266_factory(
     }
     let bin_str = bin.to_string_lossy().into_owned();
     let args = ["esp8266", "write_flash", "--flash_size=detect", "0", bin_str.as_str()];
-    saga.step("Flashing MicroPython", || {
-        esptool(port, &args).map(|_| ())
+    saga.step("Flashing MicroPython", |voice| {
+        esptool(voice, port, &args).map(|_| ())
     })?;
-    saga.step("Installing the suzu face", || {
-        push_face_files(port, device_id, true).map(|out| last_line(&out))
+    saga.step("Installing the suzu face", |voice| {
+        push_face_files(voice, port, device_id, true).map(|out| last_line(&out))
     })?;
     Ok(())
 }
@@ -498,8 +593,8 @@ mod tests {
     #[test]
     fn success_lands_exactly_on_the_plan() {
         let (mut saga, mut rx) = saga_of(3);
-        saga.step("one", || Ok(())).unwrap();
-        saga.step("two", || Ok(())).unwrap();
+        saga.step("one", |_| Ok(())).unwrap();
+        saga.step("two", |_| Ok(())).unwrap();
         saga.hand_to_exam();
         let seen = announcements(&mut rx);
         assert_eq!(seen, vec![(1, 3), (2, 3), (3, 3)]);
@@ -508,8 +603,8 @@ mod tests {
     #[test]
     fn a_failed_step_reannounces_its_own_number() {
         let (mut saga, mut rx) = saga_of(3);
-        saga.step("one", || Ok(())).unwrap();
-        saga.step("two", || Err::<(), _>(anyhow!("no drive"))).unwrap_err();
+        saga.step("one", |_| Ok(())).unwrap();
+        saga.step("two", |_| Err::<(), _>(anyhow!("no drive"))).unwrap_err();
         let seen = announcements(&mut rx);
         assert_eq!(seen, vec![(1, 3), (2, 3), (2, 3)]);
     }
@@ -518,8 +613,8 @@ mod tests {
     fn the_counter_never_runs_past_the_plan() {
         // Mid-failure: the closing "failed" takes the next number.
         let (mut saga, mut rx) = saga_of(3);
-        saga.step("one", || Ok(())).unwrap();
-        saga.step("two", || Err::<(), _>(anyhow!("boom"))).unwrap_err();
+        saga.step("one", |_| Ok(())).unwrap();
+        saga.step("two", |_| Err::<(), _>(anyhow!("boom"))).unwrap_err();
         saga.close("failed", false, "boom".into());
         assert!(announcements(&mut rx).iter().all(|(i, t)| i <= t));
 
