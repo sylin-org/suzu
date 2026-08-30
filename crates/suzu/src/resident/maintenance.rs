@@ -28,6 +28,12 @@ const RP2040_FIRMWARE: &str = "firmware/suzu-d/rp2040-matrix";
 
 /// The saga runner: announces numbered steps as they begin, and tells
 /// the truth when one fails.
+///
+/// The counting law: `total` is every numbered announcement the saga
+/// will ever make — its steps, plus the closing hand (the exam on
+/// success, `failed` otherwise). A step that fails re-announces its
+/// own number; the closing takes the next one, so the counter can
+/// never run past the plan.
 struct Saga<'a> {
     events: &'a Sender<HouseEvent>,
     device_id: String,
@@ -72,18 +78,23 @@ impl<'a> Saga<'a> {
         }
     }
 
-    /// The closing announcement: the saga hands the individual to the
-    /// admission exam, which alone decides the stream.
-    fn hand_to_exam(&mut self) {
+    /// The closing announcement — whichever way the saga ends.
+    fn close(&mut self, label: &str, ok: bool, detail: String) {
         self.index += 1;
         let _ = self.events.send(HouseEvent::MaintenanceStep {
             device_id: self.device_id.clone(),
-            step: "Handing to the exam".to_string(),
+            step: label.to_string(),
             index: self.index,
             total: self.total,
-            ok: true,
-            detail: String::new(),
+            ok,
+            detail,
         });
+    }
+
+    /// The success closing: the saga hands the individual to the
+    /// admission exam, which alone decides the stream.
+    fn hand_to_exam(&mut self) {
+        self.close("Handing to the exam", true, String::new());
     }
 }
 
@@ -102,14 +113,15 @@ pub fn run(
         (Some("waveshare-rp2040-matrix"), "install" | "adopt") => {
             // A board with no CircuitPython yet gets the full install:
             // BOOTSEL, the runtime, then the face. One with the drive
-            // mounted just needs its files refreshed.
+            // mounted just needs its files refreshed. Totals count the
+            // steps plus the closing hand (the counting law, Saga's doc).
             if circuitpy_drives().is_empty() {
                 (5, rp2040_fresh)
             } else {
-                (4, rp2040_soft)
+                (5, rp2040_soft)
             }
         }
-        (Some("waveshare-rp2040-matrix"), "soft") => (4, rp2040_soft),
+        (Some("waveshare-rp2040-matrix"), "soft") => (5, rp2040_soft),
         (Some("waveshare-rp2040-matrix"), "factory") => (6, rp2040_factory),
         (Some(c), kind) if c.contains("esp8266") => match kind {
             "install" | "adopt" | "soft" => (2, esp8266_adopt),
@@ -124,16 +136,7 @@ pub fn run(
     let outcome = runner(&mut saga, port, device_id, catalog);
     match &outcome {
         Ok(()) => saga.hand_to_exam(),
-        Err(e) => {
-            let _ = events.send(HouseEvent::MaintenanceStep {
-                device_id: device_id.to_string(),
-                step: "failed".to_string(),
-                index: saga.index + 1,
-                total: saga.total,
-                ok: false,
-                detail: format!("{e:#}"),
-            });
-        }
+        Err(e) => saga.close("failed", false, format!("{e:#}")),
     }
     outcome
 }
@@ -469,4 +472,60 @@ fn esp8266_factory(
         push_face_files(port, device_id, true).map(|out| last_line(&out))
     })?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A saga wired to a real bus, so the announcements can be read
+    /// back and the counting law checked against the wire's truth.
+    fn saga_of(total: u32) -> (Saga<'static>, tokio::sync::broadcast::Receiver<HouseEvent>) {
+        let (tx, _rx) = tokio::sync::broadcast::channel(32);
+        let tx = Box::leak(Box::new(tx));
+        (Saga::new(tx, "id-1", total), tx.subscribe())
+    }
+
+    /// Collect every announcement still on the bus.
+    fn announcements(rx: &mut tokio::sync::broadcast::Receiver<HouseEvent>) -> Vec<(u32, u32)> {
+        let mut out = Vec::new();
+        while let Ok(HouseEvent::MaintenanceStep { index, total, .. }) = rx.try_recv() {
+            out.push((index, total));
+        }
+        out
+    }
+
+    #[test]
+    fn success_lands_exactly_on_the_plan() {
+        let (mut saga, mut rx) = saga_of(3);
+        saga.step("one", || Ok(())).unwrap();
+        saga.step("two", || Ok(())).unwrap();
+        saga.hand_to_exam();
+        let seen = announcements(&mut rx);
+        assert_eq!(seen, vec![(1, 3), (2, 3), (3, 3)]);
+    }
+
+    #[test]
+    fn a_failed_step_reannounces_its_own_number() {
+        let (mut saga, mut rx) = saga_of(3);
+        saga.step("one", || Ok(())).unwrap();
+        saga.step("two", || Err::<(), _>(anyhow!("no drive"))).unwrap_err();
+        let seen = announcements(&mut rx);
+        assert_eq!(seen, vec![(1, 3), (2, 3), (2, 3)]);
+    }
+
+    #[test]
+    fn the_counter_never_runs_past_the_plan() {
+        // Mid-failure: the closing "failed" takes the next number.
+        let (mut saga, mut rx) = saga_of(3);
+        saga.step("one", || Ok(())).unwrap();
+        saga.step("two", || Err::<(), _>(anyhow!("boom"))).unwrap_err();
+        saga.close("failed", false, "boom".into());
+        assert!(announcements(&mut rx).iter().all(|(i, t)| i <= t));
+
+        // A failure before any step still fits the plan.
+        let (mut saga, mut rx) = saga_of(2);
+        saga.close("failed", false, "no CIRCUITPY drive".into());
+        assert_eq!(announcements(&mut rx), vec![(1, 2)]);
+    }
 }
