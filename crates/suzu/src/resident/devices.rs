@@ -406,8 +406,20 @@ impl Devices {
         }
     }
 
-    fn mind(&mut self, facts: DeviceFacts) {
+    fn mind(&mut self, mut facts: DeviceFacts) {
         let state = DeviceState::Accepted;
+        // Adoption begins at first sight: a recognized class with no
+        // identity yet is minted one on the spot. It is written to the
+        // device when firmware is installed, and survives everything
+        // after (ADR-0003: identity is the name, not the silicon).
+        if facts.class.is_some() && facts.device_id.is_none() {
+            facts.device_id = Some(crate::prepare::mint_v7());
+            println!(
+                "[devices] {} minted identity {}",
+                facts.port,
+                facts.device_id.as_deref().unwrap_or("?")
+            );
+        }
         match self.devices.get(&facts.port) {
             Some(existing) if existing.device_id() == facts.device_id.as_deref() => {
                 let _ = self.events.send(HouseEvent::DeviceHomecoming {

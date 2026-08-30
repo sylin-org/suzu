@@ -34,9 +34,17 @@ pub fn run(
     device_id: &str,
 ) -> Result<()> {
     let outcome = match (class, kind) {
-        (Some("waveshare-rp2040-matrix"), "install" | "adopt" | "soft") => {
-            rp2040_soft(events, device_id)
+        (Some("waveshare-rp2040-matrix"), "install" | "adopt") => {
+            // A board with no CircuitPython yet gets the full install:
+            // BOOTSEL, the runtime, then the face. One with the drive
+            // mounted just needs its files refreshed.
+            if circuitpy_drives().is_empty() {
+                rp2040_install_fresh(events, device_id)
+            } else {
+                rp2040_soft(events, device_id)
+            }
         }
+        (Some("waveshare-rp2040-matrix"), "soft") => rp2040_soft(events, device_id),
         (Some("waveshare-rp2040-matrix"), "factory") => rp2040_factory(events, device_id),
         (Some(c), kind) if c.contains("esp8266") => match kind {
             "install" | "soft" => esp8266_soft(port, events, device_id),
@@ -241,9 +249,44 @@ fn push_face_files(port: &str, device_id: &str, fresh: bool) -> Result<String> {
 
 // ── the sagas ──────────────────────────────────────────────────────
 
+/// Every mounted CIRCUITPY drive — more than one means the install
+/// could land on the wrong board, so the saga refuses and says so.
+fn circuitpy_drives() -> Vec<String> {
+    let mut out = Vec::new();
+    for letter in 'A'..='Z' {
+        if Path::new(&format!("{letter}:/boot_out.txt")).exists() {
+            out.push(format!("{letter}:"));
+        }
+    }
+    out
+}
+
+/// The fresh-board install: BOOTSEL gate, the CircuitPython runtime,
+/// then the face files with the individual's minted identity.
+fn rp2040_install_fresh(events: &Sender<HouseEvent>, device_id: &str) -> Result<()> {
+    marco(events, device_id, "human-gate",
+        "hold BOOTSEL and replug - the saga waits up to 10 minutes for RPI-RP2".into());
+    let mount = wait_mount("RPI-RP2", 600)?;
+
+    copy_uf2("circuitpython-raspberry_pi_pico.uf2", &mount)?;
+    marco(events, device_id, "runtime", "CircuitPython UF2 landed".into());
+    let drive = wait_circuitpy(120)?;
+    marco(events, device_id, "drive", format!("{drive} is up, empty"));
+
+    write_face_files(&drive, device_id)?;
+    marco(events, device_id, "face-files", "code.py + suzu.json verified by read-back".into());
+    Ok(())
+}
+
 fn rp2040_soft(events: &Sender<HouseEvent>, device_id: &str) -> Result<()> {
-    let drive = find_circuitpy_drive()
-        .ok_or_else(|| anyhow!("no CIRCUITPY drive — replug the device, or hold BOOTSEL for the factory path"))?;
+    let drives = circuitpy_drives();
+    if drives.len() > 1 {
+        bail!("multiple CIRCUITPY drives mounted ({}) - unplug the other boards so the face lands on the right one", drives.join(", "));
+    }
+    let drive = drives
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow!("no CIRCUITPY drive - replug the device, or hold BOOTSEL for the fresh install"))?;
     marco(events, device_id, "drive", format!("{drive} is up"));
     backup_drive_identity(&drive, device_id)?;
     marco(events, device_id, "backup", format!("{drive} identity stashed in backups/"));

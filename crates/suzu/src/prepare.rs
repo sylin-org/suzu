@@ -41,7 +41,7 @@ fn faceplates_for(class: &str) -> Vec<FaceplateDecl> {
     out
 }
 
-fn mint_v7() -> String {
+pub(crate) fn mint_v7() -> String {
     // GUIDv7: 48-bit ms timestamp, version 7, variant bits. Uniqueness
     // on a bench comes from the millisecond clock; the rest is shape.
     let ms = std::time::SystemTime::now()

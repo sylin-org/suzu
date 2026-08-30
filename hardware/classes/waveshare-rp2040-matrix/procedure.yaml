@@ -60,7 +60,7 @@ artifacts:
     source: https://datasheets.raspberrypi.com/soft/flash_nuke.uf2
     role: total-flash-erase (BOOTSEL bootloader survives)
   - file: circuitpython-raspberry_pi_pico.uf2
-    version: 10.0.3                      # the build this individual runs (boot_out.txt)
-    source: https://circuitpython.org/board/raspberry_pi_pico/
-    sha256: pending-first-fetch          # fetch before the first factory run
+    version: 10.0.3 (en_US)             # the build the fleet runs (boot_out.txt)
+    source: https://downloads.circuitpython.org/bin/raspberry_pi_pico/en_US/
+    sha256: ff32bcf0be8f2707698e5d37ae903f1c016fbf826214cf9bb6e61cc5594506c7
     role: the CircuitPython runtime
