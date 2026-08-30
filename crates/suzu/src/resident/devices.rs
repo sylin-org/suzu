@@ -10,6 +10,7 @@
 
 use super::admission;
 use super::events::{DeviceFacts, HouseEvent};
+use super::jobs::{Job, Jobs};
 use super::roster::Roster;
 use super::sensor::MachineReport;
 use crate::catalog::{Catalog, FrameSpec};
@@ -82,7 +83,7 @@ pub enum SessionMsg {
     /// One in-band shot, decoded per the class manifest, as PNG bytes.
     Capture { reply: std_mpsc::SyncSender<Vec<u8>> },
     /// The trail camera: exclusive on the session until done.
-    Record { secs: u32, fps: u32, state: Arc<Mutex<RecordState>> },
+    Record { job: Arc<Mutex<Job>>, secs: u32, fps: u32 },
     /// Re-run the admission exam (roster decides what it means).
     Admission,
     Close,
@@ -133,8 +134,7 @@ pub enum DevicesCmd {
     /// Save one shot into the captures folder; replies with the path.
     CaptureSave { port: String, reply: mpsc::Sender<anyhow::Result<String>> },
     /// The trail camera, on the owning session.
-    RecordStart { port: String, secs: u32, fps: u32, reply: mpsc::Sender<anyhow::Result<()>> },
-    RecordStatus { port: String, reply: mpsc::Sender<Option<RecordState>> },
+    RecordStart { port: String, job: Arc<Mutex<Job>>, secs: u32, fps: u32 },
     /// Re-run the admission exam through the owning session.
     AdmissionRetry { port: String, reply: mpsc::Sender<anyhow::Result<()>> },
     /// The keeper lifted one device off the stream (per-device pause):
@@ -163,7 +163,7 @@ pub struct Devices {
     catalog: Arc<Catalog>,
     devices: BTreeMap<String, Device>,
     sessions: BTreeMap<String, SessionHandle>,
-    records: BTreeMap<String, Arc<Mutex<RecordState>>>,
+    jobs: Arc<Jobs>,
     in_maintenance: BTreeMap<String, String>,
     pulse_announced: bool,
     paused: bool,
@@ -189,6 +189,7 @@ impl Devices {
         door: mpsc::Sender<DevicesCmd>,
         catalog: Arc<Catalog>,
         roster: Arc<std::sync::RwLock<Roster>>,
+        jobs: Arc<Jobs>,
     ) -> Self {
         Self {
             events,
@@ -197,7 +198,7 @@ impl Devices {
             catalog,
             devices: BTreeMap::new(),
             sessions: BTreeMap::new(),
-            records: BTreeMap::new(),
+            jobs: Arc::clone(&jobs),
             in_maintenance: BTreeMap::new(),
             pulse_announced: false,
             paused: false,
@@ -233,12 +234,8 @@ impl Devices {
                             let res = self.capture_save(&port);
                             let _ = reply.send(res).await;
                         }
-                        DevicesCmd::RecordStart { port, secs, fps, reply } => {
-                            let res = self.record_start(&port, secs, fps);
-                            let _ = reply.send(res).await;
-                        }
-                        DevicesCmd::RecordStatus { port, reply } => {
-                            let _ = reply.send(self.record_status(&port)).await;
+                        DevicesCmd::RecordStart { port, job, secs, fps } => {
+                            self.record_start(&port, job, secs, fps);
                         }
                         DevicesCmd::AdmissionRetry { port, reply } => {
                             let res = self.admission_retry(&port);
@@ -549,12 +546,10 @@ impl Devices {
     /// While a record runs on the port, recording subsumes the
     /// preview: the served frame is the frame the GIF is taking.
     fn capture(&self, port: &str, reply: std_mpsc::SyncSender<Vec<u8>>) {
-        if let Some(state) = self.records.get(port) {
-            if let Ok(st) = state.lock() {
-                if st.is_recording() {
-                    let _ = reply.send(st.latest_png.clone().unwrap_or_default());
-                    return;
-                }
+        if let Some(job) = self.jobs.latest(port, "record") {
+            if job.state == "recording" {
+                let _ = reply.send(job.preview.clone().unwrap_or_default());
+                return;
             }
         }
         let png = match self.devices.get(port).and_then(|d| d.outbound.as_ref()) {
@@ -591,35 +586,14 @@ impl Devices {
         Ok(path)
     }
 
-    fn record_start(&mut self, port: &str, secs: u32, fps: u32) -> anyhow::Result<()> {
-        if let Some(state) = self.records.get(port) {
-            if state.lock().map(|s| s.is_recording()).unwrap_or(false) {
-                anyhow::bail!("{port}: a recording is already running");
-            }
-        }
-        let state = Arc::new(Mutex::new(RecordState {
-            phase: "recording".into(),
-            ..Default::default()
-        }));
-        self.send_to_session(
-            port,
-            SessionMsg::Record { secs: secs.clamp(1, 60), fps, state: Arc::clone(&state) },
-        )
-        .map_err(|e| {
-            if let Ok(mut s) = state.lock() {
-                s.phase = "failed".into();
-            }
-            e
-        })?;
-        self.records.insert(port.to_string(), state);
-        Ok(())
+    fn record_start(&mut self, port: &str, job: Arc<Mutex<Job>>, secs: u32, fps: u32) {
+        let secs = secs.clamp(1, 60);
+        let fps = fps.clamp(1, 5);
+        self.send_to_session(port, SessionMsg::Record { job, secs, fps });
     }
 
-    fn record_status(&self, port: &str) -> Option<RecordState> {
-        self.records
-            .get(port)
-            .and_then(|s| s.lock().ok())
-            .map(|s| s.clone())
+    fn record_status(&self, port: &str) -> Option<Job> {
+        self.jobs.latest(port, "record")
     }
 
     fn admission_retry(&self, port: &str) -> anyhow::Result<()> {
@@ -998,8 +972,8 @@ fn session_loop(
                 };
                 let _ = reply.send(png);
             }
-            Ok(SessionMsg::Record { secs, fps, state }) => {
-                record_job(serial, port, secs, fps, spec.as_ref(), &zones, &state);
+            Ok(SessionMsg::Record { job, secs, fps }) => {
+                record_job(serial, port, secs, fps, spec.as_ref(), &zones, &job);
             }
             Ok(SessionMsg::Admission) => {
                 if suzu {
@@ -1039,11 +1013,11 @@ fn record_job(
     fps: u32,
     spec: Option<&FrameSpec>,
     zones: &[(usize, usize, [u8; 3])],
-    state: &Mutex<RecordState>,
+    job: &Mutex<Job>,
 ) {
     let Some(spec) = spec else {
-        if let Ok(mut s) = state.lock() {
-            s.phase = "done".into();
+        if let Ok(mut j) = job.lock() {
+            j.state = "failed".into();
         }
         return;
     };
@@ -1051,10 +1025,11 @@ fn record_job(
     let period = Duration::from_millis(1000 / fps as u64);
     let delay_cs = ((1000 / fps as u16) / 10).max(2);
 
-    if let Ok(mut s) = state.lock() {
-        s.phase = "recording".into();
-        s.frames = 0;
-        s.gif_path = None;
+    if let Ok(mut j) = job.lock() {
+        j.state = "recording".into();
+        j.index = 0;
+        j.total = (secs * fps) as u32;
+        j.gif = None;
     }
 
     let mut rgba_frames: Vec<Vec<u8>> = Vec::new();
@@ -1077,9 +1052,9 @@ fn record_job(
                     vw = w * scale;
                     vh = h * scale;
                     rgba_frames.push(scaled);
-                    if let Ok(mut s) = state.lock() {
-                        s.frames = rgba_frames.len();
-                        s.latest_png = Some(png);
+                    if let Ok(mut j) = job.lock() {
+                        j.index = rgba_frames.len() as u32;
+                        j.preview = Some(png);
                     }
                 }
                 Err(_) => {}
@@ -1097,26 +1072,29 @@ fn record_job(
         }
     }
 
-    let mut finished = RecordState {
-        phase: if quiet { "failed".into() } else { "done".into() },
-        frames: rgba_frames.len(),
-        gif_path: None,
-        latest_png: None,
-    };
-    if !rgba_frames.is_empty() && vw > 0 {
+    let mut final_state = "done".to_string();
+    let mut final_gif: Option<String> = None;
+    if !rgba_frames.is_empty() {
         let dir = std::env::var("SUZU_CAPTURES_DIR").unwrap_or_else(|_| "captures".into());
         let _ = std::fs::create_dir_all(&dir);
         let stamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
         let path = format!("{dir}/record-{port}-{stamp}.gif");
-        match crate::gif::write_gif_rgba(
-            std::path::Path::new(&path), vw, vh, delay_cs, &rgba_frames,
-        ) {
-            Ok(()) => finished.gif_path = Some(path),
-            Err(e) => println!("[sessions] {port}: gif assembly failed — {e}"),
+        match crate::gif::write_gif_rgba(std::path::Path::new(&path), vw, vh, delay_cs, &rgba_frames) {
+            Ok(()) => {
+                final_gif = Some(path);
+                let _ = path;
+            }
+            Err(e) => {
+                final_state = "failed".into();
+                println!("[sessions] {port}: gif assembly failed — {e}");
+            }
         }
+    } else if quiet {
+        final_state = "failed".into();
     }
-    if let Ok(mut s) = state.lock() {
-        *s = finished;
+    if let Ok(mut j) = job.lock() {
+        j.state = final_state;
+        j.gif = final_gif;
     }
 }
 

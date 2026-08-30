@@ -13,7 +13,9 @@
 //! the trust boundary is the machine itself (ADR-0002: local-first,
 //! same machine as the faces).
 
-use super::devices::{DevicesCmd, RecordState};
+use super::devices::DevicesCmd;
+use super::jobs::Job;
+use super::jobs::Jobs;
 use super::events::HouseEvent;
 use super::moments::MomentsCmd;
 use super::roster::Roster;
@@ -91,6 +93,7 @@ const DESTINATIONS: &[(&str, &str, &str, &str, &str)] = &[
 
 pub struct Ctx {
     pub catalog: Arc<crate::Catalog>,
+    pub jobs: Arc<Jobs>,
     pub events: tokio::sync::broadcast::Sender<HouseEvent>,
     pub devices: mpsc::Sender<DevicesCmd>,
     pub moments: mpsc::Sender<MomentsCmd>,
@@ -390,10 +393,19 @@ async fn record_start(ctx: &Ctx, port: &str, body: &str) -> (u16, &'static str, 
     let parsed: serde_json::Value = serde_json::from_str(body).unwrap_or(serde_json::json!({}));
     let secs = parsed.get("secs").and_then(|v| v.as_u64()).unwrap_or(4) as u32;
     let fps = parsed.get("fps").and_then(|v| v.as_u64()).unwrap_or(3) as u32;
-    let (tx, mut rx) = mpsc::channel(1);
+    let job = ctx.jobs.create(Job {
+        id: format!("record-{}-{}", port, chrono::Utc::now().format("%Y%m%d-%H%M%S")),
+        kind: "record".into(),
+        target: port.to_string(),
+        state: "recording".into(),
+        total: secs * fps,
+        started_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        ..Default::default()
+    });
+    let (tx, mut rx) = mpsc::channel::<anyhow::Result<()>>(1);
     let _ = ctx
         .devices
-        .send(DevicesCmd::RecordStart { port: port.to_string(), secs, fps, reply: tx })
+        .send(DevicesCmd::RecordStart { port: port.to_string(), job, secs, fps })
         .await;
     match rx.recv().await {
         Some(Ok(())) => (200, "application/json", br#"{"started":true}"#.to_vec()),
@@ -403,15 +415,10 @@ async fn record_start(ctx: &Ctx, port: &str, body: &str) -> (u16, &'static str, 
 }
 
 async fn record_status(ctx: &Ctx, port: &str) -> (u16, &'static str, Vec<u8>) {
-    let (tx, mut rx) = mpsc::channel(1);
-    let _ = ctx
-        .devices
-        .send(DevicesCmd::RecordStatus { port: port.to_string(), reply: tx })
-        .await;
-    let state = rx.recv().await.flatten();
+    let state = ctx.jobs.latest(port, "record");
     let json = match state {
-        Some(RecordState { phase, frames, gif_path, .. }) => serde_json::json!({
-            "phase": phase, "frames": frames, "gif": gif_path,
+        Some(job) => serde_json::json!({
+            "phase": job.state, "frames": job.index, "gif": job.gif,
         }),
         None => serde_json::json!({ "phase": "idle" }),
     };

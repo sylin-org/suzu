@@ -113,6 +113,9 @@ pub enum HouseEvent {
     /// (The retire verb lands with the servicing engine's UI.)
     #[allow(dead_code)]
     Retired { device_id: String },
+
+    // jobs — every long-running operation announces itself here
+    Job { job: crate::resident::jobs::Job },
 }
 
 /// One admission-test step's shape — cheap, serializable, honest.

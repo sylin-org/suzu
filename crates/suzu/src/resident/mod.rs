@@ -14,6 +14,7 @@ pub mod api;
 pub mod devices;
 pub mod events;
 pub mod gpu;
+pub mod jobs;
 pub mod maintenance;
 pub mod moments;
 pub mod publisher;
@@ -31,6 +32,7 @@ use std::io::{self, Write};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use crate::Catalog;
+use jobs::Jobs;
 use tokio::sync::{broadcast, mpsc};
 
 /// The house wiring. Domains receive `Arc<House>` and may only use
@@ -220,7 +222,18 @@ pub(crate) fn format_house_event(ev: &HouseEvent) -> (&'static str, String) {
                 if *ok { "" } else { " ✗" },
             ),
         ),
-        HouseEvent::MaintenanceCompleted { device_id, kind, ok } => say(
+        HouseEvent::Job { job } => say(
+            "jobs",
+            format!(
+                "{} on {} → {} ({}{})",
+                job.kind,
+                job.target,
+                job.label,
+                job.state,
+                if job.index > 0 { format!(", {} frames", job.index) } else { String::new() }
+            ),
+        ),
+                HouseEvent::MaintenanceCompleted { device_id, kind, ok } => say(
             "maintenance",
             format!(
                 "{kind} saga {} for {device_id} — admission decides the stream",
@@ -243,6 +256,7 @@ fn spawn_devices_supervised(
     rx: mpsc::Receiver<DevicesCmd>,
     roster: Arc<RwLock<Roster>>,
     catalog: Arc<Catalog>,
+    jobs: Arc<Jobs>,
 ) {
     tokio::spawn(async move {
         let mut rx = Some(rx);
@@ -254,10 +268,11 @@ fn spawn_devices_supervised(
             let house2 = Arc::clone(&house);
             let roster2 = Arc::clone(&roster);
             let catalog2 = Arc::clone(&catalog);
+            let jobs2 = Arc::clone(&jobs);
             let bus = house2.events.subscribe();
             let door = house2.devices_door();
             let handle = tokio::spawn(async move {
-                Devices::new(house2.events.clone(), door, catalog2, roster2)
+                Devices::new(house2.events.clone(), door, catalog2, roster2, jobs2)
                     .run(current, bus)
                     .await
             });
@@ -463,7 +478,8 @@ pub async fn run(catalog: Arc<Catalog>) -> anyhow::Result<()> {
         };
         tokio::spawn(watcher.run());
     }
-    spawn_devices_supervised(Arc::clone(&house), devices_rx, Arc::clone(&roster), Arc::clone(&catalog));
+    let jobs = Arc::new(jobs::Jobs::new(house.events.clone()));
+    spawn_devices_supervised(Arc::clone(&house), devices_rx, Arc::clone(&roster), Arc::clone(&catalog), Arc::clone(&jobs));
     spawn_moments_supervised(Arc::clone(&house), moments_rx);
     spawn_sensor_supervised(Arc::clone(&house));
     spawn_publisher_supervised(Arc::clone(&house));
@@ -475,6 +491,7 @@ pub async fn run(catalog: Arc<Catalog>) -> anyhow::Result<()> {
     // the workbench's door: the loopback read API (ADR-0002)
     tokio::spawn(api::listen(Arc::new(api::Ctx {
         catalog: Arc::clone(&catalog),
+        jobs: Arc::clone(&jobs),
         events: house.events_door(),
         devices: house.devices_door(),
         moments: house.moments_door(),
