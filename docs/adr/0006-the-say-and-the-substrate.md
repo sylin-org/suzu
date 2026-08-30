@@ -36,12 +36,17 @@ faceplate's own decision.**
   its steady state can take ground without unpainting the message.
   The host holds a generous bound and resumes regardless: a face
   that cannot answer cannot hold the stage.
-- **The say is semantic.** The wire carries signal, urgency and
-  words — never pixels. What `WARN.disk` *looks like* is the
-  faceplate's own decision: a splash, a composed screen, a band and
-  a blink. The nine rings are the vocabulary; level words (`INFO`,
-  `WARN`, `ALERT`, `CRIT`, `OK`) travel as signals too; unknown
-  signals degrade to the face's default presentation.
+- **The say is semantic — and degrades at the instance.** The wire
+  from the house to the instance carries signal, urgency and words —
+  never pixels. The **faceplate's declaration states what its face
+  can speak**: qualified signals or bare verbs, a text channel or
+  none, whether it can announce DONE at all. The *instanced device*
+  degrades accordingly: a 5×5 matrix that speaks bare verbs receives
+  `R,WARN` — the qualifier and the message dropped, less bytes, less
+  noise, and the face never sees a frame it cannot use. What
+  `WARN` *looks like* — splash, composed screen, band and blink —
+  is the faceplate's own decision. Unknown signals degrade to the
+  face's default presentation.
 - **Targeted and broadcast are one verb.** `suzu say` is a sentence
   in a small grammar — port, signal, text, in that order, each
   optional after the first. The house resolves a target against its
