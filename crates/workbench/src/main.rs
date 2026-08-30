@@ -16,7 +16,12 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{Emitter, Manager, WindowEvent};
 
 const MAIN_WINDOW: &str = "main";
-const RESIDENT: &str = "127.0.0.1:7899";
+const PORT_NUM: u16 = 7899;
+
+/// The Resident's door, as one address. One name, one place.
+fn resident() -> String {
+    format!("127.0.0.1:{PORT_NUM}")
+}
 
 /// Where the workbench may send a click. The closed vocabulary: a URL
 /// is only ever opened if it points at the product's own surfaces —
@@ -101,13 +106,14 @@ fn http_call(
     body: &Option<String>,
 ) -> Result<(u16, String), String> {
     use std::io::{Read, Write};
-    let mut stream = std::net::TcpStream::connect(RESIDENT).map_err(|e| e.to_string())?;
+    let addr = resident();
+    let mut stream = std::net::TcpStream::connect(&*addr).map_err(|e| e.to_string())?;
     stream
         .set_read_timeout(Some(std::time::Duration::from_secs(15)))
         .map_err(|e| e.to_string())?;
     let payload = body.as_deref().unwrap_or("");
     let request = format!(
-        "{method} {path} HTTP/1.1\r\nhost: {RESIDENT}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{payload}",
+        "{method} {path} HTTP/1.1\r\nhost: {addr}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{payload}",
         payload.len()
     );
     stream.write_all(request.as_bytes()).map_err(|e| e.to_string())?;
@@ -126,7 +132,7 @@ fn http_call(
 /// The door probe (ADR-0004): can somebody be reached on 7899?
 fn door_is_owned() -> bool {
     use std::net::SocketAddr;
-    let addr: SocketAddr = format!("127.0.0.1:{PORT_NUM}").parse().expect("loopback addr");
+    let addr: SocketAddr = resident().parse().expect("loopback addr");
     std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(300)).is_ok()
 }
 
@@ -143,8 +149,6 @@ fn wait_for_door(timeout: std::time::Duration) -> bool {
     }
     false
 }
-
-const PORT_NUM: u16 = 7899;
 
 /// Bring the Resident up, beside this workbench, detached: it keeps
 /// running if the window closes. The door is probed first (ADR-0004):
@@ -256,13 +260,13 @@ fn spawn_house_events(app: tauri::AppHandle) {
         let ok = (|| -> std::io::Result<()> {
             use std::io::{Read, Write};
             use std::net::SocketAddr;
-            let addr: SocketAddr = format!("127.0.0.1:{PORT_NUM}").parse().expect("loopback addr");
+            let addr: SocketAddr = resident().parse().expect("loopback addr");
             let mut stream = std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(2))?;
             // The house pings every 10 s; 15 s of silence means the
             // connection is a corpse — hang up and try again.
             stream.set_read_timeout(Some(std::time::Duration::from_secs(15))).ok();
             stream.write_all(
-                format!("GET /api/events HTTP/1.1\r\nhost: {RESIDENT}\r\naccept: text/event-stream\r\nconnection: close\r\n\r\n")
+                format!("GET /api/events HTTP/1.1\r\nhost: {}\r\naccept: text/event-stream\r\nconnection: close\r\n\r\n", resident())
                     .as_bytes(),
             )?;
             stream.flush()?;

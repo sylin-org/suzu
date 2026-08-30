@@ -122,6 +122,16 @@
     mark("photos");
   }
 
+  /// Forget the classes whose photo failed to load — called when the
+  /// house comes back, so the cards ask again with the door open.
+  function retryPhotos() {
+    const missing = [...state.photos.entries()]
+      .filter(([, v]) => v === null).map(([k]) => k);
+    if (missing.length === 0) return;
+    for (const k of missing) state.photos.delete(k);
+    mark("photos");
+  }
+
   function putLinks(links) {
     state.links = links;
     mark("links");
@@ -145,6 +155,7 @@
     ingestJournal,
     setStream,
     putPhoto,
+    retryPhotos,
     putLinks,
     journalLines,
   };

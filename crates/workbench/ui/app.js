@@ -12,7 +12,7 @@
   const Store = window.SuzuStore;
   const el = {};
   for (const id of [
-    "lamp", "state-word", "state-facts", "wheel", "wheel-label", "wheel-icon",
+    "state-word", "state-facts", "wheel", "wheel-label", "wheel-icon",
     "status-count", "device-list", "log-count", "log-stream",
     "media-grid", "media-note", "about-facts", "about-links", "card-version", "service",
     "toast", "confirm-dialog", "confirm-title", "confirm-detail",
@@ -24,9 +24,9 @@
   const tauri = window.__TAURI__;
 
   let activeView = "status";
+  let serviceBusy = false; // declared UI state: a start/stop is in flight
   let confirmResolve = null;
   const installing = new Set(); // ports with a saga this window began, before its roster fact lands
-  const photoFetching = new Set();
 
   const escapeHtml = (s) => String(s).replace(/[&<>"']/g,
     (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -108,7 +108,7 @@
       ? `<b>${devices.size}</b> ${plural(devices.size, "face")} on the roster`
       : "the Resident is not running";
     el.service.textContent = connected ? "Stop service" : "Start service";
-    el.service.disabled = false;
+    el.service.disabled = serviceBusy;
     renderWheel();
   }
 
@@ -122,17 +122,16 @@
       : '<rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/>';
   }
 
-  el.wheel.addEventListener("click", async () => {
+  el.wheel.addEventListener("click", () => {
     const verb = Store.state.service.paused ? "resume" : "pause";
-    const d = await postOrToast("/api/control", { verb });
-    if (d.paused === undefined && d.error === undefined) {
-      toast("the house did not answer");
-    }
+    postOrToast("/api/control", { verb });
     // the Paused fact re-renders the wheel — no local truth
   });
 
   el.service.addEventListener("click", async () => {
-    el.service.disabled = true;
+    if (serviceBusy) return;
+    serviceBusy = true;
+    renderChrome();
     const connected = Store.state.stream === "connected";
     try {
       if (connected) {
@@ -145,6 +144,7 @@
     } catch (e) {
       toast(String(e));
     }
+    serviceBusy = false;
     renderChrome();
   });
 
@@ -196,11 +196,15 @@
     const tools = lc === "new" ? streamButton + factory : streamButton + reinstall + factory;
 
     // Class photos come straight from the resident (img display is
-    // not CORS-gated); one URL per class, fetched once, cached.
-    const photoUrl = row.class ? Store.state.photos.get(row.class) : null;
-    if (row.class && !photoUrl) fetchPhoto(row.class);
+    // not CORS-gated): one URL per class, remembered; a class with no
+    // declared image stores null and shows no broken frame.
+    let photoUrl = row.class ? Store.state.photos.get(row.class) : undefined;
+    if (row.class && photoUrl === undefined) {
+      photoUrl = `${API}/api/device-image/${encodeURIComponent(row.class)}`;
+      Store.putPhoto(row.class, photoUrl);
+    }
     const photo = photoUrl
-      ? `<img class="device-photo" alt="" src="${escapeHtml(photoUrl)}">`
+      ? `<img class="device-photo" alt="" data-class="${escapeHtml(row.class)}" src="${escapeHtml(photoUrl)}">`
       : "";
 
     return `
@@ -220,20 +224,21 @@
       </article>`;
   }
 
-  function fetchPhoto(classId) {
-    if (photoFetching.has(classId)) return;
-    photoFetching.add(classId);
-    Store.putPhoto(classId, `${API}/api/device-image/${encodeURIComponent(classId)}`);
-    photoFetching.delete(classId);
-  }
-
   function renderStatus() {
     const devices = sortedDevices();
+    const { stream } = Store.state;
     el.status_count.textContent = plural(devices.length, "device");
     el.device_list.innerHTML = devices.map(deviceCard).join("")
-      || (Store.state.stream === "connecting"
+      || (stream === "connecting"
         ? '<div class="empty">Waiting for the house to speak\u2026</div>'
-        : '<div class="empty">No faces on the bench — plug one in (data cable, not charge-only).</div>');
+        : stream !== "connected"
+          ? '<div class="empty">The Resident is not running \u2014 start the service above.</div>'
+          : '<div class="empty">No faces on the bench — plug one in (data cable, not charge-only).</div>');
+    // A photo that cannot load (no declared image, or the house was
+    // down) is remembered as null — the frame steps aside honestly.
+    el.device_list.querySelectorAll("img.device-photo").forEach((img) => {
+      img.onerror = () => Store.putPhoto(img.dataset.class, null);
+    });
   }
 
   el.device_list.addEventListener("click", async (event) => {
@@ -250,11 +255,11 @@
     } else if (action === "install") {
       const ok = await confirmChange(
         `Install firmware on ${port}?`,
-        "The face files return to ship state (its identity is kept), the face restarts, and it is tested before it goes live again.",
+        "The face files return to ship state (its identity is kept), the face restarts, and it is tested before it goes live again. If the board is not running CircuitPython yet, the saga waits for you to hold BOOTSEL and replug \u2014 every step appears in the Log.",
       );
       if (ok) {
-        installing.add(port);
-        await postOrToast(`/api/maintenance/${port}`, { kind: "install" });
+        const d = await postOrToast(`/api/maintenance/${port}`, { kind: "install" });
+        if (d.started) installing.add(port);
       }
     } else if (action === "factory") {
       const ok = await confirmChange(
@@ -270,21 +275,37 @@
   });
 
   // ── log: the journal, newest first ───────────────────────────────
+  // The house's own loudness, colored by the stylesheet's severities:
+  // degraded lines and failed steps are bad; a passed admission is good.
+  const toneOf = (l) =>
+    l.text.includes("!!") || l.text.includes("\u2717") ? "bad"
+      : l.text.includes("PASSED") ? "good" : "";
+
   function renderLog() {
     const lines = Store.journalLines();
     el.log_count.textContent = plural(lines.length, "line");
-    el.log_stream.innerHTML = lines.map((l) =>
-      `<div class="stream-row"><span class="row-when">${escapeHtml(l.ts.slice(11))}</span>`
-      + `<span class="row-domain">${escapeHtml(l.domain)}</span>`
-      + `<span class="row-text">${escapeHtml(l.text)}</span></div>`).join("")
+    el.log_stream.innerHTML = lines.map((l) => {
+      const tone = toneOf(l);
+      return `<div class="stream-row"${tone ? ` data-tone="${tone}"` : ""}>`
+        + `<span class="row-when">${escapeHtml(l.ts.slice(11))}</span>`
+        + `<span class="row-domain">${escapeHtml(l.domain)}</span>`
+        + `<span class="line">${escapeHtml(l.text)}</span></div>`;
+    }).join("")
       || '<div class="empty">Nothing has happened yet. Say something.</div>';
   }
 
   // ── media: frames read from the store, never commanded ───────────
   function renderMedia() {
-    const devices = sortedDevices();
+    // Only faces the stream actually reaches get a tile: a New or
+    // paused face can never blink, so a pane for it would be a lie.
+    const devices = sortedDevices().filter((row) => row.streaming);
+    const { stream, service } = Store.state;
     el.media_grid.innerHTML = devices.map(mediaPane).join("")
-      || '<div class="empty">No faces to watch.</div>';
+      || (stream !== "connected"
+        ? '<div class="empty">The house is not speaking \u2014 start the service above.</div>'
+        : service.paused
+          ? '<div class="empty">The stream is paused \u2014 resume it to watch the faces.</div>'
+          : '<div class="empty">No faces to watch.</div>');
     const recording = [...Store.state.jobs.values()]
       .filter((j) => j.kind === "record" && j.state === "recording");
     el.media_note.hidden = recording.length === 0;
@@ -297,8 +318,10 @@
 
   function mediaPane(row) {
     const frame = Store.state.frames.get(row.port);
+    const recording = [...Store.state.jobs.values()].some((j) =>
+      j.kind === "record" && j.state === "recording" && j.target === row.port);
     const img = frame
-      ? `<img class="media-frame" alt="live frame from ${escapeHtml(row.port)}" src="${frame.png}">`
+      ? `<img class="media-frame" alt="live frame from ${escapeHtml(row.port)}" src="${escapeHtml(frame.png)}">`
       : '<span class="media-frame" aria-hidden="true"></span>';
     const age = frame
       ? `frame ${new Date(frame.at).toLocaleTimeString()}`
@@ -314,7 +337,7 @@
         ${img}
         <div class="device-actions">
           <button class="ghost-button" data-maction="shot">Screenshot</button>
-          <button class="ghost-button" data-maction="record">Record 4s</button>
+          <button class="ghost-button" data-maction="record"${recording ? " disabled" : ""}>Record 4s</button>
         </div>
       </article>`;
   }
@@ -336,11 +359,12 @@
   // ── about: the published card ────────────────────────────────────
   function renderAbout() {
     const { service, devices } = Store.state;
+    const connected = Store.state.stream === "connected";
     el.card_version.textContent = (service.version ?? "0.1").split(".").slice(0, 2).join(".");
     const facts = [
-      ["Version", service.version ?? "unknown"],
-      ["Faces", `${devices.size} connected`],
-      ["Resident", service.paused ? "paused" : "running"],
+      ["Version", connected ? (service.version ?? "unknown") : "\u2014"],
+      ["Faces", connected ? `${devices.size} connected` : "\u2014"],
+      ["Resident", connected ? (service.paused ? "paused" : "running") : "offline"],
       ["License", "MIT"],
     ];
     el.about_facts.innerHTML = facts
@@ -404,6 +428,11 @@
 
   Store.subscribe((slices) => {
     renderChrome();
+    // The house just answered: re-ask anything that needed it alive.
+    if (slices.includes("stream") && Store.state.stream === "connected") {
+      Store.retryPhotos();
+      if (!Store.state.links) fetchLinks();
+    }
     const routes = SLICE_ROUTES[activeView] ?? [];
     if (slices.some((s) => routes.includes(s))) renderView();
   });
