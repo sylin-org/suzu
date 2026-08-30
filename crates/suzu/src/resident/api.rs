@@ -30,6 +30,7 @@ pub const API_PORT: u16 = 7899;
 /// honest: it dies with the process, like the pause flag.
 pub struct Journal {
     lines: Mutex<VecDeque<JournalLine>>,
+    tx: tokio::sync::broadcast::Sender<JournalLine>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -43,19 +44,28 @@ const JOURNAL_CAP: usize = 600;
 
 impl Journal {
     pub fn new() -> Self {
-        Self { lines: Mutex::new(VecDeque::new()) }
+        let (tx, _) = tokio::sync::broadcast::channel(256);
+        Self { lines: Mutex::new(VecDeque::new()), tx }
+    }
+
+    pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<JournalLine> {
+        self.tx.subscribe()
     }
 
     pub fn record(&self, domain: &str, text: &str) {
-        let mut lines = self.lines.lock().expect("journal lock");
-        lines.push_back(JournalLine {
+        let line = JournalLine {
             ts: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
             domain: domain.to_string(),
             text: text.to_string(),
-        });
-        while lines.len() > JOURNAL_CAP {
-            lines.pop_front();
+        };
+        {
+            let mut lines = self.lines.lock().expect("journal lock");
+            lines.push_back(line.clone());
+            while lines.len() > JOURNAL_CAP {
+                lines.pop_front();
+            }
         }
+        let _ = self.tx.send(line);
     }
 
     pub fn tail(&self, limit: usize) -> Vec<JournalLine> {
@@ -142,6 +152,10 @@ async fn serve_one(mut stream: TcpStream, ctx: Arc<Ctx>) -> Result<()> {
     }
     let body = String::from_utf8_lossy(&body[..body.len().min(content_length.max(0))]).to_string();
 
+    if path == "/api/events" && method == "GET" {
+        return events_stream(ctx, stream).await;
+    }
+
     let started = Instant::now();
     let (status, content_type, payload) = route(&ctx, &method, &path, &body).await;
     if path != "/api/shot" {
@@ -149,6 +163,41 @@ async fn serve_one(mut stream: TcpStream, ctx: Arc<Ctx>) -> Result<()> {
         ctx.journal.record("api", &format!("{method} {path} → {status} ({} ms)", started.elapsed().as_millis()));
     }
     write_response(&mut stream, status, &content_type, payload).await
+}
+
+/// The live wire: a replay of the recent past, then every new fact as
+/// it lands. text/event-stream, one JSON JournalLine per event.
+async fn events_stream(ctx: Arc<Ctx>, mut stream: TcpStream) -> Result<()> {
+    let head = "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n                cache-control: no-cache\r\naccess-control-allow-origin: *\r\n                connection: keep-alive\r\n\r\n";
+    stream.write_all(head.as_bytes()).await?;
+    for line in ctx.journal.tail(30) {
+        let payload = serde_json::to_string(&line).unwrap_or_default();
+        stream.write_all(format!("data: {payload}\n\n").as_bytes()).await?;
+    }
+    stream.flush().await?;
+    let mut rx = ctx.journal.subscribe();
+    loop {
+        match rx.recv().await {
+            Ok(line) => {
+                let payload = serde_json::to_string(&line).unwrap_or_default();
+                stream.write_all(format!("data: {payload}\n\n").as_bytes()).await?;
+                stream.flush().await?;
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+            Err(_) => break,
+        }
+    }
+    Ok(())
+}
+
+/// The keeper may name a device by port or by identity — the roster
+/// knows both. Returns the port the transport can act on.
+fn resolve_target(ctx: &Ctx, target: &str) -> Option<String> {
+    let roster = ctx.roster.read().ok()?;
+    if roster.by_port(target).is_some() {
+        return Some(target.to_string());
+    }
+    roster.individual(target).and_then(|i| i.last_port.clone())
 }
 
 fn find_headers_end(buf: &[u8]) -> Option<usize> {
@@ -171,32 +220,53 @@ async fn route(ctx: &Ctx, method: &str, path: &str, body: &str) -> (u16, &'stati
             device_image(ctx, class)
         }
         ("POST", p) if p.starts_with("/api/capture/") && p.ends_with("/save") => {
-            let port = p.trim_start_matches("/api/capture/").trim_end_matches("/save");
-            capture_save(ctx, port).await
+            let target = p.trim_start_matches("/api/capture/").trim_end_matches("/save");
+            match resolve_target(ctx, target) {
+                Some(port) => capture_save(ctx, &port).await,
+                None => (404, "application/json", br#"{"error":"no such device on the roster"}"#.to_vec()),
+            }
         }
         ("POST", p) if p.starts_with("/api/record/") => {
-            let port = p.trim_start_matches("/api/record/");
-            record_start(ctx, port, body).await
+            let target = p.trim_start_matches("/api/record/");
+            match resolve_target(ctx, target) {
+                Some(port) => record_start(ctx, &port, body).await,
+                None => (404, "application/json", br#"{"error":"no such device on the roster"}"#.to_vec()),
+            }
         }
         ("GET", p) if p.starts_with("/api/record/") => {
-            let port = p.trim_start_matches("/api/record/");
-            record_status(ctx, port).await
+            let target = p.trim_start_matches("/api/record/");
+            match resolve_target(ctx, target) {
+                Some(port) => record_status(ctx, &port).await,
+                None => (404, "application/json", br#"{"error":"no such device on the roster"}"#.to_vec()),
+            }
         }
         ("POST", p) if p.starts_with("/api/admission/") => {
-            let port = p.trim_start_matches("/api/admission/");
-            admission(ctx, port).await
+            let target = p.trim_start_matches("/api/admission/");
+            match resolve_target(ctx, target) {
+                Some(port) => admission(ctx, &port).await,
+                None => (404, "application/json", br#"{"error":"no such device on the roster"}"#.to_vec()),
+            }
         }
         ("POST", p) if p.starts_with("/api/device/") && p.ends_with("/pause") => {
-            let port = p.trim_start_matches("/api/device/").trim_end_matches("/pause");
-            device_stream_toggle(ctx, port, false).await
+            let target = p.trim_start_matches("/api/device/").trim_end_matches("/pause");
+            match resolve_target(ctx, target) {
+                Some(port) => device_stream_toggle(ctx, &port, false).await,
+                None => (404, "application/json", br#"{"error":"no such device on the roster"}"#.to_vec()),
+            }
         }
         ("POST", p) if p.starts_with("/api/device/") && p.ends_with("/resume") => {
-            let port = p.trim_start_matches("/api/device/").trim_end_matches("/resume");
-            device_stream_toggle(ctx, port, true).await
+            let target = p.trim_start_matches("/api/device/").trim_end_matches("/resume");
+            match resolve_target(ctx, target) {
+                Some(port) => device_stream_toggle(ctx, &port, true).await,
+                None => (404, "application/json", br#"{"error":"no such device on the roster"}"#.to_vec()),
+            }
         }
         ("POST", p) if p.starts_with("/api/maintenance/") => {
-            let port = p.trim_start_matches("/api/maintenance/");
-            maintenance(ctx, port, body).await
+            let target = p.trim_start_matches("/api/maintenance/");
+            match resolve_target(ctx, target) {
+                Some(port) => maintenance(ctx, &port, body).await,
+                None => (404, "application/json", br#"{"error":"no such device on the roster"}"#.to_vec()),
+            }
         }
         ("POST", "/api/control") => control(ctx, body).await,
         ("POST", "/api/say") => say(ctx, body).await,
@@ -235,7 +305,13 @@ async fn status(ctx: &Ctx) -> (u16, &'static str, Vec<u8>) {
 }
 
 async fn shot(ctx: &Ctx, path: &str) -> (u16, &'static str, Vec<u8>) {
-    let Some(port) = path.trim_start_matches("/api/shot/").strip_suffix(".png") else {
+    let Some(raw) = path.trim_start_matches("/api/shot/").strip_suffix(".png") else {
+        return (404, "application/json", br#"{"error":"shots are /api/shot/PORT.png"}"#.to_vec());
+    };
+    let Some(port) = resolve_target(ctx, raw) else {
+        return (404, "application/json", br#"{"error":"no such device on the roster"}"#.to_vec());
+    };
+    if false {
         return (404, "application/json", br#"{"error":"shots are /api/shot/PORT.png"}"#.to_vec());
     };
     let (tx, rx) = std::sync::mpsc::sync_channel(1);

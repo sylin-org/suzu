@@ -345,6 +345,18 @@
   });
 
   // ── the pulse ───────────────────────────────────────────────────
+  // The live wire: the house's facts arrive as they happen, and the
+  // roster re-renders within a beat of each one.
+  const es = new EventSource(`${API}/api/events`);
+  let pollQueued = false;
+  es.onmessage = () => {
+    if (!pollQueued) {
+      pollQueued = true;
+      setTimeout(() => { pollQueued = false; pollStatus(); }, 150);
+    }
+  };
+  es.onerror = () => { /* the house is away; the status poll says so */ };
+
   await pollStatus();
   await renderAbout();
   renderWheel();

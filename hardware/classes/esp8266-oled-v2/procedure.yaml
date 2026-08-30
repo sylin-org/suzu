@@ -64,7 +64,7 @@ procedures:
 
 artifacts:
   - file: micropython-esp8266-1mib.bin
-    version: pending-pin                 # the 1 MiB build; pin + vendor before the first factory run
+    version: v1.29.0 (20260824)          # vendored + flash-verified 2026-08-30
     source: https://micropython.org/download/ESP8266_GENERIC/
-    sha256: pending-first-fetch
+    sha256: 94bfdf94a6c48ac5dfe79203577baad61a58c2525cc39a010b934a6666d4c551
     role: the MicroPython runtime

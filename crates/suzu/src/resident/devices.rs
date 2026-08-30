@@ -674,8 +674,21 @@ impl Devices {
     /// acks as soon as the saga *begins*; its progress arrives as
     /// MaintenanceStep events and its end as MaintenanceFinished.
     fn maintenance_begin(&mut self, port: &str, kind: &str) -> anyhow::Result<()> {
-        if kind != "soft" && kind != "factory" {
-            anyhow::bail!("unknown maintenance kind {kind:?} — soft | factory");
+        // The keeper's verb is "install"; the saga depends on what the
+        // face speaks today - an ancestor needs the full install, a
+        // suzu face just its files back.
+        let speaks_suzu = self
+            .devices
+            .get(port)
+            .and_then(|d| d.facts.proto.as_deref())
+            == Some("suzu/1");
+        let kind = if kind == "install" && !speaks_suzu {
+            "adopt"
+        } else {
+            kind
+        };
+        if kind != "install" && kind != "adopt" && kind != "soft" && kind != "factory" {
+            anyhow::bail!("unknown maintenance kind {kind:?} - install | adopt | soft | factory");
         }
         if self.in_maintenance.contains_key(port) {
             anyhow::bail!("{port}: a maintenance saga is already running");
