@@ -48,12 +48,24 @@
   const dataUri = (pngB64) => `data:image/png;base64,${pngB64}`;
   const journalKey = (line) => `${line.ts}|${line.domain}|${line.text}`;
 
+  /// The facts' arrival is itself the proof the wire is up. The
+  /// bridge announces "connected" once, at connect time — an
+  /// announcement the still-loading webview can miss — but a fact in
+  /// the store cannot be wrong about this.
+  function noteArrival() {
+    if (state.stream !== "connected") {
+      state.stream = "connected";
+      mark("stream", "service");
+    }
+  }
+
   // ── the reducers: the only writers ────────────────────────────────
 
   /// The connection-opening fact: replace the slices whole. A
   /// reconnect replaces, never appends — a dropped stream can
   /// duplicate nothing.
   function ingestSnapshot(snap) {
+    noteArrival();
     if (snap.service) state.service = snap.service;
     state.devices = new Map((snap.devices ?? []).map((r) => [r.port, r]));
     state.roster = new Map((snap.roster ?? []).map((i) => [i.device_id, i]));
@@ -67,6 +79,7 @@
 
   /// One delta fact, routed by its type tag.
   function ingestFact(fact) {
+    noteArrival();
     switch (fact.type) {
       case "devices": {
         state.devices = new Map((fact.rows ?? []).map((r) => [r.port, r]));
@@ -103,6 +116,7 @@
   }
 
   function ingestJournal(line) {
+    noteArrival();
     state.journal.set(journalKey(line), line);
     while (state.journal.size > JOURNAL_CAP) {
       state.journal.delete(state.journal.keys().next().value);
