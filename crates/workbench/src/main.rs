@@ -89,30 +89,91 @@ async fn api(
         return Err("refused: only /api/ paths on the Resident".into());
     }
     let payload = body.unwrap_or_default();
+    tauri::async_runtime::spawn_blocking(move || http_call(&method, &path, &Some(payload)))
+        .await
+        .map_err(|e| format!("worker: {e}"))?
+        .map(|(status, body)| serde_json::json!({ "status": status, "body": body }))
+}
+
+/// The raw loopback round trip every command bottoms out in.
+fn http_call(
+    method: &str,
+    path: &str,
+    body: &Option<String>,
+) -> Result<(u16, String), String> {
+    use std::io::{Read, Write};
+    let mut stream = std::net::TcpStream::connect(RESIDENT).map_err(|e| e.to_string())?;
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(15)))
+        .map_err(|e| e.to_string())?;
+    let payload = body.as_deref().unwrap_or("");
+    let request = format!(
+        "{method} {path} HTTP/1.1\r\nhost: {RESIDENT}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{payload}",
+        payload.len()
+    );
+    stream.write_all(request.as_bytes()).map_err(|e| e.to_string())?;
+    let mut buf = Vec::new();
+    stream.read_to_end(&mut buf).map_err(|e| e.to_string())?;
+    let text = String::from_utf8_lossy(&buf).to_string();
+    let status: u16 = text
+        .split_whitespace()
+        .nth(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    let body = text.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
+    Ok((status, body))
+}
+
+/// Bring the Resident up, beside this workbench, detached: it keeps
+/// running if the window closes. The repo root is derived from the
+/// binary's own location (target/debug -> the project root).
+#[tauri::command]
+async fn start_resident() -> Result<String, String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let dir = exe.parent().ok_or("no exe directory")?.to_path_buf();
+    let suzu = dir.join("suzu.exe");
+    if !suzu.exists() {
+        return Err(format!("{} not found - install the CLI beside the workbench", suzu.display()));
+    }
+    let repo = dir
+        .ancestors()
+        .nth(2)
+        .map(|p| p.to_path_buf())
+        .filter(|p| p.join("hardware/classes").exists())
+        .ok_or("the project root was not found above the workbench binary")?;
+
     tauri::async_runtime::spawn_blocking(move || {
-        use std::io::{Read, Write};
-        let mut stream = std::net::TcpStream::connect(RESIDENT).map_err(|e| e.to_string())?;
-        stream
-            .set_read_timeout(Some(std::time::Duration::from_secs(15)))
-            .map_err(|e| e.to_string())?;
-        let request = format!(
-            "{method} {path} HTTP/1.1\r\nhost: {RESIDENT}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{payload}",
-            payload.len()
-        );
-        stream.write_all(request.as_bytes()).map_err(|e| e.to_string())?;
-        let mut buf = Vec::new();
-        stream.read_to_end(&mut buf).map_err(|e| e.to_string())?;
-        let text = String::from_utf8_lossy(&buf).to_string();
-        let status: u16 = text
-            .split_whitespace()
-            .nth(1)
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0);
-        let body = text.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
-        Ok(serde_json::json!({ "status": status, "body": body }))
+        use std::process::{Command, Stdio};
+        let log = std::fs::OpenOptions::new().create(true).append(true)
+            .open(repo.join("serve.log")).map_err(|e| e.to_string())?;
+        let log_err = std::fs::OpenOptions::new().create(true).append(true)
+            .open(repo.join("serve.err.log")).map_err(|e| e.to_string())?;
+        let mut cmd = Command::new(&suzu);
+        cmd.arg("serve").current_dir(&repo)
+            .stdout(Stdio::from(log))
+            .stderr(Stdio::from(log_err));
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+        let child = cmd.spawn().map_err(|e| e.to_string())?;
+        Ok(format!("pid {}", child.id()))
+    }).await.map_err(|e| format!("worker: {e}"))?
+}
+
+/// Ask the Resident to rest: a graceful shutdown, ports released, the
+/// faces fall to their gardens.
+#[tauri::command]
+async fn stop_resident() -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        http_call("POST", "/api/shutdown", &None)
+    }).await.map_err(|e| format!("worker: {e}"))?
+    .and_then(|(status, body)| {
+        if status == 200 { Ok(serde_json::json!({ "stopping": true })) }
+        else { Err(body) }
     })
-    .await
-    .map_err(|e| format!("worker: {e}"))?
 }
 
 /// The live wire: hold one SSE connection to the Resident and republish
@@ -160,7 +221,7 @@ fn spawn_house_events(app: tauri::AppHandle) {
 fn main() {
     let start_minimized = std::env::args().any(|a| a == "--minimized");
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![ready, open_destination, reveal_path, api])
+        .invoke_handler(tauri::generate_handler![ready, open_destination, reveal_path, start_resident, stop_resident, api])
         .setup(move |app| {
             build_tray(app)?;
             spawn_house_events(app.handle().clone());

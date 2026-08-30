@@ -167,6 +167,7 @@ async fn serve_one(mut stream: TcpStream, ctx: Arc<Ctx>) -> Result<()> {
 
     let started = Instant::now();
     let (status, content_type, payload) = route(&ctx, &method, &path, &body).await;
+    let shutting_down = path == "/api/shutdown" && method == "POST";
     let journaled = method == "POST" && path != "/api/shot";
     if path != "/api/shot" {
         // One honest access line per request — shots poll too fast to matter.
@@ -298,6 +299,7 @@ async fn route(ctx: &Ctx, method: &str, path: &str, body: &str) -> (u16, &'stati
                 None => (404, "application/json", br#"{"error":"no such device on the roster"}"#.to_vec()),
             }
         }
+        ("POST", "/api/shutdown") => (200, "application/json", br#"{"stopping":true}"#.to_vec()),
         ("POST", "/api/control") => control(ctx, body).await,
         ("POST", "/api/say") => say(ctx, body).await,
         _ => (404, "application/json", br#"{"error":"no such door"}"#.to_vec()),
@@ -512,5 +514,12 @@ async fn write_response(stream: &mut TcpStream, status: u16, content_type: &str,
     stream.write_all(head.as_bytes()).await?;
     stream.write_all(&payload).await?;
     stream.flush().await?;
+    // A shutdown answer is the resident's last word: the ports release
+    // with the process, the faces fall to their gardens.
+    if shutting_down {
+        use std::io::Write as _;
+        let _ = std::io::stdout().flush();
+        std::process::exit(0);
+    }
     Ok(())
 }

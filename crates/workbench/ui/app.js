@@ -9,7 +9,7 @@
   for (const id of [
     "lamp", "state-word", "state-facts", "wheel", "wheel-label", "wheel-icon",
     "status-count", "device-list", "log-count", "log-stream",
-    "media-grid", "media-note", "about-facts", "about-links", "card-version",
+    "media-grid", "media-note", "about-facts", "about-links", "card-version", "service",
     "toast", "confirm-dialog", "confirm-title", "confirm-detail",
   ]) {
     el[id.replaceAll("-", "_")] = document.getElementById(id);
@@ -158,7 +158,7 @@
   async function pollStatus() {
     try {
       const d = await getJSON("/api/status");
-      paused = d.paused === true;
+      online = true;
       const devices = d.devices ?? [];
       const roster = new Map((d.roster ?? []).map((i) => [i.device_id, i]));
       el.state_word.textContent = paused ? "Paused" : "Running";
@@ -170,11 +170,31 @@
         || '<div class="empty">No faces on the bench — plug one in (data cable, not charge-only).</div>';
       renderWheel();
     } catch (e) {
-      el.state_word.textContent = "Offline";
-      el.state_facts.textContent = "the Resident is not answering";
+      online = false;
+      el.state_word.textContent = "Stopped";
+      el.state_facts.textContent = "the Resident is not running";
       el.wheel.disabled = true;
     }
+    renderService();
   }
+
+  function renderService() {
+    el.service.disabled = false;
+    el.service.textContent = online ? "Stop service" : "Start service";
+  }
+
+  el.service?.addEventListener("click", async () => {
+    el.service.disabled = true;
+    try {
+      if (online) {
+        await call("POST", "/api/shutdown", {});
+      } else {
+        await window.__TAURI__.core.invoke("start_resident");
+      }
+    } catch (e) {
+      toast(`the house did not answer: ${e.message ?? e}`);
+    }
+  });
 
   el.device_list?.addEventListener("click", async (event) => {
     const button = event.target.closest("button[data-action]");
