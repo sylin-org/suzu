@@ -148,7 +148,12 @@ pub enum DevicesCmd {
     MaintenanceStart { port: String, kind: String, reply: mpsc::Sender<anyhow::Result<()>> },
     /// The saga's own end — it loops back through the door so the
     /// devices domain (which owns the sessions) respawns the face.
-    MaintenanceFinished { port: String, device_id: String, ok: bool },
+    MaintenanceFinished {
+        port: String,
+        device_id: String,
+        ok: bool,
+        fresh: Option<DeviceFacts>,
+    },
 }
 
 pub struct Devices {
@@ -251,8 +256,8 @@ impl Devices {
                             let res = self.maintenance_begin(&port, &kind);
                             let _ = reply.send(res).await;
                         }
-                        DevicesCmd::MaintenanceFinished { port, device_id, ok } => {
-                            self.maintenance_finish(&port, &device_id, ok).await;
+                        DevicesCmd::MaintenanceFinished { port, device_id, ok, fresh } => {
+                            self.maintenance_finish(&port, &device_id, ok, fresh).await;
                         }
                     }
                 }
@@ -712,6 +717,8 @@ impl Devices {
             anyhow::bail!("{port}: no device_id — adopt the individual first");
         };
         let class = device.facts.class.clone();
+        let vid = device.facts.vid;
+        let pid = device.facts.pid;
 
         // Detach the stream for the whole saga, then the port itself.
         let _ = self.events.send(HouseEvent::StreamDetached {
@@ -735,6 +742,7 @@ impl Devices {
         // and human gates); its ending comes back through the door.
         let events = self.events.clone();
         let catalog = Arc::clone(&self.catalog);
+        let catalog_fresh = Arc::clone(&self.catalog);
         let device_id2 = device_id.clone();
         let port2 = port.to_string();
         let port3 = port2.clone();
@@ -752,8 +760,14 @@ impl Devices {
             if let Err(e) = &outcome {
                 println!("[maintenance] {port3}: failed — {e:#}");
             }
+            let port4 = port3.clone();
+            let fresh = tokio::task::spawn_blocking(move || {
+                super::watcher::identify_facts(&catalog_fresh, &port4, vid, pid).ok()
+            })
+            .await
+            .unwrap_or(None);
             let _ = door
-                .send(DevicesCmd::MaintenanceFinished { port: port3, device_id, ok })
+                .send(DevicesCmd::MaintenanceFinished { port: port3, device_id, ok, fresh })
                 .await;
         });
         Ok(())
@@ -761,7 +775,13 @@ impl Devices {
 
     /// The saga's end: the verdict lands on the roster's record and
     /// the session respawns — its admission exam is the gate back.
-    async fn maintenance_finish(&mut self, port: &str, device_id: &str, ok: bool) {
+    async fn maintenance_finish(
+        &mut self,
+        port: &str,
+        device_id: &str,
+        ok: bool,
+        fresh: Option<DeviceFacts>,
+    ) {
         let _ = self.events.send(HouseEvent::MaintenanceCompleted {
             device_id: device_id.to_string(),
             kind: self

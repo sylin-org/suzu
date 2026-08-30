@@ -175,7 +175,13 @@ async fn serve_one(mut stream: TcpStream, ctx: Arc<Ctx>) -> Result<()> {
             ctx.journal.record("api", &format!("{method} {path} → {status} ({} ms)", started.elapsed().as_millis()));
         }
     }
-    write_response(&mut stream, status, &content_type, payload).await
+    write_response(&mut stream, status, &content_type, payload).await?;
+    if shutting_down {
+        println!("[api] shutdown requested — the resident rests");
+        let _ = std::io::Write::flush(&mut std::io::stdout());
+        std::process::exit(0);
+    }
+    Ok(())
 }
 
 /// The live wire: a replay of the recent past, then every new fact as
@@ -514,12 +520,5 @@ async fn write_response(stream: &mut TcpStream, status: u16, content_type: &str,
     stream.write_all(head.as_bytes()).await?;
     stream.write_all(&payload).await?;
     stream.flush().await?;
-    // A shutdown answer is the resident's last word: the ports release
-    // with the process, the faces fall to their gardens.
-    if shutting_down {
-        use std::io::Write as _;
-        let _ = std::io::stdout().flush();
-        std::process::exit(0);
-    }
     Ok(())
 }
