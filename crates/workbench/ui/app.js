@@ -26,7 +26,6 @@
   let activeView = "status";
   let serviceBusy = false; // declared UI state: a start/stop is in flight
   let confirmResolve = null;
-  const installing = new Set(); // ports with a saga this window began, before its roster fact lands
 
   const escapeHtml = (s) => String(s).replace(/[&<>"']/g,
     (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -157,15 +156,17 @@
     const rosterEntry = Store.state.roster.get(row.device_id ?? "");
     // The keeper's formula: a device is LIVE, NEW, or PAUSED — and the
     // buttons are exactly the ones its state offers, nothing else.
+    // INSTALLING is the roster's own word (a running saga); the window
+    // keeps no shadow of it — the house acks the command and
+    // announces the saga before a click could fade.
     const saga = rosterEntry?.maintenance;
     const sagaRunning = saga?.state === "running";
-    const isInstalling = sagaRunning || (installing.has(row.port) && !saga);
-    const lc = isInstalling ? "installing" : (row.lifecycle ?? "new");
-    const pill = isInstalling
+    const lc = sagaRunning ? "installing" : (row.lifecycle ?? "new");
+    const pill = sagaRunning
       ? "INSTALLING"
       : { live: "LIVE", new: "NEW", paused: "PAUSED" }[lc] ?? escapeHtml(lc.toUpperCase());
-    const pillTone = isInstalling ? "warn" : ({ live: "good", new: "warn", paused: "info" }[lc] ?? "info");
-    const lock = isInstalling ? "disabled" : "";
+    const pillTone = sagaRunning ? "warn" : ({ live: "good", new: "warn", paused: "info" }[lc] ?? "info");
+    const lock = sagaRunning ? "disabled" : "";
     const currentStep = [...(saga?.steps ?? [])].pop();
     const sagaLine = sagaRunning
       ? `<div class="device-saga">installing \u2014 step ${currentStep ? `${currentStep.index} of ${currentStep.total}: ${escapeHtml(currentStep.name)}` : "starting\u2026"}</div>`
@@ -259,7 +260,7 @@
       );
       if (ok) {
         const d = await postOrToast(`/api/maintenance/${port}`, { kind: "install" });
-        if (d.started) installing.add(port);
+        if (d.started) toast(`${port}: the saga begins \u2014 follow the steps here`);
       }
     } else if (action === "factory") {
       const ok = await confirmChange(
