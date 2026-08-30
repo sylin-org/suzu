@@ -234,7 +234,8 @@
       </article>`).join("")
       || '<div class="empty">No faces to watch.</div>';
 
-    const tick = async () => {
+    const mediaUrls = new Map(); // port → the blob URL in the <img>; the old one is revoked
+  const tick = async () => {
       for (const port of ports) {
         const img = document.getElementById(`frame-${port}`);
         if (!img) continue;
@@ -242,9 +243,11 @@
           const r = await fetch(`${API}/api/shot/${port}.png`, { cache: "no-store" });
           const age = document.getElementById(`age-${port}`);
           if (r.ok) {
-            const blob = await r.blob();
-            const url = URL.createObjectURL(blob);
+            const url = URL.createObjectURL(await r.blob());
             img.src = url;
+            const previous = mediaUrls.get(port);
+            if (previous) URL.revokeObjectURL(previous);
+            mediaUrls.set(port, url);
             if (age) age.textContent = `frame ${new Date().toLocaleTimeString()}`;
           } else if (age) {
             age.textContent = "no shot — unreachable";
