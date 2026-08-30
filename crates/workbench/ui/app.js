@@ -305,13 +305,16 @@
     const reinstall = `<button class="ghost-button" data-action="install" ${lock}>Reinstall Firmware</button>`;
     // A live face may change its dress in place: files and a nudge,
     // no bootloader — and the exam re-proves it before LIVE.
+    const identify = lc === "live"
+      ? `<button class="ghost-button" data-action="identify">Identify</button>`
+      : "";
     const swap = lc === "live"
       ? `<button class="ghost-button" data-action="faceplate">Faceplate…</button>`
       : "";
     const factory = `<button class="danger-button" data-action="factory" ${lock}>Factory Reset</button>`;
     const tools = lc === "new"
       ? streamButton + factory
-      : streamButton + swap + reinstall + factory;
+      : streamButton + identify + swap + reinstall + factory;
 
     // Class photos come straight from the resident (img display is
     // not CORS-gated): one URL per class, remembered; a class with no
@@ -387,6 +390,11 @@
       if (c.faceplate) body.faceplate = c.faceplate;
       const d = await postOrToast(`/api/maintenance/${port}`, body);
       if (d.message) toast(d.message);
+    } else if (action === "identify") {
+      button.disabled = true;
+      const d = await postOrToast(`/api/device/${port}/identify`, {});
+      if (d.message) toast(d.message);
+      // the next devices fact re-renders the card and the button
     } else if (action === "faceplate") {
       const row = Store.state.devices.get(port);
       await fetchFaceplates(row?.class);

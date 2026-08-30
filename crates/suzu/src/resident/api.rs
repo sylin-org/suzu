@@ -478,6 +478,13 @@ async fn route(ctx: &Ctx, method: &str, path: &str, body: &str) -> (u16, &'stati
                 None => no_such("no such device on the roster"),
             }
         }
+        ("POST", p) if p.starts_with("/api/device/") && p.ends_with("/identify") => {
+            let target = p.trim_start_matches("/api/device/").trim_end_matches("/identify");
+            match resolve_target(ctx, target) {
+                Some(port) => identify(ctx, &port).await,
+                None => no_such("no such device on the roster"),
+            }
+        }
         ("POST", p) if p.starts_with("/api/device/") && p.ends_with("/pause") => {
             let target = p.trim_start_matches("/api/device/").trim_end_matches("/pause");
             match resolve_target(ctx, target) {
@@ -609,6 +616,25 @@ async fn admission(ctx: &Ctx, port: &str) -> (u16, &'static str, Vec<u8>) {
                 "confirmed": true,
                 "admission": "retry",
                 "message": format!("the exam re-runs on {port} — the verdict arrives on the log"),
+            }))
+            .unwrap_or_default(),
+        ),
+        Ok(Err(e)) => envelope(false, format!("{e:#}")),
+        Err(e) => envelope(false, e),
+    }
+}
+
+/// The identify door: one face rings its own name (the port), so
+/// twins on a desk can be told apart and the ring path proves itself.
+async fn identify(ctx: &Ctx, port: &str) -> (u16, &'static str, Vec<u8>) {
+    match door(&ctx.devices, |reply| DevicesCmd::Identify { port: port.to_string(), reply }).await {
+        Ok(Ok(())) => (
+            200,
+            "application/json",
+            serde_json::to_vec(&serde_json::json!({
+                "confirmed": true,
+                "identify": port,
+                "message": format!("{port} rings its name — the band shows it for a few seconds"),
             }))
             .unwrap_or_default(),
         ),

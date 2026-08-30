@@ -166,6 +166,9 @@ pub enum DevicesCmd {
     /// The keeper lifted one device off the stream (per-device pause):
     /// the gate closes, the session stays, the face falls to its
     /// garden. Resume re-subscribes without a re-test.
+    /// The keeper points at one face among twins: "this is me".
+    /// A targeted ring — one session, no budget, no broadcast.
+    Identify { port: String, reply: mpsc::Sender<anyhow::Result<()>> },
     PauseDevice { port: String, reply: mpsc::Sender<anyhow::Result<()>> },
     ResumeDevice { port: String, reply: mpsc::Sender<anyhow::Result<()>> },
     /// Hand the individual to a maintenance saga: the session closes,
@@ -289,6 +292,10 @@ impl Devices {
                         }
                         DevicesCmd::AdmissionRetry { port, reply } => {
                             let res = self.admission_retry(&port);
+                            let _ = reply.send(res).await;
+                        }
+                        DevicesCmd::Identify { port, reply } => {
+                            let res = self.identify(&port);
                             let _ = reply.send(res).await;
                         }
                         DevicesCmd::PauseDevice { port, reply } => {
@@ -703,6 +710,28 @@ impl Devices {
 
     fn admission_retry(&self, port: &str) -> anyhow::Result<()> {
         self.send_to_session(port, SessionMsg::Admission)
+    }
+
+    /// The keeper points at one face: it rings its own name on the
+    /// band for a few seconds. A targeted ring rides straight to the
+    /// owning session — the moments budget governs visitors, not the
+    /// keeper pointing at hardware.
+    fn identify(&mut self, port: &str) -> anyhow::Result<()> {
+        let device = self
+            .devices
+            .get(port)
+            .ok_or_else(|| anyhow::anyhow!("{port}: no minded device"))?;
+        if !device.streaming.load(Ordering::Relaxed) {
+            anyhow::bail!("{port}: is not on the stream — only a live face can hear its name");
+        }
+        self.send_to_session(
+            port,
+            SessionMsg::Out(Outbound::Ring {
+                signal: "info".to_string(),
+                words: vec![port.to_string()],
+                urgency: 3,
+            }),
+        )
     }
 
     /// Per-device pause: withdraw the subscription but keep the
