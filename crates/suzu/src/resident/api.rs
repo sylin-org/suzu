@@ -408,6 +408,55 @@ async fn route(ctx: &Ctx, method: &str, path: &str, body: &str) -> (u16, &'stati
             let class = p.trim_start_matches("/api/device-image/");
             device_image(ctx, class)
         }
+        ("GET", p) if p.starts_with("/api/faceplate-preview/") => {
+            // <class>/<id>.gif — whitelisted against the declared
+            // bundles; a missing capture is a 404 the chooser
+            // answers with pictogram and words (ADR-0005).
+            let rest = p.trim_start_matches("/api/faceplate-preview/");
+            let rest = rest.trim_end_matches(".gif").trim_end_matches(".png");
+            let (class, id) = match rest.split_once('/') {
+                Some(pair) => pair,
+                None => return no_such("no such faceplate"),
+            };
+            match ctx.catalog.faceplate_preview(class, id) {
+                Some(path) => match std::fs::read(&path) {
+                    Ok(bytes) => {
+                        // The content type tells the truth about the
+                        // bytes: the fallback serves a png under the
+                        // gif ask, and says png.
+                        let kind = if path.extension().and_then(|e| e.to_str()) == Some("png") {
+                            "image/png"
+                        } else {
+                            "image/gif"
+                        };
+                        (200, kind, bytes)
+                    }
+                    Err(_) => no_such("the preview capture is missing"),
+                },
+                None => no_such("no preview captured yet — the words and the pictogram speak for it"),
+            }
+        }
+        ("GET", p) if p.starts_with("/api/faceplates/") => {
+            let class = p.trim_start_matches("/api/faceplates/");
+            let list: Vec<serde_json::Value> = ctx
+                .catalog
+                .faceplates_for_class(class)
+                .iter()
+                .map(|f| {
+                    serde_json::json!({
+                        "id": f.id,
+                        "name": f.display_name,
+                        "blurb": f.blurb,
+                        "mount": f.mount,
+                        "based_on": f.based_on,
+                        "preview": f.has_preview.then(|| {
+                            format!("/api/faceplate-preview/{class}/{}.gif", f.id)
+                        }),
+                    })
+                })
+                .collect();
+            (200, "application/json", serde_json::to_vec(&list).unwrap_or_default())
+        }
         ("POST", p) if p.starts_with("/api/capture/") && p.ends_with("/save") => {
             let target = p.trim_start_matches("/api/capture/").trim_end_matches("/save");
             match resolve_target(ctx, target) {
@@ -595,9 +644,14 @@ async fn device_stream_toggle(ctx: &Ctx, port: &str, resume: bool) -> (u16, &'st
 async fn maintenance(ctx: &Ctx, port: &str, body: &str) -> (u16, &'static str, Vec<u8>) {
     let parsed: serde_json::Value = serde_json::from_str(body).unwrap_or(serde_json::json!({}));
     let kind = parsed.get("kind").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let faceplate = parsed
+        .get("faceplate")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
     match door(&ctx.devices, |reply| DevicesCmd::MaintenanceStart {
         port: port.to_string(),
         kind: kind.clone(),
+        faceplate: faceplate.clone(),
         reply,
     })
     .await {
@@ -607,6 +661,7 @@ async fn maintenance(ctx: &Ctx, port: &str, body: &str) -> (u16, &'static str, V
             serde_json::to_vec(&serde_json::json!({
                 "confirmed": true,
                 "maintenance": kind,
+                "faceplate": faceplate,
                 "message": format!("the {kind} saga owns {port} — its steps arrive on the log"),
             }))
             .unwrap_or_default(),

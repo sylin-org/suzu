@@ -35,6 +35,77 @@ pub struct DisplayZone {
 /// One display's zones: (y_from, y_to, phosphor) rows of the panel.
 pub type DisplayZones = Vec<(usize, usize, [u8; 3])>;
 
+/// A declared faceplate (ADR-0005): the wire id, the human side, the
+/// hang. `based_on` marks a derived bundle (regenerated, never
+/// hand-edited); `has_preview` says whether a captured preview ships.
+#[derive(Debug, Deserialize)]
+struct FaceplateDecl {
+    name: String,
+    class: String,
+    #[serde(default)]
+    display_name: Option<String>,
+    #[serde(default)]
+    blurb: Option<String>,
+    #[serde(default)]
+    mount: Option<String>,
+    #[serde(default)]
+    based_on: Option<String>,
+}
+
+/// Scan a faceplates root (`<repo>/faceplates/<class-dir>/<id>/`).
+/// A bundle without a parseable declaration is skipped with a word —
+/// the catalog never guesses.
+fn scan_faceplates(root: PathBuf) -> Vec<FaceplateInfo> {
+    let mut out = Vec::new();
+    let Ok(class_dirs) = std::fs::read_dir(&root) else {
+        return out;
+    };
+    for class_dir in class_dirs.flatten().map(|e| e.path()).filter(|p| p.is_dir()) {
+        let Ok(bundles) = std::fs::read_dir(&class_dir) else {
+            continue;
+        };
+        for bundle in bundles.flatten().map(|e| e.path()).filter(|p| p.is_dir()) {
+            let Ok(text) = std::fs::read_to_string(bundle.join("faceplate.yaml")) else {
+                continue;
+            };
+            let Ok(decl) = serde_yaml::from_str::<FaceplateDecl>(&text) else {
+                eprintln!("catalog: faceplate declaration unreadable in {}", bundle.display());
+                continue;
+            };
+            let has_preview = bundle.join("preview.gif").exists()
+                || bundle.join("preview.png").exists();
+            out.push(FaceplateInfo {
+                display_name: decl.display_name.unwrap_or_else(|| decl.name.clone()),
+                id: decl.name,
+                class: decl.class,
+                blurb: decl.blurb,
+                mount: decl.mount,
+                based_on: decl.based_on,
+                has_preview,
+                dir: bundle,
+            });
+        }
+    }
+    out.sort_by_key(|f| (f.based_on.is_some(), f.id.clone()));
+    out
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct FaceplateInfo {
+    pub id: String,
+    pub class: String,
+    pub display_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blurb: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mount: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub based_on: Option<String>,
+    pub has_preview: bool,
+    #[serde(skip)]
+    pub dir: PathBuf,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct DisplaySpec {
     #[serde(default)]
@@ -104,6 +175,7 @@ pub struct Catalog {
     /// Where the signatures came from (for the boot line).
     pub source: String,
     classes: Vec<ClassSignature>,
+    faceplates: Vec<FaceplateInfo>,
     /// vid -> [(pid-or-wildcard, class index)]
     index: HashMap<u16, Vec<(Option<u16>, usize)>>,
     /// class id -> its manifest's servicing bits (display zones …)
@@ -166,6 +238,18 @@ impl Catalog {
             let mut classes = Vec::new();
             let mut index: HashMap<u16, Vec<(Option<u16>, usize)>> = HashMap::new();
             let mut manifests: HashMap<String, ClassManifest> = HashMap::new();
+            // The faceplates root sits beside `hardware/` — the repo
+            // root; try the parent and the grandparent so both repo
+            // layouts and SUZU_HARDWARE_DIR resolve.
+            let mut faceplates = Vec::new();
+            for base in [root.parent(), root.parent().and_then(|p| p.parent())] {
+                if let Some(dir) = base {
+                    faceplates = scan_faceplates(dir.join("faceplates"));
+                    if !faceplates.is_empty() {
+                        break;
+                    }
+                }
+            }
             for dir in class_dirs {
                 if let Ok(text) = std::fs::read_to_string(dir.join("manifest.yaml"))
                     && let Ok(mut m) = serde_yaml::from_str::<ClassManifest>(&text) {
@@ -203,6 +287,7 @@ impl Catalog {
                 classes,
                 index,
                 manifests,
+                faceplates,
             };
         }
 
@@ -210,6 +295,7 @@ impl Catalog {
             source: "no manifests found — using built-in seed hints".into(),
             classes: Vec::new(),
             index: HashMap::new(),
+            faceplates: Vec::new(),
             manifests: HashMap::new(),
         }
     }
@@ -226,6 +312,39 @@ impl Catalog {
         // already knows where home is.
         let path = dir.join(image);
         path.exists().then_some(path)
+    }
+
+    /// The class's declared faceplates (ADR-0005): parents before
+    /// derived bundles, so "first" is a sensible default.
+    pub fn faceplates_for_class(&self, class_id: &str) -> Vec<&FaceplateInfo> {
+        let mut out: Vec<&FaceplateInfo> = self
+            .faceplates
+            .iter()
+            .filter(|f| f.class == class_id)
+            .collect();
+        out.sort_by_key(|f| (f.based_on.is_some(), f.id.clone()));
+        out
+    }
+
+    /// One declared faceplate of a class, by id.
+    pub fn faceplate(&self, class_id: &str, id: &str) -> Option<&FaceplateInfo> {
+        self.faceplates
+            .iter()
+            .find(|f| f.class == class_id && f.id == id)
+    }
+
+    /// A faceplate's preview capture, gif first, png as the older
+    /// fallback — `None` means the chooser degrades to pictogram and
+    /// words (ADR-0005: a missing preview is graceful).
+    pub fn faceplate_preview(&self, class_id: &str, id: &str) -> Option<PathBuf> {
+        let dir = &self.faceplate(class_id, id)?.dir;
+        for name in ["preview.gif", "preview.png"] {
+            let path = dir.join(name);
+            if path.exists() {
+                return Some(path);
+            }
+        }
+        None
     }
 
     /// VID/PID lookup — used when the port is silent (fresh firmware).

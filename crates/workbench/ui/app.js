@@ -16,6 +16,7 @@
     "status-count", "device-list", "log-count", "log-stream",
     "media-grid", "media-note", "about-facts", "about-links", "card-version", "service",
     "toast", "confirm-dialog", "confirm-title", "confirm-detail",
+    "fp-dialog", "fp-title", "fp-detail", "fp-cards",
   ]) {
     el[id.replaceAll("-", "_")] = document.getElementById(id);
   }
@@ -77,6 +78,87 @@
       confirmResolve = resolve;
     });
   }
+
+  // ── the faceplate chooser (ADR-0005) ─────────────────────────────
+  // One ceremony for install/reinstall/swap: when the class declares
+  // faceplates, the dialog shows them — captured previews where they
+  // exist, pictogram and words where they don't. When none are
+  // declared, it is exactly the plain confirm it always was.
+  const MOUNT_CAPTIONS = {
+    "usb-down": "hangs upwards — connector at the bottom",
+    "usb-up": "hangs downwards — connector at the top",
+    "usb-left": "left-mounted — connector at the left",
+    "usb-right": "right-mounted — connector at the right",
+  };
+
+  // Four truths, drawn once: the workbench renders the connector's
+  // edge from the declaration — no per-faceplate mounting art.
+  function mountPictogram(mount) {
+    const stub = {
+      "usb-down": '<rect x="26" y="27" width="12" height="3" rx="1"/>',
+      "usb-up": '<rect x="26" y="0" width="12" height="3" rx="1"/>',
+      "usb-left": '<rect x="0" y="13" width="3" height="12" rx="1"/>',
+      "usb-right": '<rect x="61" y="13" width="3" height="12" rx="1"/>',
+    }[mount] || "";
+    return '<svg width="52" height="25" viewBox="0 0 64 30" fill="currentColor" aria-hidden="true">'
+      + '<rect x="4" y="3" width="56" height="24" rx="4" fill="none" stroke="currentColor" stroke-width="1.5"/>'
+      + '<rect x="16" y="8" width="32" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="1"/>'
+      + stub + "</svg>";
+  }
+
+  function faceplateCard(fp, selected) {
+    const img = fp.preview
+      ? `<img class="fp-preview" alt="" src="${API}${escapeHtml(fp.preview)}">`
+      : "";
+    return `<button type="button" class="fp-card${selected ? " selected" : ""}" data-fpid="${escapeHtml(fp.id)}">`
+      + `${img}<span class="fp-name">${escapeHtml(fp.name)}</span>`
+      + `<div class="fp-blurb">${escapeHtml(fp.blurb ?? "")}</div>`
+      + `<div class="fp-mount">${mountPictogram(fp.mount)}<span>${escapeHtml(MOUNT_CAPTIONS[fp.mount] ?? "")}</span></div>`
+      + "</button>";
+  }
+
+  async function fetchFaceplates(classId) {
+    if (!classId || Store.state.faceplates.has(classId)) return;
+    Store.state.faceplates.set(classId, []); // in-flight marker
+    try {
+      Store.putFaceplates(classId, await getJSON(`/api/faceplates/${encodeURIComponent(classId)}`));
+    } catch {
+      Store.putFaceplates(classId, []); // the words still work; retried on reconnect
+    }
+  }
+
+  let fpResolve = null;
+  let fpChoice = null;
+
+  function ceremony(classId, title, detail) {
+    const list = Store.state.faceplates.get(classId) ?? [];
+    if (list.length === 0) {
+      return confirmChange(title, detail).then((ok) => ({ ok, faceplate: null }));
+    }
+    el.fp_title.textContent = title;
+    el.fp_detail.textContent = detail;
+    el.fp_cards.innerHTML = list.map((fp, i) => faceplateCard(fp, i === 0)).join("");
+    fpChoice = list[0].id;
+    el.fp_dialog.hidden = false;
+    return new Promise((resolve) => {
+      fpResolve = (proceed) => resolve(proceed ? { ok: true, faceplate: fpChoice } : { ok: false, faceplate: null });
+    });
+  }
+
+  el.fp_cards.addEventListener("click", (event) => {
+    const card = event.target.closest(".fp-card");
+    if (!card) return;
+    fpChoice = card.dataset.fpid;
+    el.fp_cards.querySelectorAll(".fp-card").forEach((c) => c.classList.toggle("selected", c === card));
+  });
+
+  el.fp_dialog.addEventListener("click", (event) => {
+    const answer = event.target.dataset?.fp;
+    if (!answer) return;
+    el.fp_dialog.hidden = true;
+    fpResolve?.(answer === "proceed");
+    fpResolve = null;
+  });
 
   // ── the watched lane (ADR-0004 amendment) ────────────────────────
   // Entering Media asserts the watch; leaving arms a 10-second
@@ -221,8 +303,15 @@
         ? `<button class="ghost-button" data-action="resume" ${lock}>Resume</button>`
         : `<button class="ghost-button" data-action="install" ${lock}>Install Firmware</button>`;
     const reinstall = `<button class="ghost-button" data-action="install" ${lock}>Reinstall Firmware</button>`;
+    // A live face may change its dress in place: files and a nudge,
+    // no bootloader — and the exam re-proves it before LIVE.
+    const swap = lc === "live"
+      ? `<button class="ghost-button" data-action="faceplate">Faceplate…</button>`
+      : "";
     const factory = `<button class="danger-button" data-action="factory" ${lock}>Factory Reset</button>`;
-    const tools = lc === "new" ? streamButton + factory : streamButton + reinstall + factory;
+    const tools = lc === "new"
+      ? streamButton + factory
+      : streamButton + swap + reinstall + factory;
 
     // Class photos come straight from the resident (img display is
     // not CORS-gated): one URL per class, remembered; a class with no
@@ -286,10 +375,31 @@
         `Install firmware on ${port}?`,
         "The face files return to ship state (its identity is kept), the face restarts, and it is tested before it goes live again. If the board is not running CircuitPython yet, the saga waits for you to hold BOOTSEL and replug \u2014 every step appears in the Log.",
       );
-      if (ok) {
-        const d = await postOrToast(`/api/maintenance/${port}`, { kind: "install" });
-        if (d.message) toast(d.message);
-      }
+      const row = Store.state.devices.get(port);
+      await fetchFaceplates(row?.class);
+      const c = await ceremony(
+        row?.class,
+        `Install firmware on ${port}?`,
+        "The face files return to ship state (its identity is kept), the face restarts, and it is tested before it goes live again. If the board is not running CircuitPython yet, the saga waits for you to hold BOOTSEL and replug — every step appears in the Log.",
+      );
+      if (!c.ok) return;
+      const body = { kind: "install" };
+      if (c.faceplate) body.faceplate = c.faceplate;
+      const d = await postOrToast(`/api/maintenance/${port}`, body);
+      if (d.message) toast(d.message);
+    } else if (action === "faceplate") {
+      const row = Store.state.devices.get(port);
+      await fetchFaceplates(row?.class);
+      const c = await ceremony(
+        row?.class,
+        `Change the dress on ${port}?`,
+        "The face files are rewritten in place and the face re-enters its exam — about a minute, no bootloader. The stream returns only when the tests pass.",
+      );
+      if (!c.ok) return;
+      const body = { kind: "soft" };
+      if (c.faceplate) body.faceplate = c.faceplate;
+      const d = await postOrToast(`/api/maintenance/${port}`, body);
+      if (d.message) toast(d.message);
     } else if (action === "factory") {
       const ok = await confirmChange(
         `Factory reset ${port}?`,
@@ -461,6 +571,7 @@
     if (slices.includes("stream") && Store.state.stream === "connected") {
       Store.retryPhotos();
       if (!Store.state.links) fetchLinks();
+      Store.resetFaceplates(); // a fresh house may declare differently
     }
     // A fresh snapshot that says unwatched while Media is open means
     // the flag was reset under us (resident restart) — assert again.

@@ -990,3 +990,21 @@ body.readonly #form-destroy { display: none !important; }
 /* Suzu's card tint: the bell's gold, declared as a class so the CSP
    never sees an inline style. */
 .tcg-suzu { --argb: 240, 180, 41; }
+
+/* ── the faceplate chooser (ADR-0005) ──────────────────────────────
+   The dress and the hang: captured previews where they exist, the
+   connector pictogram drawn from the declared mount, the words that
+   carry the choice when nothing was captured yet. */
+.fp-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; margin: 12px 0 4px; }
+.fp-card {
+  text-align: left; padding: 10px; border-radius: 10px;
+  border: 1px solid var(--line); background: var(--panel-2);
+  display: flex; flex-direction: column; gap: 4px;
+}
+.fp-card:hover { background: rgba(255, 255, 255, .04); }
+.fp-card.selected { border-color: color-mix(in srgb, var(--a) 55%, transparent); background: rgba(var(--argb), .05); }
+.fp-preview { width: 100%; height: 110px; object-fit: contain; border-radius: 6px; background: #000; border: 1px solid var(--line); margin-bottom: 4px; }
+.fp-name { font-size: 13px; color: var(--ink); }
+.fp-blurb { font-size: 11px; color: var(--muted); }
+.fp-mount { display: flex; align-items: center; gap: 8px; margin-top: 4px; font-size: 11px; color: var(--ink-3); }
+.fp-mount svg { flex: none; color: var(--ink-2); }

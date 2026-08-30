@@ -25,6 +25,7 @@
     frames: new Map(),  // port → { png: data URI, at: ms }
     photos: new Map(),  // class → url (fetched once per class)
     links: null,        // the About page's destinations, fetched once
+    faceplates: new Map(), // class → declared faceplates (empty = none)
     /// the watched lane: the house's echo of the window's watch
     mediaWatched: false,
   };
@@ -159,6 +160,17 @@
     mark("links");
   }
 
+  function putFaceplates(classId, list) {
+    state.faceplates.set(classId, Array.isArray(list) ? list : []);
+    mark("faceplates");
+  }
+
+  /// A fresh house may declare differently — ask again.
+  function resetFaceplates() {
+    state.faceplates.clear();
+    mark("faceplates");
+  }
+
   function subscribe(listener) {
     listeners.add(listener);
     return () => listeners.delete(listener);
@@ -179,6 +191,8 @@
     putPhoto,
     retryPhotos,
     putLinks,
+    putFaceplates,
+    resetFaceplates,
     journalLines,
   };
 })();

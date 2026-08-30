@@ -145,6 +145,19 @@
     </section>
   </div>
 
+  <div class="dialog-backdrop" id="fp-dialog" hidden>
+    <section class="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="fp-title">
+      <span class="kicker">Confirm local change</span>
+      <h2 id="fp-title">—</h2>
+      <p id="fp-detail">—</p>
+      <div id="fp-cards" class="fp-cards"></div>
+      <div class="dialog-actions">
+        <button class="ghost-button" type="button" data-fp="cancel">Cancel</button>
+        <button class="danger-button" type="button" data-fp="proceed">Proceed</button>
+      </div>
+    </section>
+  </div>
+
   <script src="store.js"></script>
   <script src="feed.js"></script>
   <script src="app.js"></script>

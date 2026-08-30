@@ -135,8 +135,9 @@ pub fn run(
     catalog: &Catalog,
     events: &Sender<HouseEvent>,
     device_id: &str,
+    faceplate: Option<&str>,
 ) -> Result<()> {
-    type SagaRunner = fn(&mut Saga, &str, &str, &Catalog) -> Result<()>;
+    type SagaRunner = fn(&mut Saga, &str, &str, &Catalog, Option<&str>) -> Result<()>;
     let (total, runner): (u32, SagaRunner) = match (class, kind)
     {
         (Some("waveshare-rp2040-matrix"), "install" | "adopt") => {
@@ -162,7 +163,7 @@ pub fn run(
     };
 
     let mut saga = Saga::new(events, device_id, total);
-    let outcome = runner(&mut saga, port, device_id, catalog);
+    let outcome = runner(&mut saga, port, device_id, catalog, faceplate);
     match &outcome {
         Ok(()) => saga.hand_to_exam(),
         Err(e) => saga.close("failed", false, format!("{e:#}")),
@@ -401,11 +402,20 @@ fn esptool(voice: &StepVoice<'_>, port: &str, args: &[&str]) -> Result<String> {
     unreachable!()
 }
 
-fn push_face_files(voice: &StepVoice<'_>, port: &str, device_id: &str, fresh: bool) -> Result<String> {
+fn push_face_files(
+    voice: &StepVoice<'_>,
+    port: &str,
+    device_id: &str,
+    fresh: bool,
+    faceplate: Option<&str>,
+) -> Result<String> {
     let mut cmd = std::process::Command::new("python");
     cmd.args(["scripts/push_firmware.py", port, device_id]);
     if fresh {
         cmd.arg("--fresh");
+    }
+    if let Some(dress) = faceplate {
+        cmd.args(["--faceplate", dress]);
     }
     run_tool(voice, cmd, "push_firmware.py")
 }
@@ -438,6 +448,7 @@ fn rp2040_fresh(
     _port: &str,
     device_id: &str,
     _catalog: &Catalog,
+    _faceplate: Option<&str>,
 ) -> Result<()> {
     saga.step("Preparing the board", |_voice| {
         if !circuitpy_drives().is_empty() {
@@ -467,6 +478,7 @@ fn rp2040_soft(
     _port: &str,
     device_id: &str,
     _catalog: &Catalog,
+    _faceplate: Option<&str>,
 ) -> Result<()> {
     let drives = circuitpy_drives();
     if drives.len() > 1 {
@@ -500,6 +512,7 @@ fn rp2040_factory(
     _port: &str,
     device_id: &str,
     _catalog: &Catalog,
+    _faceplate: Option<&str>,
 ) -> Result<()> {
     let drive = find_circuitpy_drive()
         .ok_or_else(|| anyhow!("no CIRCUITPY drive — replug the device first so identity can be backed up"))?;
@@ -538,9 +551,11 @@ fn esp8266_adopt(
     port: &str,
     device_id: &str,
     _catalog: &Catalog,
+    faceplate: Option<&str>,
 ) -> Result<()> {
-    saga.step("Installing the suzu face", |voice| {
-        push_face_files(voice, port, device_id, true).map(|out| last_line(&out))
+    let dress = faceplate.unwrap_or("portrait-numerals");
+    saga.step(&format!("Installing the suzu face ({dress})"), |voice| {
+        push_face_files(voice, port, device_id, true, Some(dress)).map(|out| last_line(&out))
     })?;
     Ok(())
 }
@@ -550,6 +565,7 @@ fn esp8266_factory(
     port: &str,
     device_id: &str,
     _catalog: &Catalog,
+    faceplate: Option<&str>,
 ) -> Result<()> {
     saga.step("Erasing the flash", |voice| {
         esptool(voice, port, &["esp8266", "erase_flash"]).map(|_| ())
@@ -563,8 +579,9 @@ fn esp8266_factory(
     saga.step("Flashing MicroPython", |voice| {
         esptool(voice, port, &args).map(|_| ())
     })?;
-    saga.step("Installing the suzu face", |voice| {
-        push_face_files(voice, port, device_id, true).map(|out| last_line(&out))
+    let dress = faceplate.unwrap_or("portrait-numerals");
+    saga.step(&format!("Installing the suzu face ({dress})"), |voice| {
+        push_face_files(voice, port, device_id, true, Some(dress)).map(|out| last_line(&out))
     })?;
     Ok(())
 }

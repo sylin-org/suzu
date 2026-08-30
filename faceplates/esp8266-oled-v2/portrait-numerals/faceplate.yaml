@@ -1,6 +1,9 @@
 name: portrait-numerals
 status: beta                      # live on the bench since 2026-08-28
 class: esp8266-oled-v2-class
+display_name: BIG!
+blurb: Easy to read from a distance
+mount: usb-down                   # hangs upwards — the connector sits at the bottom
 aesthetic: striking
 
 # Ground "report" slots, in the order the face reads them.
@@ -34,8 +37,8 @@ font:
     source: firmware/suzu-d/esp8266-oled-v2/icons.py (Open Iconic, MIT)
     packer: tools/pack_icons.py
     keys: disk usb gear net clock heart warn wilt
-  bytecode: face.mpy — python -m mpy_cross -march=xtensa face.py -o face.mpy
-  (this firmware auto-runs main.py only; face.py is the human source)
+  bytecode: "face.mpy — python -m mpy_cross -march=xtensa face.py -o face.mpy"
+  # (this firmware auto-runs main.py only; face.py is the human source)
   generator: tools/font2sprites.py
   data: digits_bebas.bin
   cap-height: 24

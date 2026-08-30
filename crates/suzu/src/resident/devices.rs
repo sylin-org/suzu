@@ -170,8 +170,14 @@ pub enum DevicesCmd {
     ResumeDevice { port: String, reply: mpsc::Sender<anyhow::Result<()>> },
     /// Hand the individual to a maintenance saga: the session closes,
     /// the port goes to the saga, the stream returns only after the
-    /// saga's admission test passes.
-    MaintenanceStart { port: String, kind: String, reply: mpsc::Sender<anyhow::Result<()>> },
+    /// saga's admission test passes. `faceplate` names the dress for
+    /// classes that declare them (ADR-0005); None keeps the default.
+    MaintenanceStart {
+        port: String,
+        kind: String,
+        faceplate: Option<String>,
+        reply: mpsc::Sender<anyhow::Result<()>>,
+    },
     /// The saga's own end — it loops back through the door so the
     /// devices domain (which owns the sessions) respawns the face.
     /// The saga's task re-identifies off-loop and its facts ride in.
@@ -194,7 +200,8 @@ pub struct Devices {
     /// The frame lane's cache: the newest frame per port, and when it
     /// was taken. The shot doors read it; freshness is the truth test.
     frames: BTreeMap<String, (Instant, String)>,
-    in_maintenance: BTreeMap<String, String>,
+    /// port → (kind, faceplate) while a saga runs (ADR-0005).
+    in_maintenance: BTreeMap<String, (String, Option<String>)>,
     pulse_announced: bool,
     paused: bool,
     /// The watched lane's echo (ADR-0004 amendment): the gate's flag,
@@ -292,8 +299,8 @@ impl Devices {
                             let res = self.resume_device(&port);
                             let _ = reply.send(res).await;
                         }
-                        DevicesCmd::MaintenanceStart { port, kind, reply } => {
-                            let res = self.maintenance_begin(&port, &kind);
+                        DevicesCmd::MaintenanceStart { port, kind, faceplate, reply } => {
+                            let res = self.maintenance_begin(&port, &kind, faceplate);
                             let _ = reply.send(res).await;
                         }
                         DevicesCmd::MaintenanceFinished { port, device_id, ok, fresh } => {
@@ -801,7 +808,12 @@ impl Devices {
     /// its admission exam is the gate back into the stream. The command
     /// acks as soon as the saga *begins*; its progress arrives as
     /// MaintenanceStep events and its end as MaintenanceFinished.
-    fn maintenance_begin(&mut self, port: &str, kind: &str) -> anyhow::Result<()> {
+    fn maintenance_begin(
+        &mut self,
+        port: &str,
+        kind: &str,
+        faceplate: Option<String>,
+    ) -> anyhow::Result<()> {
         // The keeper's verb is "install"; the saga depends on what the
         // face speaks today - an ancestor needs the full install, a
         // suzu face just its files back.
@@ -828,6 +840,25 @@ impl Devices {
             anyhow::bail!("{port}: no device_id — adopt the individual first");
         };
         let class = device.facts.class.clone();
+        // The dress must be one the class declares — refused by name,
+        // with the vocabulary, per the door contract (ADR-0005).
+        if let Some(dress) = &faceplate {
+            let declared = class
+                .as_deref()
+                .map(|c| self.catalog.faceplates_for_class(c))
+                .unwrap_or_default();
+            if !declared.iter().any(|f| &f.id == dress) {
+                let vocab = declared
+                    .iter()
+                    .map(|f| format!("{:?}", f.id))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                anyhow::bail!(
+                    "unknown faceplate {dress:?} — this class declares: {}",
+                    if vocab.is_empty() { "none".to_string() } else { vocab }
+                );
+            }
+        }
         let vid = device.facts.vid;
         let pid = device.facts.pid;
 
@@ -844,7 +875,8 @@ impl Devices {
         if let Some(d) = self.devices.get_mut(port) {
             d.outbound = None;
         }
-        self.in_maintenance.insert(port.to_string(), kind.to_string());
+        self.in_maintenance
+            .insert(port.to_string(), (kind.to_string(), faceplate.clone()));
         self.rows_dirty = true;
 
         let _ = self.events.send(HouseEvent::MaintenanceStarted {
@@ -862,6 +894,7 @@ impl Devices {
         let port2 = port.to_string();
         let port3 = port2.clone();
         let kind2 = kind.to_string();
+        let faceplate2 = faceplate.clone();
         let door = self.door.clone();
         tokio::spawn(async move {
             if let Some(join) = joining {
@@ -870,6 +903,7 @@ impl Devices {
             let outcome = tokio::task::spawn_blocking(move || {
                 super::maintenance::run(
                     &port2, class.as_deref(), &kind2, &catalog, &events, &device_id2,
+                    faceplate2.as_deref(),
                 )
             })
             .await
@@ -907,7 +941,7 @@ impl Devices {
             kind: self
                 .in_maintenance
                 .get(port)
-                .cloned()
+                .map(|(kind, _)| kind.clone())
                 .unwrap_or_else(|| "unknown".into()),
             ok,
         });

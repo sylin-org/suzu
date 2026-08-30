@@ -12,7 +12,7 @@ import gc, sys, time, select
 from machine import Timer, UART
 
 W, H = 64, 128            # portrait: u 0..63 across, v 0..127 down
-INVERT = False            # the -inverted build flips this (tools/build_faceplates.py):
+INVERT = True            # the -inverted build flips this (tools/build_faceplates.py):
                           # the composition mirrors along its long axis, so the
                           # board hung connector-up reads exactly as this reads
                           # connector-down. Same art, same words, other hang.
