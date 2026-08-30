@@ -34,3 +34,15 @@ pending more samples.
   retry once" rather than failure.
 - All units take the `circuitpy-drive-copy` upgrade path — none has
   pre-suzu firmware.
+
+
+## LED order (2026-08-30, the golden/green mismatch)
+
+The 5x5's SK6812/WS2812 pixels are **GRB-wired**, but CircuitPython's
+`neopixel` library silently defaults to RGB — so every hue the face
+displayed was red/green-scrambled on the physical board while the J
+shot (logical rgb) stayed truthful. Symptom: work atoms golden in the
+workbench preview, green on the board. Fix: `pixel_order=neopixel.GRB`
+in the NeoPixel constructor. Rule for this class: the preview is the
+frame buffer's truth; when eyes and frame disagree, suspect the wire
+order first.
