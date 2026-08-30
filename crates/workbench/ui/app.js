@@ -17,6 +17,7 @@
 
   const installing = new Set(); // ports with a saga in flight
   let paused = false;
+  let online = false;
   let activeView = "status";
   let mediaTimer = null;
   let confirmResolve = null;

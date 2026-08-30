@@ -984,3 +984,9 @@ body.readonly #form-destroy { display: none !important; }
   border-radius: 10px; border: 1px solid var(--line); background: #000;
 }
 .device-body { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 9px; }
+
+.view-pad { padding: 26px 40px; }
+
+/* Suzu's card tint: the bell's gold, declared as a class so the CSP
+   never sees an inline style. */
+.tcg-suzu { --argb: 240, 180, 41; }

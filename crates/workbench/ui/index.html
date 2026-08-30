@@ -37,7 +37,7 @@
 
       <!-- ── Status: the fleet, its lifecycle, its ceremonies ─────── -->
       <section class="view active" id="view-status" data-page="status" aria-label="Status">
-        <div style="padding: 26px 40px;">
+        <div class="view-pad">
           <div class="page-heading">
             <div>
               <span class="kicker">The roster</span>
@@ -53,7 +53,7 @@
 
       <!-- ── Log: what was asked, and what it became ──────────────── -->
       <section class="view" id="view-log" data-page="log" aria-label="Log">
-        <div style="padding: 26px 40px;">
+        <div class="view-pad">
           <div class="page-heading">
             <div>
               <span class="kicker">The journal</span>
@@ -69,7 +69,7 @@
 
       <!-- ── Media: the trail camera ───────────────────────────────── -->
       <section class="view" id="view-media" data-page="media" aria-label="Media">
-        <div style="padding: 26px 40px;">
+        <div class="view-pad">
           <div class="page-heading">
             <div>
               <span class="kicker">The trail camera</span>
@@ -88,7 +88,6 @@
       <section class="view" id="view-about" data-page="about" aria-label="About">
         <div class="about">
           <div class="tcg" id="suzu-card" role="img" aria-label="Suzu, the bell"
-               style="--argb: 240, 180, 41">
             <span class="card-art">
               <span class="mascot-halo" aria-hidden="true"></span>
               <img class="mascot-echo px" src="suzu.png" alt="" aria-hidden="true" width="300" height="300">
@@ -101,8 +100,8 @@
               <span class="card-title"><span class="name">suzu</span><span class="role">&middot; the bell</span></span>
               <span class="card-body">
                 <span class="orbs">
-                  <span class="orb" title="Faces" style="color:#f0b429"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v3"></path><path d="M5 9a7 7 0 0 1 14 0c0 5-2.5 6-2.5 9h-9C7.5 15 5 14 5 9Z"></path><path d="M10 21h4"></path></svg></span>
-                  <span class="orb" title="Trust" style="color:#5eead4"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.4-3 7.6-7 9-4-1.4-7-4.6-7-9V6z"></path><path d="M9.4 12l1.9 1.9L15 10"></path></svg></span>
+                  <span class="orb orb-faces" title="Faces"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v3"></path><path d="M5 9a7 7 0 0 1 14 0c0 5-2.5 6-2.5 9h-9C7.5 15 5 14 5 9Z"></path><path d="M10 21h4"></path></svg></span>
+                  <span class="orb orb-trust" title="Trust"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.4-3 7.6-7 9-4-1.4-7-4.6-7-9V6z"></path><path d="M9.4 12l1.9 1.9L15 10"></path></svg></span>
                 </span>
                 <span class="card-rules">Gives the machines you own physical faces — nine
                   rings, honest idle, and light that means what it says.</span>
