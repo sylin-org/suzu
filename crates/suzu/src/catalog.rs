@@ -93,6 +93,10 @@ pub struct ClassManifest {
     pub frame: Option<FrameSpec>,
     /// The class's product photo, relative to the class folder.
     pub image: Option<String>,
+    /// The folder the manifest was parsed from. Not declared — a
+    /// class id and its folder name agree only by luck.
+    #[serde(skip)]
+    pub dir: Option<PathBuf>,
 }
 
 #[derive(Clone)]
@@ -104,8 +108,6 @@ pub struct Catalog {
     index: HashMap<u16, Vec<(Option<u16>, usize)>>,
     /// class id -> its manifest's servicing bits (display zones …)
     manifests: HashMap<String, ClassManifest>,
-    /// Where the manifests were found — image paths resolve against these.
-    roots: Vec<PathBuf>,
 }
 
 /// `#rrggbb` -> RGB triple; unparsable colors fall back to white.
@@ -166,7 +168,8 @@ impl Catalog {
             let mut manifests: HashMap<String, ClassManifest> = HashMap::new();
             for dir in class_dirs {
                 if let Ok(text) = std::fs::read_to_string(dir.join("manifest.yaml")) {
-                    if let Ok(m) = serde_yaml::from_str::<ClassManifest>(&text) {
+                    if let Ok(mut m) = serde_yaml::from_str::<ClassManifest>(&text) {
+                        m.dir = Some(dir.clone());
                         manifests.insert(m.id.clone(), m);
                     }
                 }
@@ -201,7 +204,6 @@ impl Catalog {
                 classes,
                 index,
                 manifests,
-                roots: vec![root.clone()],
             };
         }
 
@@ -210,7 +212,6 @@ impl Catalog {
             classes: Vec::new(),
             index: HashMap::new(),
             manifests: HashMap::new(),
-            roots: Vec::new(),
         }
     }
 
@@ -220,11 +221,12 @@ impl Catalog {
     /// placeholder pretending to be hardware.
     pub fn device_image(&self, class_id: &str) -> Option<PathBuf> {
         let manifest = self.manifests.get(class_id)?;
+        let dir = manifest.dir.as_ref()?;
         let image = manifest.image.as_ref()?;
-        self.roots
-            .iter()
-            .map(|root| root.join(class_id).join(image))
-            .find(|p| p.exists())
+        // `dir` was resolved from the catalog root at load time — it
+        // already knows where home is.
+        let path = dir.join(image);
+        path.exists().then_some(path)
     }
 
     /// VID/PID lookup — used when the port is silent (fresh firmware).
