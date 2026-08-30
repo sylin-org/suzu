@@ -17,7 +17,7 @@ pub const CONTROL_PORT: u16 = 7898; // S-U-Z-U on a phone keypad
 
 /// The Resident's ear: chirps in, commands out, acks back.
 pub async fn listen(
-    mut tx: tokio::sync::mpsc::Sender<DevicesCmd>,
+    tx: tokio::sync::mpsc::Sender<DevicesCmd>,
     moments: tokio::sync::mpsc::Sender<MomentsCmd>,
 ) -> anyhow::Result<()> {
     let socket = UdpSocket::bind(("127.0.0.1", CONTROL_PORT)).await?;

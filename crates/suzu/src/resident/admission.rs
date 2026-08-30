@@ -10,11 +10,11 @@
 //!   write a marker, read it back, restore the original
 //! - display-truth — draw something only the tested command can draw,
 //!   capture via J, and assert the pixels:
-//!     · matrix: a `completion`-blue ripple — a hue no other state
-//!     can produce (idle green, warm atoms and every other ring hue
-//!     fall short of blue channel 80 at the half-brightness ceiling)
+//!   · matrix: a `completion`-blue ripple — a hue no other state
+//!   can produce (idle green, warm atoms and every other ring hue
+//!   fall short of blue channel 80 at the half-brightness ceiling)
 //!   · oled: a known ground pattern — digits light the cyan field
-//!     far beyond what three idle fireflies can light
+//!   far beyond what three idle fireflies can light
 
 use crate::catalog::FrameSpec;
 use crate::probe;

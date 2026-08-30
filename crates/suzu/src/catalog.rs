@@ -32,11 +32,11 @@ pub struct DisplayZone {
     pub color: String,
 }
 
+/// One display's zones: (y_from, y_to, phosphor) rows of the panel.
+pub type DisplayZones = Vec<(usize, usize, [u8; 3])>;
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct DisplaySpec {
-    #[serde(rename = "type")]
-    pub panel_type: Option<String>,
-    pub resolution: Option<String>,
     #[serde(default)]
     pub zones: Vec<DisplayZone>,
 }
@@ -167,12 +167,11 @@ impl Catalog {
             let mut index: HashMap<u16, Vec<(Option<u16>, usize)>> = HashMap::new();
             let mut manifests: HashMap<String, ClassManifest> = HashMap::new();
             for dir in class_dirs {
-                if let Ok(text) = std::fs::read_to_string(dir.join("manifest.yaml")) {
-                    if let Ok(mut m) = serde_yaml::from_str::<ClassManifest>(&text) {
+                if let Ok(text) = std::fs::read_to_string(dir.join("manifest.yaml"))
+                    && let Ok(mut m) = serde_yaml::from_str::<ClassManifest>(&text) {
                         m.dir = Some(dir.clone());
                         manifests.insert(m.id.clone(), m);
                     }
-                }
                 let sig_path = dir.join("signature.yaml");
                 let Ok(text) = std::fs::read_to_string(&sig_path) else {
                     eprintln!("catalog: no signature.yaml in {}", dir.display());
@@ -254,7 +253,7 @@ impl Catalog {
 
     /// The display zones of a class's manifest: (first_row, last_row,
     /// rgb) — what a faithful screenshot colors.
-    pub fn display_zones(&self, class_id: &str) -> Vec<(usize, usize, [u8; 3])> {
+    pub fn display_zones(&self, class_id: &str) -> DisplayZones {
         self.manifests
             .get(class_id)
             .and_then(|m| m.display.as_ref())

@@ -394,7 +394,7 @@ fn screenshot(catalog: &Catalog, filter: Option<&str>) {
     let ports: Vec<_> = enumerate()
         .into_iter()
         .filter(|e| e.usb.is_some()) // non-USB ports are foreign by default
-        .filter(|e| filter.map_or(true, |f| e.name == f))
+        .filter(|e| filter.is_none_or(|f| e.name == f))
         .collect();
     if ports.is_empty() {
         println!("  no USB serial port matches — plug a firefly in (data cable, not charge-only)");
@@ -559,11 +559,10 @@ async fn main() -> anyhow::Result<()> {
             // `suzu record 4 3 COM22` may aim the camera at one port.
             let mut faces: Vec<shot::Face> = Vec::new();
             for e in enumerate().into_iter().filter(|e| e.usb.is_some()) {
-                if let Some(w) = want_port {
-                    if e.name != w {
+                if let Some(w) = want_port
+                    && e.name != w {
                         continue;
                     }
-                }
                 let u = e.usb.as_ref().expect("filtered to USB above");
                 let Some(class_id) = catalog.class_id_for(u.vid, u.pid) else {
                     continue;

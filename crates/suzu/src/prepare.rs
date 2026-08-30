@@ -16,8 +16,6 @@ use std::io::{self, Write};
 struct FaceplateDecl {
     name: String,
     class: String,
-    #[serde(default)]
-    status: Option<String>,
 }
 
 /// The faceplates declared in the repo, keyed by class id.
@@ -32,11 +30,10 @@ fn faceplates_for(class: &str) -> Vec<FaceplateDecl> {
         let Ok(text) = std::fs::read_to_string(&decl) else {
             continue;
         };
-        if let Ok(d) = serde_yaml::from_str::<FaceplateDecl>(&text) {
-            if d.class == class {
+        if let Ok(d) = serde_yaml::from_str::<FaceplateDecl>(&text)
+            && d.class == class {
                 out.push(d);
             }
-        }
     }
     out
 }
@@ -58,9 +55,9 @@ pub(crate) fn mint_v7() -> String {
         .map(|d| d.subsec_nanos())
         .unwrap_or(0) as u64;
     let mut seed = (std::process::id() as u64) ^ (nanos << 8) ^ 0x9E37_79B9;
-    for i in 6..16 {
+    for slot in &mut b[6..16] {
         seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-        b[i] = (seed >> 33) as u8;
+        *slot = (seed >> 33) as u8;
     }
     // re-apply version/variant after the fill
     b[6] = 0x70 | (0x0F & (std::process::id() as u8));
@@ -223,7 +220,7 @@ fn write_drive_file(drive: &str, name: &str, data: &[u8]) -> anyhow::Result<()> 
     Ok(())
 }
 
-fn install_rp2040(drive: &str, class: &str) -> anyhow::Result<()> {
+fn install_rp2040(drive: &str, _class: &str) -> anyhow::Result<()> {
     // CircuitPython dismounts the drive on every reload: writes race
     // the remount and fail with transient errors. Three whole passes
     // with settled waits beat clever per-op handling.
@@ -269,16 +266,14 @@ fn install_rp2040_once(drive: &str) -> anyhow::Result<()> {
             .unwrap_or_else(|_| "{\"proto\":\"suzu/1\"}".into()),
     )?;
     let existing = std::path::PathBuf::from(format!("{drive}/suzu.json"));
-    if existing.exists() {
-        if let Ok(old) = serde_json::from_str::<serde_json::Value>(
+    if existing.exists()
+        && let Ok(old) = serde_json::from_str::<serde_json::Value>(
             &std::fs::read_to_string(existing).unwrap_or_default(),
-        ) {
-            if let Some(id) = old.get("device_id").and_then(|v| v.as_str()) {
+        )
+            && let Some(id) = old.get("device_id").and_then(|v| v.as_str()) {
                 suzu["device_id"] = serde_json::Value::String(id.to_string());
                 println!("  identity preserved: {id}");
             }
-        }
-    }
     if suzu.get("device_id").map(|v| v == "assigned at adoption (preserved from pre-suzu provisioning when present)").unwrap_or(false) || suzu.get("device_id").is_none() {
         let id = mint_v7();
         suzu["device_id"] = serde_json::Value::String(id.clone());

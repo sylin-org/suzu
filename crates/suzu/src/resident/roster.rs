@@ -202,11 +202,10 @@ impl Roster {
 
     /// The saga's journal, appended live.
     pub fn maintenance_step(&mut self, device_id: &str, step: SagaStep) {
-        if let Some(ind) = self.individuals.get_mut(device_id) {
-            if let Some(saga) = &mut ind.maintenance {
+        if let Some(ind) = self.individuals.get_mut(device_id)
+            && let Some(saga) = &mut ind.maintenance {
                 saga.steps.push(step);
             }
-        }
     }
 
     /// The saga finished. Still New — admission decides the stream.

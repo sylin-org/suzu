@@ -1,10 +1,15 @@
-//! Suzu workbench — the keeper's window. Everything it shows comes
-//! from the Resident's loopback API; it invents nothing.
+//! Suzu workbench — the keeper's window.
+//!
+//! ADR-0004 is the law here: one store, views as pure functions from
+//! store slices to DOM. No event handler writes state into the page;
+//! a handler only sends a command and lets the wire's own facts
+//! re-render the truth. Nothing is polled, nothing is patched in,
+//! nothing races a timer.
 
 (async () => {
   "use strict";
 
-  const API = "http://127.0.0.1:7899";
+  const Store = window.SuzuStore;
   const el = {};
   for (const id of [
     "lamp", "state-word", "state-facts", "wheel", "wheel-label", "wheel-icon",
@@ -15,20 +20,22 @@
     el[id.replaceAll("-", "_")] = document.getElementById(id);
   }
 
-  const installing = new Set(); // ports with a saga in flight
-  let paused = false;
-  let online = false;
+  const API = "http://127.0.0.1:7899";
+  const tauri = window.__TAURI__;
+
   let activeView = "status";
-  let mediaTimer = null;
   let confirmResolve = null;
+  const installing = new Set(); // ports with a saga this window began, before its roster fact lands
+  const photoFetching = new Set();
 
   const escapeHtml = (s) => String(s).replace(/[&<>"']/g,
     (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
   // The Rust shell speaks to the Resident; the webview never makes a
   // cross-origin request, so CORS does not exist in this product.
   async function call(method, path, body) {
-    const r = await window.__TAURI__.core.invoke("api", { method, path, body: body ?? null });
+    const r = await tauri.core.invoke("api", { method, path, body: body ?? null });
     return {
       status: r.status,
       ok: r.status > 0 && r.status < 400,
@@ -39,6 +46,17 @@
     const r = await call("GET", path);
     if (r.status !== 200) throw new Error(`${path}: ${r.status}`);
     return r.json();
+  }
+  async function postOrToast(path, body) {
+    try {
+      const r = await call("POST", path, body);
+      const d = r.json();
+      if (!r.ok) toast(d.error ?? `${path} failed`);
+      return d;
+    } catch (e) {
+      toast(`the house did not answer: ${e.message ?? e}`);
+      return {};
+    }
   }
 
   function toast(text) {
@@ -57,35 +75,42 @@
     });
   }
 
-  // ── navigation ──────────────────────────────────────────────────
-  document.querySelectorAll(".tab").forEach((tab) => {
-    tab.addEventListener("click", () => {
-      document.querySelectorAll(".tab").forEach((t) => {
-        t.classList.toggle("active", t === tab);
-        t.removeAttribute("aria-current");
-        if (t === tab) t.setAttribute("aria-current", "page");
-      });
-      activeView = tab.dataset.view;
-      document.querySelectorAll(".view").forEach((v) =>
-        v.classList.toggle("active", v.dataset.page === activeView));
-      if (activeView === "media") startMedia();
-      else stopMedia();
+  // ── navigation — client UI state, not house state ────────────────
+  function setView(name) {
+    activeView = name;
+    document.querySelectorAll(".tab").forEach((t) => {
+      const on = t.dataset.view === name;
+      t.classList.toggle("active", on);
+      if (on) t.setAttribute("aria-current", "page");
+      else t.removeAttribute("aria-current");
     });
+    document.querySelectorAll(".view").forEach((v) =>
+      v.classList.toggle("active", v.dataset.page === name));
+    renderView();
+  }
+  document.querySelectorAll(".tab").forEach((tab) => {
+    tab.addEventListener("click", () => setView(tab.dataset.view));
   });
 
-  // ── the wheel: pause / resume, one datagram's worth of respect ──
-  el.wheel.addEventListener("click", async () => {
-    const verb = paused ? "resume" : "pause";
-    try {
-      const r = await call("POST", "/api/control", { verb });
-      if (!r.ok) throw new Error(r.json().error ?? r.status);
-    } catch (e) {
-      toast(`the house did not answer: ${e.message}`);
-    }
-  });
+  // ── the lampband: stream health and the pause flag ───────────────
+  function renderChrome() {
+    const { stream, service, devices } = Store.state;
+    const connected = stream === "connected";
+    document.body.classList.toggle("runtime-held", connected && service.paused);
+    el.state_word.textContent = !connected
+      ? (stream === "connecting" ? "Starting" : "Stopped")
+      : service.paused ? "Paused" : "Running";
+    el.state_facts.innerHTML = connected
+      ? `<b>${devices.size}</b> ${plural(devices.size, "face")} on the roster`
+      : "the Resident is not running";
+    el.service.textContent = connected ? "Stop service" : "Start service";
+    el.service.disabled = false;
+    renderWheel();
+  }
 
   function renderWheel() {
-    el.wheel.disabled = false;
+    const paused = Store.state.service.paused;
+    el.wheel.disabled = Store.state.stream !== "connected";
     el.wheel.dataset.intent = paused ? "resume" : "pause";
     el.wheel_label.textContent = paused ? "Resume" : "Pause";
     el.wheel_icon.innerHTML = paused
@@ -93,13 +118,44 @@
       : '<rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/>';
   }
 
-  // ── status ──────────────────────────────────────────────────────
-  function deviceCard(row, rosterEntry) {
-    // The keeper's formula: a device is LIVE, NEW, or PAUSED - and the
+  el.wheel.addEventListener("click", async () => {
+    const verb = Store.state.service.paused ? "resume" : "pause";
+    const d = await postOrToast("/api/control", { verb });
+    if (d.paused === undefined && d.error === undefined) {
+      toast("the house did not answer");
+    }
+    // the Paused fact re-renders the wheel — no local truth
+  });
+
+  el.service.addEventListener("click", async () => {
+    el.service.disabled = true;
+    const connected = Store.state.stream === "connected";
+    try {
+      if (connected) {
+        const res = await tauri.core.invoke("stop_resident");
+        if (!res.stopped) toast(`the door is still held: ${res.reason}`);
+      } else {
+        const msg = await tauri.core.invoke("start_resident");
+        toast(msg);
+      }
+    } catch (e) {
+      toast(String(e));
+    }
+    renderChrome();
+  });
+
+  // ── status: the roster, pure from its slices ─────────────────────
+  function sortedDevices() {
+    return [...Store.state.devices.values()].sort((a, b) => a.port.localeCompare(b.port));
+  }
+
+  function deviceCard(row) {
+    const rosterEntry = Store.state.roster.get(row.device_id ?? "");
+    // The keeper's formula: a device is LIVE, NEW, or PAUSED — and the
     // buttons are exactly the ones its state offers, nothing else.
     const saga = rosterEntry?.maintenance;
     const sagaRunning = saga?.state === "running";
-    const isInstalling = installing.has(row.port) || sagaRunning;
+    const isInstalling = sagaRunning || (installing.has(row.port) && !saga);
     const lc = isInstalling ? "installing" : (row.lifecycle ?? "new");
     const pill = isInstalling
       ? "INSTALLING"
@@ -135,8 +191,12 @@
     const factory = `<button class="danger-button" data-action="factory" ${lock}>Factory Reset</button>`;
     const tools = lc === "new" ? streamButton + factory : streamButton + reinstall + factory;
 
-    const photo = row.class
-      ? `<img class="device-photo" alt="" src="${API}/api/device-image/${encodeURIComponent(row.class)}" onerror="this.remove()">`
+    // Class photos come straight from the resident (img display is
+    // not CORS-gated); one URL per class, fetched once, cached.
+    const photoUrl = row.class ? Store.state.photos.get(row.class) : null;
+    if (row.class && !photoUrl) fetchPhoto(row.class);
+    const photo = photoUrl
+      ? `<img class="device-photo" alt="" src="${escapeHtml(photoUrl)}">`
       : "";
 
     return `
@@ -156,48 +216,23 @@
       </article>`;
   }
 
-  async function pollStatus() {
-    try {
-      const d = await getJSON("/api/status");
-      online = true;
-      const devices = d.devices ?? [];
-      const roster = new Map((d.roster ?? []).map((i) => [i.device_id, i]));
-      el.state_word.textContent = paused ? "Paused" : "Running";
-      el.state_facts.innerHTML =
-        `<b>${devices.length}</b> face${devices.length === 1 ? "" : "s"} on the roster`;
-      el.status_count.textContent = `${devices.length} device${devices.length === 1 ? "" : "s"}`;
-      el.device_list.innerHTML = devices.map((row) =>
-        deviceCard(row, roster.get(row.device_id ?? ""))).join("")
-        || '<div class="empty">No faces on the bench — plug one in (data cable, not charge-only).</div>';
-      renderWheel();
-    } catch (e) {
-      online = false;
-      el.state_word.textContent = "Stopped";
-      el.state_facts.textContent = "the Resident is not running";
-      el.wheel.disabled = true;
-    }
-    renderService();
+  function fetchPhoto(classId) {
+    if (photoFetching.has(classId)) return;
+    photoFetching.add(classId);
+    Store.putPhoto(classId, `${API}/api/device-image/${encodeURIComponent(classId)}`);
+    photoFetching.delete(classId);
   }
 
-  function renderService() {
-    el.service.disabled = false;
-    el.service.textContent = online ? "Stop service" : "Start service";
+  function renderStatus() {
+    const devices = sortedDevices();
+    el.status_count.textContent = plural(devices.length, "device");
+    el.device_list.innerHTML = devices.map(deviceCard).join("")
+      || (Store.state.stream === "connecting"
+        ? '<div class="empty">Waiting for the house to speak\u2026</div>'
+        : '<div class="empty">No faces on the bench — plug one in (data cable, not charge-only).</div>');
   }
 
-  el.service?.addEventListener("click", async () => {
-    el.service.disabled = true;
-    try {
-      if (online) {
-        await call("POST", "/api/shutdown", {});
-      } else {
-        await window.__TAURI__.core.invoke("start_resident");
-      }
-    } catch (e) {
-      toast(`the house did not answer: ${e.message ?? e}`);
-    }
-  });
-
-  el.device_list?.addEventListener("click", async (event) => {
+  el.device_list.addEventListener("click", async (event) => {
     const button = event.target.closest("button[data-action]");
     if (!button || button.disabled) return;
     const card = button.closest(".device-card");
@@ -215,7 +250,6 @@
       );
       if (ok) {
         installing.add(port);
-        pollStatus();
         await postOrToast(`/api/maintenance/${port}`, { kind: "install" });
       }
     } else if (action === "factory") {
@@ -231,89 +265,57 @@
     }
   });
 
-  async function postOrToast(path, body) {
-    try {
-      const r = await call("POST", path, body);
-      const d = r.json();
-      if (!r.ok) toast(d.error ?? `${path} failed`);
-      return d;
-    } catch (e) {
-      toast(`the house did not answer: ${e.message}`);
-      return {};
+  // ── log: the journal, newest first ───────────────────────────────
+  function renderLog() {
+    const lines = Store.journalLines();
+    el.log_count.textContent = plural(lines.length, "line");
+    el.log_stream.innerHTML = lines.map((l) =>
+      `<div class="stream-row"><span class="row-when">${escapeHtml(l.ts.slice(11))}</span>`
+      + `<span class="row-domain">${escapeHtml(l.domain)}</span>`
+      + `<span class="row-text">${escapeHtml(l.text)}</span></div>`).join("")
+      || '<div class="empty">Nothing has happened yet. Say something.</div>';
+  }
+
+  // ── media: frames read from the store, never commanded ───────────
+  function renderMedia() {
+    const devices = sortedDevices();
+    el.media_grid.innerHTML = devices.map(mediaPane).join("")
+      || '<div class="empty">No faces to watch.</div>';
+    const recording = [...Store.state.jobs.values()]
+      .filter((j) => j.kind === "record" && j.state === "recording");
+    el.media_note.hidden = recording.length === 0;
+    if (recording.length) {
+      el.media_note.textContent =
+        `Recording ${recording.map((j) => `${j.target}: ${j.index}/${j.total} frames`).join(", ")}`
+        + " \u2014 the panes show the frames the GIF is taking.";
     }
   }
 
-  // ── log ─────────────────────────────────────────────────────────
-  function appendLogLine(domain, text, at) {
-    if (activeView !== "log") return;
-    const row = document.createElement("div");
-    row.className = "stream-row";
-    row.innerHTML = `<span class="row-when">${escapeHtml((at ?? "").slice(11))}</span>`
-      + `<span class="row-domain">${escapeHtml(domain)}</span>`
-      + `<span class="row-text">${escapeHtml(text)}</span>`;
-    el.log_stream.prepend(row);
-  }
-
-  async function pollLog() {
-    try {
-      const lines = await getJSON("/api/log");
-      el.log_count.textContent = `${lines.length} line${lines.length === 1 ? "" : "s"}`;
-      el.log_stream.innerHTML = lines.map((l) =>
-        `<div class="stream-row"><span class="row-when">${escapeHtml(l.ts.slice(11))}</span>`
-        + `<span class="row-domain">${escapeHtml(l.domain)}</span>`
-        + `<span class="row-text">${escapeHtml(l.text)}</span></div>`).join("")
-        || '<div class="empty">Nothing has happened yet. Say something.</div>';
-    } catch { /* offline: status already said so */ }
-  }
-
-  // ── media ───────────────────────────────────────────────────────
-  async function startMedia() {
-    stopMedia();
-    let d;
-    try { d = await getJSON("/api/status"); } catch { return; }
-    const ports = (d.devices ?? []).map((row) => row.port);
-    el.media_grid.innerHTML = ports.map((port) => `
-      <article class="media-pane" data-port="${escapeHtml(port)}">
+  function mediaPane(row) {
+    const frame = Store.state.frames.get(row.port);
+    const img = frame
+      ? `<img class="media-frame" alt="live frame from ${escapeHtml(row.port)}" src="${frame.png}">`
+      : '<span class="media-frame" aria-hidden="true"></span>';
+    const age = frame
+      ? `frame ${new Date(frame.at).toLocaleTimeString()}`
+      : row.streaming
+        ? "waiting for the first blink\u2026"
+        : "the face is not on the stream";
+    return `
+      <article class="media-pane" data-port="${escapeHtml(row.port)}">
         <div class="device-head">
-          <span class="chip on"><span class="dot"></span>${escapeHtml(port)}</span>
-          <span class="media-age" id="age-${escapeHtml(port)}"></span>
+          <span class="chip ${row.streaming ? "on" : ""}"><span class="dot"></span>${escapeHtml(row.port)}</span>
+          <span class="media-age">${escapeHtml(age)}</span>
         </div>
-        <img class="media-frame" id="frame-${escapeHtml(port)}" alt="live frame from ${escapeHtml(port)}">
+        ${img}
         <div class="device-actions">
           <button class="ghost-button" data-maction="shot">Screenshot</button>
           <button class="ghost-button" data-maction="record">Record 4s</button>
         </div>
-      </article>`).join("")
-      || '<div class="empty">No faces to watch.</div>';
-
-    const tick = async () => {
-      for (const port of ports) {
-        const img = document.getElementById(`frame-${port}`);
-        if (!img) continue;
-        // <img> display is not CORS-gated: the shot loads straight from
-      // the resident, and onload/onerror say which happened.
-      const age = document.getElementById(`age-${port}`);
-      img.onload = () => { if (age) age.textContent = `frame ${new Date().toLocaleTimeString()}`; };
-      img.onerror = () => { if (age) age.textContent = "no shot — unreachable"; };
-      img.src = `${API}/api/shot/${port}.png?scale=1&t=${Date.now()}`;
-      }
-      const rec = document.getElementById("media-note");
-      try {
-        const statuses = await Promise.all(ports.map((p) => getJSON(`/api/record/${p}`)));
-        const running = statuses.filter((s) => s.phase === "recording");
-        rec.hidden = running.length === 0;
-        rec.textContent = `Recording ${running.map((s) => s.frames + " frames").join(", ")} — the panes show the frames the GIF is taking.`;
-      } catch { rec.hidden = true; }
-    };
-    await tick();
-    mediaTimer = setInterval(tick, 1200);
+      </article>`;
   }
 
-  function stopMedia() {
-    if (mediaTimer) { clearInterval(mediaTimer); mediaTimer = null; }
-  }
-
-  el.media_grid?.addEventListener("click", async (event) => {
+  el.media_grid.addEventListener("click", async (event) => {
     const button = event.target.closest("button[data-maction]");
     if (!button) return;
     const port = button.closest(".media-pane")?.dataset.port;
@@ -322,54 +324,58 @@
       const d = await postOrToast(`/api/capture/${port}/save`, {});
       if (d.saved) toast(`saved ${d.saved}`);
     } else {
-      await postOrToast(`/api/record/${port}`, { secs: 4, fps: 3 });
-      toast(`${port}: recording — the pane shows what the GIF takes`);
+      const d = await postOrToast(`/api/record/${port}`, { secs: 4, fps: 3 });
+      if (d.started) toast(`${port}: recording — the pane shows what the GIF takes`);
     }
   });
 
-  // ── about ───────────────────────────────────────────────────────
-  async function renderAbout() {
-    try {
-      const d = await getJSON("/api/status");
-      el.card_version.textContent = (d.resident?.version ?? "0.1").split(".").slice(0, 2).join(".");
-      const faces = (d.devices ?? []).length;
-      const facts = [
-        ["Version", d.resident?.version ?? "unknown"],
-        ["Faces", `${faces} connected`],
-        ["Resident", paused ? "paused" : "running"],
-        ["License", "MIT"],
-      ];
-      el.about_facts.innerHTML = facts
-        .map(([t, v]) => `<dt>${escapeHtml(t)}</dt><dd>${escapeHtml(v)}</dd>`).join("");
-    } catch {
-      el.about_facts.innerHTML = "<dt>Resident</dt><dd>offline</dd>";
+  // ── about: the published card ────────────────────────────────────
+  function renderAbout() {
+    const { service, devices } = Store.state;
+    el.card_version.textContent = (service.version ?? "0.1").split(".").slice(0, 2).join(".");
+    const facts = [
+      ["Version", service.version ?? "unknown"],
+      ["Faces", `${devices.size} connected`],
+      ["Resident", service.paused ? "paused" : "running"],
+      ["License", "MIT"],
+    ];
+    el.about_facts.innerHTML = facts
+      .map(([t, v]) => `<dt>${escapeHtml(t)}</dt><dd>${escapeHtml(v)}</dd>`).join("");
+    renderLinks();
+  }
+
+  function renderLinks() {
+    const groups = Store.state.links;
+    if (!groups) return;
+    const byGroup = new Map();
+    for (const g of groups) {
+      if (!byGroup.has(g.group)) byGroup.set(g.group, []);
+      byGroup.get(g.group).push(g);
     }
+    el.about_links.innerHTML = [...byGroup.entries()].map(([group, items]) =>
+      `<section class="about-group"><h2>${escapeHtml(group)}</h2><div>${
+        items.map((g) =>
+          `<button class="about-link" type="button" data-url="${escapeHtml(g.url)}">`
+          + `<span class="about-link-title">${escapeHtml(g.title)}</span>`
+          + `<span class="about-link-blurb">${escapeHtml(g.blurb)}</span></button>`).join("")
+      }</div></section>`).join("");
+  }
+
+  async function fetchLinks() {
     try {
-      const groups = await getJSON("/api/destinations");
-      const byGroup = new Map();
-      for (const g of groups) {
-        if (!byGroup.has(g.group)) byGroup.set(g.group, []);
-        byGroup.get(g.group).push(g);
-      }
-      el.about_links.innerHTML = [...byGroup.entries()].map(([group, items]) =>
-        `<section class="about-group"><h2>${escapeHtml(group)}</h2><div>${
-          items.map((g) =>
-            `<button class="about-link" type="button" data-url="${escapeHtml(g.url)}">`
-            + `<span class="about-link-title">${escapeHtml(g.title)}</span>`
-            + `<span class="about-link-blurb">${escapeHtml(g.blurb)}</span></button>`).join("")
-        }</div></section>`).join("");
+      Store.putLinks(await getJSON("/api/destinations"));
     } catch { /* the card alone is enough when the house sleeps */ }
   }
 
-  el.about_links?.addEventListener("click", (event) => {
+  el.about_links.addEventListener("click", (event) => {
     const button = event.target.closest("button.about-link");
     if (!button) return;
-    window.__TAURI__?.core?.invoke("open_destination", { url: button.dataset.url })
+    tauri?.core?.invoke("open_destination", { url: button.dataset.url })
       ?.catch((e) => toast(`refused: ${e}`));
   });
 
-  // ── confirm dialog ──────────────────────────────────────────────
-  el.confirm_dialog?.addEventListener("click", (event) => {
+  // ── confirm dialog ───────────────────────────────────────────────
+  el.confirm_dialog.addEventListener("click", (event) => {
     const answer = event.target.dataset?.confirm;
     if (!answer) return;
     el.confirm_dialog.hidden = true;
@@ -377,42 +383,31 @@
     confirmResolve = null;
   });
 
-  // ── the pulse ───────────────────────────────────────────────────
-  // The live wire: the house's facts arrive as they happen, and the
-  // roster re-renders within a beat of each one.
-  let pollQueued = false;
-  // The announcement pipeline: one stream, routed by type. Roster
-  // facts refresh the cards; rings and saga steps flow to the Log.
-  const ROSTER_EVENTS = new Set([
-    "device_minded", "device_released", "device_homecoming",
-    "individual_held", "admission_report", "stream_attached",
-    "stream_detached", "maintenance_started", "maintenance_step",
-    "maintenance_completed",
-  ]);
-  if (window.__TAURI__?.event?.listen) {
-    window.__TAURI__.event.listen("house", (e) => {
-      let msg;
-      try { msg = JSON.parse(e.payload); } catch { return; }
-      if (ROSTER_EVENTS.has(msg.type) && !pollQueued) {
-        pollQueued = true;
-        setTimeout(() => { pollQueued = false; pollStatus(); }, 150);
-      }
-      if (activeView === "log" && msg.text) {
-        appendLogLine(msg.domain, msg.text, msg.at);
-      }
-    });
+  // ── the store → the views ────────────────────────────────────────
+  const SLICE_ROUTES = {
+    status: ["devices", "roster", "jobs", "photos", "stream", "service"],
+    log: ["journal"],
+    media: ["frames", "jobs", "devices", "stream", "service"],
+    about: ["service", "devices", "links", "stream"],
+  };
+
+  function renderView() {
+    if (activeView === "status") renderStatus();
+    else if (activeView === "log") renderLog();
+    else if (activeView === "media") renderMedia();
+    else if (activeView === "about") renderAbout();
   }
 
-  await pollStatus();
-  await renderAbout();
-  renderWheel();
-  setInterval(pollStatus, 10000); // the safety net; announcements do the work
-  setInterval(() => { if (activeView === "log") pollLog(); }, 10000);
-  document.addEventListener("visibilitychange", () => {
-    if (document.hidden) stopMedia();
-    else if (activeView === "media") startMedia();
+  Store.subscribe((slices) => {
+    renderChrome();
+    const routes = SLICE_ROUTES[activeView] ?? [];
+    if (slices.some((s) => routes.includes(s))) renderView();
   });
 
+  // ── first paint: the truth arrives on the wire ───────────────────
+  setView("status");
+  fetchLinks();
+
   // the surface is up: let the shell show it
-  window.__TAURI__?.core?.invoke("ready")?.catch?.(() => {});
+  tauri?.core?.invoke("ready")?.catch?.(() => {});
 })();

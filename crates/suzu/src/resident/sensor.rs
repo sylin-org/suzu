@@ -109,7 +109,7 @@ impl Sensor {
                         // the sensor: the house hears why and the
                         // next tick tries again.
                         let _ = self.events.send(HouseEvent::Degraded {
-                            domain: "sensor".into(),
+                            domain: "sensor",
                             reason: "capture panicked — cycle skipped, retrying".into(),
                         });
                         tokio::time::sleep(FAST_TICK).await;

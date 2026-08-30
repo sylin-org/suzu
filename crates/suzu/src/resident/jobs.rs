@@ -76,37 +76,12 @@ impl Jobs {
     /// Mutate a job through the registry; the announcement goes out
     /// after the mutation lands.
     pub fn with<F: FnOnce(&mut Job)>(&self, id: &str, f: F) {
-        if let Some(shared) = self.map.lock().expect("jobs lock").get(id) {
-            if let Ok(mut job) = shared.lock() {
+        if let Some(shared) = self.map.lock().expect("jobs lock").get(id)
+            && let Ok(mut job) = shared.lock() {
                 f(&mut job);
                 let snapshot = job.clone();
                 let _ = self.events.send(HouseEvent::Job { job: snapshot });
             }
-        }
-    }
-
-    pub fn get(&self, id: &str) -> Option<Job> {
-        self.map
-            .lock()
-            .expect("jobs lock")
-            .get(id)
-            .and_then(|j| j.lock().ok())
-            .map(|j| j.clone())
-    }
-
-    /// The most recent job of a kind for a target (the media page's
-    /// record state, for instance).
-    pub fn latest(&self, target: &str, kind: &str) -> Option<Job> {
-        let map = self.map.lock().expect("jobs lock");
-        let order = self.order.lock().expect("jobs order lock");
-        for id in order.iter().rev() {
-            if let Some(job) = map.get(id).and_then(|j| j.lock().ok()) {
-                if job.target == target && job.kind == kind {
-                    return Some(job.clone());
-                }
-            }
-        }
-        None
     }
 
     /// Every job, whole — the snapshot fact's slice (ADR-0004).

@@ -108,8 +108,8 @@ fn house_line(ev: &HouseEvent, journal: &Journal) {
     if text.is_empty() {
         return; // the fast lane is data, not news
     }
-    line(&domain, &text);
-    journal.record(&domain, &text);
+    line(domain, &text);
+    journal.record(domain, &text);
 }
 
 /// The house's facts, in the house's voice — one formatting, shared by
@@ -387,7 +387,7 @@ fn process_roster_event(
     match ev {
         HouseEvent::DeviceMinded { port, device_id: Some(id), class, .. } => {
             let changed = r.hold(&id, &port, class.as_deref(), &now).is_ok();
-            let derived = changed.then(|| HouseEvent::IndividualHeld { device_id: id, port, class });
+            let derived = changed.then_some(HouseEvent::IndividualHeld { device_id: id, port, class });
             (derived, changed)
         }
         HouseEvent::AdmissionReport { device_id, port, passed, steps } => {

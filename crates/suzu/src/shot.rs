@@ -384,10 +384,6 @@ pub fn record_first(
     bail!("no face answered the shot request — nothing to record")
 }
 
-/// PNG writer, no dependencies: 8-bit truecolor, stored-deflate IDAT.
-/// `px` is one RGB triple per pixel, `w` x `h`, at scale 1 (the
-/// caller upscales first — `render_png_bytes` is the usual front).
-
 /// PNG encoder, no dependencies: 8-bit truecolor, stored-deflate IDAT.
 /// `px` is one RGB triple per pixel, `w` x `h`, at scale 1 (the
 /// caller upscales first — `render_png_bytes` is the usual front).

@@ -84,7 +84,6 @@ async fn api(
     path: String,
     body: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    use std::io::{Read, Write};
     if !path.starts_with("/api/") || path.contains("..") {
         return Err("refused: only /api/ paths on the Resident".into());
     }
@@ -124,11 +123,40 @@ fn http_call(
     Ok((status, body))
 }
 
+/// The door probe (ADR-0004): can somebody be reached on 7899?
+fn door_is_owned() -> bool {
+    use std::net::SocketAddr;
+    let addr: SocketAddr = format!("127.0.0.1:{PORT_NUM}").parse().expect("loopback addr");
+    std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(300)).is_ok()
+}
+
+/// Wait for the door to open — a freshly spawned resident binds it
+/// before it touches any serial port, so an open door means the house
+/// (or a stranger) lives.
+fn wait_for_door(timeout: std::time::Duration) -> bool {
+    let deadline = std::time::Instant::now() + timeout;
+    while std::time::Instant::now() < deadline {
+        if door_is_owned() {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+    false
+}
+
+const PORT_NUM: u16 = 7899;
+
 /// Bring the Resident up, beside this workbench, detached: it keeps
-/// running if the window closes. The repo root is derived from the
-/// binary's own location (target/debug -> the project root).
+/// running if the window closes. The door is probed first (ADR-0004):
+/// if the house already lives, the spawn is refused loudly — a second
+/// suzu.exe would bind nothing and live doorless, a zombie. The repo
+/// root is derived from the binary's own location (target/debug -> the
+/// project root).
 #[tauri::command]
 async fn start_resident() -> Result<String, String> {
+    if door_is_owned() {
+        return Err("refused: the house already lives — 127.0.0.1:7899 is owned by a running resident".into());
+    }
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let dir = exe.parent().ok_or("no exe directory")?.to_path_buf();
     let suzu = dir.join("suzu.exe");
@@ -142,7 +170,7 @@ async fn start_resident() -> Result<String, String> {
         .filter(|p| p.join("hardware/classes").exists())
         .ok_or("the project root was not found above the workbench binary")?;
 
-    tauri::async_runtime::spawn_blocking(move || {
+    let pid: u32 = tauri::async_runtime::spawn_blocking(move || -> Result<u32, String> {
         use std::process::{Command, Stdio};
         let log = std::fs::OpenOptions::new().create(true).append(true)
             .open(repo.join("serve.log")).map_err(|e| e.to_string())?;
@@ -159,38 +187,86 @@ async fn start_resident() -> Result<String, String> {
             cmd.creation_flags(CREATE_NO_WINDOW);
         }
         let child = cmd.spawn().map_err(|e| e.to_string())?;
-        Ok(format!("pid {}", child.id()))
-    }).await.map_err(|e| format!("worker: {e}"))?
+        Ok(child.id())
+    }).await.map_err(|e| format!("worker: {e}"))??;
+
+    // The claim is only proven once the door opens; the resident binds
+    // before it minds any port, so this wait is bounded and honest.
+    if wait_for_door(std::time::Duration::from_secs(10)) {
+        Ok(format!("the resident lives — pid {pid}"))
+    } else {
+        Err(format!(
+            "the resident (pid {pid}) did not open the door within 10 s — see serve.err.log"
+        ))
+    }
 }
 
-/// Ask the Resident to rest: a graceful shutdown, ports released, the
-/// faces fall to their gardens.
+/// Ask the Resident to rest, then *verify* (ADR-0004): the shutdown
+/// door is asked, and the port is polled until it is actually free.
+/// The truth either way — a door that will not close is reported, not
+/// pretended.
 #[tauri::command]
 async fn stop_resident() -> Result<serde_json::Value, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        http_call("POST", "/api/shutdown", &None)
-    }).await.map_err(|e| format!("worker: {e}"))?
-    .and_then(|(status, body)| {
-        if status == 200 { Ok(serde_json::json!({ "stopping": true })) }
-        else { Err(body) }
+        if !door_is_owned() {
+            return Ok(serde_json::json!({ "stopped": true, "was": "already down" }));
+        }
+        match http_call("POST", "/api/shutdown", &None) {
+            Ok((200, _)) => {}
+            Ok((status, body)) => {
+                return Ok(serde_json::json!({
+                    "stopped": false,
+                    "reason": format!("the shutdown door answered {status}: {body}"),
+                }));
+            }
+            Err(e) => {
+                return Ok(serde_json::json!({
+                    "stopped": false,
+                    "reason": format!("the shutdown door did not answer: {e}"),
+                }));
+            }
+        }
+        // The resident exits after answering; give the port a moment
+        // to actually free, and report what is true when it does not.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
+            if !door_is_owned() {
+                return Ok(serde_json::json!({ "stopped": true }));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+        Ok(serde_json::json!({
+            "stopped": false,
+            "reason": "the shutdown door answered, but 127.0.0.1:7899 is still held",
+        }))
     })
+    .await
+    .map_err(|e| format!("worker: {e}"))?
 }
 
 /// The live wire: hold one SSE connection to the Resident and republish
-/// every fact as a Tauri event, so the workbench's roster moves with
-/// the house instead of polling it.
+/// every frame as a Tauri event, so the workbench's store moves with
+/// the house instead of polling it. The wire speaks typed lanes
+/// (`snapshot` · `fact` · `journal`); the health of the connection is
+/// itself an event, because "connected" is state the store keeps
+/// (ADR-0004). Reconnects are the server's business: every new
+/// connection opens with a fresh snapshot, so nothing appends twice.
 fn spawn_house_events(app: tauri::AppHandle) {
     std::thread::spawn(move || loop {
         let ok = (|| -> std::io::Result<()> {
             use std::io::{Read, Write};
-            let mut stream = std::net::TcpStream::connect(RESIDENT)?;
-            stream.set_read_timeout(Some(std::time::Duration::from_secs(3600)))
-                .ok();
+            use std::net::SocketAddr;
+            let addr: SocketAddr = format!("127.0.0.1:{PORT_NUM}").parse().expect("loopback addr");
+            let mut stream = std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(2))?;
+            // The house pings every 10 s; 15 s of silence means the
+            // connection is a corpse — hang up and try again.
+            stream.set_read_timeout(Some(std::time::Duration::from_secs(15))).ok();
             stream.write_all(
-                format!("GET /api/events HTTP/1.1\r\nhost: {RESIDENT}\r\nconnection: close\r\n\r\n")
+                format!("GET /api/events HTTP/1.1\r\nhost: {RESIDENT}\r\naccept: text/event-stream\r\nconnection: close\r\n\r\n")
                     .as_bytes(),
             )?;
             stream.flush()?;
+            let _ = app.emit("house-health", "connected");
             let mut buf: Vec<u8> = Vec::new();
             let mut chunk = [0u8; 1024];
             loop {
@@ -199,22 +275,28 @@ fn spawn_house_events(app: tauri::AppHandle) {
                     Ok(n) => buf.extend_from_slice(&chunk[..n]),
                     Err(_) => break,
                 }
+                // One SSE frame = optional `event:` line + `data:` line,
+                // closed by a blank line. Comments (`: ping`) are dropped;
+                // the type tag rides inside the JSON.
                 while let Some(pos) = buf.windows(2).position(|w| w == b"\n\n") {
                     let frame: Vec<u8> = buf.drain(..pos + 2).collect();
                     let text = String::from_utf8_lossy(&frame);
-                    if let Some(payload) = text
-                        .strip_prefix("data: ")
-                        .map(str::trim_end)
-                        .map(str::to_string)
-                    {
-                        let _ = app.emit("house", payload);
+                    let mut payload = None;
+                    for line in text.lines() {
+                        if let Some(rest) = line.strip_prefix("data: ") {
+                            payload = Some(rest.trim_end().to_string());
+                        }
+                    }
+                    if let Some(data) = payload {
+                        let _ = app.emit("house", data);
                     }
                 }
             }
             Ok(())
         })();
         let _ = ok; // the Resident may be down; we keep trying
-        std::thread::sleep(std::time::Duration::from_secs(3));
+        let _ = app.emit("house-health", "reconnecting");
+        std::thread::sleep(std::time::Duration::from_secs(2));
     });
 }
 

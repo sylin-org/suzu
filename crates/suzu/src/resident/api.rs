@@ -181,7 +181,7 @@ async fn serve_one(mut stream: TcpStream, ctx: Arc<Ctx>) -> Result<()> {
         }
         body.extend_from_slice(&chunk[..n]);
     }
-    let body = String::from_utf8_lossy(&body[..body.len().min(content_length.max(0))]).to_string();
+    let body = String::from_utf8_lossy(&body[..body.len().min(content_length)]).to_string();
 
     if path == "/api/events" && method == "GET" {
         return events_stream(ctx, stream).await;
@@ -199,7 +199,7 @@ async fn serve_one(mut stream: TcpStream, ctx: Arc<Ctx>) -> Result<()> {
             ),
         );
     }
-    write_response(&mut stream, status, &content_type, payload).await?;
+    write_response(&mut stream, status, content_type, payload).await?;
     if path == "/api/shutdown" && method == "POST" {
         println!("[api] shutdown requested — the resident rests");
         let _ = std::io::Write::flush(&mut std::io::stdout());

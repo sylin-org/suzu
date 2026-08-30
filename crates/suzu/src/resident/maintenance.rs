@@ -96,7 +96,8 @@ pub fn run(
     events: &Sender<HouseEvent>,
     device_id: &str,
 ) -> Result<()> {
-    let (total, runner): (u32, fn(&mut Saga, &str, &str, &Catalog) -> Result<()>) = match (class, kind)
+    type SagaRunner = fn(&mut Saga, &str, &str, &Catalog) -> Result<()>;
+    let (total, runner): (u32, SagaRunner) = match (class, kind)
     {
         (Some("waveshare-rp2040-matrix"), "install" | "adopt") => {
             // A board with no CircuitPython yet gets the full install:
@@ -135,19 +136,6 @@ pub fn run(
         }
     }
     outcome
-}
-
-// ── the shared hands ────────────────────────────────────────────────
-
-fn marco(events: &Sender<HouseEvent>, device_id: &str, name: &str, detail: String) {
-    let _ = events.send(HouseEvent::MaintenanceStep {
-        device_id: device_id.to_string(),
-        step: name.to_string(),
-        index: 0,
-        total: 0,
-        ok: true,
-        detail,
-    });
 }
 
 fn wait_for<F: Fn() -> bool>(secs: u64, what: &str, pred: F) -> Result<()> {
@@ -269,7 +257,6 @@ fn write_face_files(drive: &str, device_id: &str) -> Result<()> {
 /// CircuitPython with autoreload disabled does not reload on write —
 /// the face is told, politely, to start over (Ctrl-C ×2, Ctrl-D).
 fn force_reload(port: &str) -> Result<()> {
-    use serialport::SerialPort;
     let mut p = serialport::new(port, 115_200)
         .timeout(Duration::from_millis(300))
         .open()
@@ -327,11 +314,10 @@ fn push_face_files(port: &str, device_id: &str, fresh: bool) -> Result<String> {
 
 fn rp2040_port() -> Result<String> {
     for e in crate::enumerate() {
-        if let Some(usb) = &e.usb {
-            if usb.vid == 0x239a || usb.vid == 0x2e8a {
+        if let Some(usb) = &e.usb
+            && (usb.vid == 0x239a || usb.vid == 0x2e8a) {
                 return Ok(e.name);
             }
-        }
     }
     bail!("no RP2040 CDC port — replug the device")
 }

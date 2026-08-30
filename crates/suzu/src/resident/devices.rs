@@ -20,7 +20,7 @@ use super::events::{DeviceFacts, DeviceRow, FrameFacts, HouseEvent};
 use super::jobs::{Job, Jobs};
 use super::roster::Roster;
 use super::sensor::MachineReport;
-use crate::catalog::{Catalog, FrameSpec};
+use crate::catalog::{Catalog, DisplayZones, FrameSpec};
 use serde::Serialize;
 use serialport::SerialPort;
 use std::collections::BTreeMap;
@@ -147,15 +147,13 @@ pub enum DevicesCmd {
     MaintenanceStart { port: String, kind: String, reply: mpsc::Sender<anyhow::Result<()>> },
     /// The saga's own end — it loops back through the door so the
     /// devices domain (which owns the sessions) respawns the face.
+    /// The saga's task re-identifies off-loop and its facts ride in.
     MaintenanceFinished {
         port: String,
         device_id: String,
         ok: bool,
         fresh: Option<DeviceFacts>,
     },
-    /// A finished saga's session, re-identified off-loop (the
-    /// identification ladder blocks), handed back through the door.
-    SessionRespawn { port: String, facts: DeviceFacts },
 }
 
 pub struct Devices {
@@ -264,9 +262,6 @@ impl Devices {
                         DevicesCmd::MaintenanceFinished { port, device_id, ok, fresh } => {
                             self.maintenance_finish(&port, &device_id, ok, fresh).await;
                         }
-                        DevicesCmd::SessionRespawn { port, facts } => {
-                            self.session_respawn(&port, facts);
-                        }
                     }
                 }
                 ev = bus.recv() => {
@@ -311,7 +306,7 @@ impl Devices {
         class == Some("esp8266-oled-v2-class")
     }
 
-    fn frame_law_of(&self, facts: &DeviceFacts) -> (Option<FrameSpec>, Vec<(usize, usize, [u8; 3])>) {
+    fn frame_law_of(&self, facts: &DeviceFacts) -> (Option<FrameSpec>, crate::catalog::DisplayZones) {
         let class_id = facts
             .device_id
             .as_deref()
@@ -576,11 +571,10 @@ impl Devices {
                 continue;
             }
             consumers += 1;
-            if let Err(e) = outbound.try_send(SessionMsg::Out(Outbound::Pulse { axis: axis.to_string(), value })) {
-                if matches!(e, std_mpsc::TrySendError::Disconnected(_)) {
+            if let Err(e) = outbound.try_send(SessionMsg::Out(Outbound::Pulse { axis: axis.to_string(), value }))
+                && matches!(e, std_mpsc::TrySendError::Disconnected(_)) {
                     dead.push(device.facts.port.clone());
                 }
-            }
         }
         for port in dead {
             println!("[devices] {port}: consumer died — disposing");
@@ -921,7 +915,7 @@ fn session_thread(
     streaming: Arc<AtomicBool>,
     suzu: bool,
     spec: Option<FrameSpec>,
-    zones: Vec<(usize, usize, [u8; 3])>,
+    zones: DisplayZones,
     events: Sender<HouseEvent>,
     jobs: Arc<Jobs>,
     device_id: Option<String>,
@@ -993,9 +987,8 @@ fn write_line_twice(
         return Ok(());
     }
     std::thread::sleep(Duration::from_millis(1500));
-    write_line(serial, frame).map_err(|e| {
+    write_line(serial, frame).inspect_err(|_| {
         println!("[sessions] {port}: write failed twice — disposing");
-        e
     })
 }
 
@@ -1028,7 +1021,7 @@ fn session_loop(
     suzu: bool,
     port: &str,
     spec: Option<FrameSpec>,
-    zones: Vec<(usize, usize, [u8; 3])>,
+    zones: DisplayZones,
     events: &Sender<HouseEvent>,
     jobs: &Jobs,
     device_id: Option<String>,
@@ -1120,11 +1113,10 @@ fn session_loop(
         // can never interleave on the port).
         if now >= next_frame {
             next_frame = now + FRAME_PERIOD;
-            if suzu && streaming.load(Ordering::Relaxed) {
-                if let Some(spec) = &spec {
+            if suzu && streaming.load(Ordering::Relaxed)
+                && let Some(spec) = &spec {
                     frame_blink(serial, port, spec, &zones, events);
                 }
-            }
         }
         // Keepalive: only while the stream flows (see FRAME_PERIOD note).
         if now.duration_since(last_keepalive) >= KEEPALIVE_PERIOD {
@@ -1142,6 +1134,7 @@ fn session_loop(
 /// frames the GIF takes are the frames the wire carries), and assemble
 /// the GIF into the captures folder when the run ends. The registry is
 /// the record: progress and verdict travel as Job facts.
+#[allow(clippy::too_many_arguments)] // the session's hands, all needed
 fn record_job(
     serial: &mut Box<dyn SerialPort>,
     port: &str,
@@ -1179,28 +1172,25 @@ fn record_job(
     while Instant::now() < end {
         next_at += period;
         match crate::shot::capture_on(serial, spec.size) {
-            Ok(frame) => match crate::shot::render_view(spec, zones, &frame) {
-                Ok((w, h, rgba)) => {
-                    let scale = spec.render.as_ref().map(|r| r.scale).unwrap_or(1).max(1);
-                    let scaled = scale_rgba(&rgba, w, h, scale);
-                    let png = {
-                        let rgb: Vec<[u8; 3]> =
-                            scaled.chunks_exact(4).map(|p| [p[0], p[1], p[2]]).collect();
-                        crate::shot::png_bytes(w * scale, h * scale, &rgb, 1).unwrap_or_default()
-                    };
-                    vw = w * scale;
-                    vh = h * scale;
-                    rgba_frames.push(scaled);
-                    let frames = rgba_frames.len() as u32;
-                    let _ = events.send(HouseEvent::Frame {
-                        port: port.to_string(),
-                        png: crate::shot::encode_b64(&png),
-                    });
-                    jobs.with(job_id, |j| {
-                        j.index = frames;
-                    });
-                }
-                Err(_) => {}
+            Ok(frame) => if let Ok((w, h, rgba)) = crate::shot::render_view(spec, zones, &frame) {
+                let scale = spec.render.as_ref().map(|r| r.scale).unwrap_or(1).max(1);
+                let scaled = scale_rgba(&rgba, w, h, scale);
+                let png = {
+                    let rgb: Vec<[u8; 3]> =
+                        scaled.chunks_exact(4).map(|p| [p[0], p[1], p[2]]).collect();
+                    crate::shot::png_bytes(w * scale, h * scale, &rgb, 1).unwrap_or_default()
+                };
+                vw = w * scale;
+                vh = h * scale;
+                rgba_frames.push(scaled);
+                let frames = rgba_frames.len() as u32;
+                let _ = events.send(HouseEvent::Frame {
+                    port: port.to_string(),
+                    png: crate::shot::encode_b64(&png),
+                });
+                jobs.with(job_id, |j| {
+                    j.index = frames;
+                });
             },
             Err(_) => {
                 quiet = true;
