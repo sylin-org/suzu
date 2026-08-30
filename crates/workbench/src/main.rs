@@ -1,8 +1,10 @@
 //! Suzu's desktop workbench: the keeper's window onto the Resident.
 //!
 //! The house rules it follows (ADR-0002): the Resident is the single
-//! writer — this shell never touches a serial port, it renders what
-//! the loopback API answers and opens what the roster's record names.
+//! writer — this shell never touches a serial port. It is also the
+//! only speaker to the loopback API: the webview calls Tauri commands
+//! and the Rust side makes the HTTP call, so no browser CORS exists
+//! anywhere in the product and no stray webpage can drive devices.
 //! Visual language and desktop patterns are ported from the family
 //! (Ghostlight's workbench, koi-desktop's tray) and re-skinned with
 //! suzu's own gold.
@@ -11,9 +13,10 @@
 
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{Manager, WindowEvent};
+use tauri::{Emitter, Manager, WindowEvent};
 
 const MAIN_WINDOW: &str = "main";
+const RESIDENT: &str = "127.0.0.1:7899";
 
 /// Where the workbench may send a click. The closed vocabulary: a URL
 /// is only ever opened if it points at the product's own surfaces —
@@ -66,12 +69,88 @@ fn open_externally(target: &str) -> Result<(), String> {
     }
 }
 
+/// One HTTP round trip to the Resident, performed by the Rust side.
+/// The webview never speaks cross-origin HTTP — no CORS, no
+/// preflights, and no webpage can reach the Resident through us.
+#[tauri::command]
+fn api(method: String, path: String, body: Option<String>) -> Result<serde_json::Value, String> {
+    use std::io::{Read, Write};
+    use std::time::Duration;
+
+    if !path.starts_with("/api/") || path.contains("..") {
+        return Err("refused: only /api/ paths on the Resident".into());
+    }
+    let payload = body.unwrap_or_default();
+    let mut stream = std::net::TcpStream::connect(RESIDENT).map_err(|e| e.to_string())?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(30)))
+        .map_err(|e| e.to_string())?;
+    let request = format!(
+        "{method} {path} HTTP/1.1\r\nhost: {RESIDENT}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{payload}",
+        payload.len()
+    );
+    stream.write_all(request.as_bytes()).map_err(|e| e.to_string())?;
+    let mut buf = Vec::new();
+    stream.read_to_end(&mut buf).map_err(|e| e.to_string())?;
+    let text = String::from_utf8_lossy(&buf).to_string();
+    let status: u16 = text
+        .split_whitespace()
+        .nth(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    let body = text.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
+    Ok(serde_json::json!({ "status": status, "body": body }))
+}
+
+/// The live wire: hold one SSE connection to the Resident and republish
+/// every fact as a Tauri event, so the workbench's roster moves with
+/// the house instead of polling it.
+fn spawn_house_events(app: tauri::AppHandle) {
+    std::thread::spawn(move || loop {
+        let ok = (|| -> std::io::Result<()> {
+            use std::io::{Read, Write};
+            let mut stream = std::net::TcpStream::connect(RESIDENT)?;
+            stream.set_read_timeout(Some(std::time::Duration::from_secs(3600)))
+                .ok();
+            stream.write_all(
+                format!("GET /api/events HTTP/1.1\r\nhost: {RESIDENT}\r\nconnection: close\r\n\r\n")
+                    .as_bytes(),
+            )?;
+            stream.flush()?;
+            let mut buf: Vec<u8> = Vec::new();
+            let mut chunk = [0u8; 1024];
+            loop {
+                match stream.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                    Err(_) => break,
+                }
+                while let Some(pos) = buf.windows(2).position(|w| w == b"\n\n") {
+                    let frame: Vec<u8> = buf.drain(..pos + 2).collect();
+                    let text = String::from_utf8_lossy(&frame);
+                    if let Some(payload) = text
+                        .strip_prefix("data: ")
+                        .map(str::trim_end)
+                        .map(str::to_string)
+                    {
+                        let _ = app.emit("house", payload);
+                    }
+                }
+            }
+            Ok(())
+        })();
+        let _ = ok; // the Resident may be down; we keep trying
+        std::thread::sleep(std::time::Duration::from_secs(3));
+    });
+}
+
 fn main() {
     let start_minimized = std::env::args().any(|a| a == "--minimized");
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![ready, open_destination, reveal_path])
+        .invoke_handler(tauri::generate_handler![ready, open_destination, reveal_path, api])
         .setup(move |app| {
             build_tray(app)?;
+            spawn_house_events(app.handle().clone());
             // The window is configured but hidden: the surface shows
             // itself once the first render is up (`ready`), so the
             // keeper never sees an empty frame.

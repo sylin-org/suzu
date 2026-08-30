@@ -34,7 +34,7 @@ fn usb_of(p: &serialport::SerialPortInfo) -> Option<(u16, u16)> {
 /// One identification pass, blocking — run inside spawn_blocking.
 /// `Err(reason)` means the port could not be honestly read (busy,
 /// stale, or failing) — such ports are never minded.
-fn identify_facts(catalog: &Catalog, port: &str, vid: u16, pid: u16) -> Result<DeviceFacts, String> {
+pub fn identify_facts(catalog: &Catalog, port: &str, vid: u16, pid: u16) -> Result<DeviceFacts, String> {
     let t = probe::probe_transcript(port);
     if let Some(err) = &t.error {
         return Err(err.clone());

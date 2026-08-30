@@ -23,9 +23,19 @@
   const escapeHtml = (s) => String(s).replace(/[&<>"']/g,
     (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
+  // The Rust shell speaks to the Resident; the webview never makes a
+  // cross-origin request, so CORS does not exist in this product.
+  async function call(method, path, body) {
+    const r = await window.__TAURI__.core.invoke("api", { method, path, body: body ?? null });
+    return {
+      status: r.status,
+      ok: r.status > 0 && r.status < 400,
+      json() { try { return JSON.parse(r.body || "{}"); } catch { return {}; } },
+    };
+  }
   async function getJSON(path) {
-    const r = await fetch(API + path);
-    if (!r.ok) throw new Error(`${path}: ${r.status}`);
+    const r = await call("GET", path);
+    if (r.status !== 200) throw new Error(`${path}: ${r.status}`);
     return r.json();
   }
 
@@ -65,12 +75,8 @@
   el.wheel.addEventListener("click", async () => {
     const verb = paused ? "resume" : "pause";
     try {
-      const r = await fetch(`${API}/api/control`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ verb }),
-      });
-      if (!r.ok) throw new Error(await r.text());
+      const r = await call("POST", "/api/control", { verb });
+      if (!r.ok) throw new Error(r.json().error ?? r.status);
     } catch (e) {
       toast(`the house did not answer: ${e.message}`);
     }
@@ -197,12 +203,8 @@
 
   async function postOrToast(path, body) {
     try {
-      const r = await fetch(API + path, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const d = await r.json().catch(() => ({}));
+      const r = await call("POST", path, body);
+      const d = r.json();
       if (!r.ok) toast(d.error ?? `${path} failed`);
       return d;
     } catch (e) {
@@ -244,25 +246,16 @@
       </article>`).join("")
       || '<div class="empty">No faces to watch.</div>';
 
-    const mediaUrls = new Map(); // port → the blob URL in the <img>; the old one is revoked
-  const tick = async () => {
+    const tick = async () => {
       for (const port of ports) {
         const img = document.getElementById(`frame-${port}`);
         if (!img) continue;
-        try {
-          const r = await fetch(`${API}/api/shot/${port}.png`, { cache: "no-store" });
-          const age = document.getElementById(`age-${port}`);
-          if (r.ok) {
-            const url = URL.createObjectURL(await r.blob());
-            img.src = url;
-            const previous = mediaUrls.get(port);
-            if (previous) URL.revokeObjectURL(previous);
-            mediaUrls.set(port, url);
-            if (age) age.textContent = `frame ${new Date().toLocaleTimeString()}`;
-          } else if (age) {
-            age.textContent = "no shot — unreachable";
-          }
-        } catch { /* one miss is not a story */ }
+        // <img> display is not CORS-gated: the shot loads straight from
+      // the resident, and onload/onerror say which happened.
+      const age = document.getElementById(`age-${port}`);
+      img.onload = () => { if (age) age.textContent = `frame ${new Date().toLocaleTimeString()}`; };
+      img.onerror = () => { if (age) age.textContent = "no shot — unreachable"; };
+      img.src = `${API}/api/shot/${port}.png?t=${Date.now()}`;
       }
       const rec = document.getElementById("media-note");
       try {
@@ -347,15 +340,15 @@
   // ── the pulse ───────────────────────────────────────────────────
   // The live wire: the house's facts arrive as they happen, and the
   // roster re-renders within a beat of each one.
-  const es = new EventSource(`${API}/api/events`);
   let pollQueued = false;
-  es.onmessage = () => {
-    if (!pollQueued) {
-      pollQueued = true;
-      setTimeout(() => { pollQueued = false; pollStatus(); }, 150);
-    }
-  };
-  es.onerror = () => { /* the house is away; the status poll says so */ };
+  if (window.__TAURI__?.event?.listen) {
+    window.__TAURI__.event.listen("house", () => {
+      if (!pollQueued) {
+        pollQueued = true;
+        setTimeout(() => { pollQueued = false; pollStatus(); }, 150);
+      }
+    });
+  }
 
   await pollStatus();
   await renderAbout();

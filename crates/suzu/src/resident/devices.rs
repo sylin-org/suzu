@@ -764,9 +764,29 @@ impl Devices {
             d.streaming.store(false, Ordering::Relaxed);
         }
         if self.devices.contains_key(port) && !self.paused {
+            // The saga may have changed what the face speaks (adopt).
+            // Re-identify before respawning, so the session opens with
+            // the truth instead of the memory of it.
             let facts = self.devices[port].facts.clone();
-            println!("[maintenance] {port}: saga over — admission decides the stream");
-            self.spawn_session(&facts);
+            let catalog = Arc::clone(&self.catalog);
+            let port2 = port.to_string();
+            let fresh = tokio::task::spawn_blocking(move || {
+                super::watcher::identify_facts(&catalog, &port2, facts.vid, facts.pid).ok()
+            })
+            .await
+            .unwrap_or(None);
+            match fresh {
+                Some(new_facts) => {
+                    println!("[maintenance] {port}: re-identified as {}/{} — respawning",
+                        new_facts.family.as_deref().unwrap_or("?"),
+                        new_facts.variant.as_deref().unwrap_or("?"));
+                    self.devices.get_mut(port).map(|d| d.facts = new_facts.clone());
+                    self.spawn_session(&new_facts);
+                }
+                None => {
+                    println!("[maintenance] {port}: the port went quiet after the saga — replug to re-admit");
+                }
+            }
         }
     }
 
