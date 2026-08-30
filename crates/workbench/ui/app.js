@@ -34,8 +34,12 @@
 
   // The Rust shell speaks to the Resident; the webview never makes a
   // cross-origin request, so CORS does not exist in this product.
+  // The shell's door takes the body as a string: JSON is written at
+  // this boundary, once, so every command may speak plain objects.
   async function call(method, path, body) {
-    const r = await tauri.core.invoke("api", { method, path, body: body ?? null });
+    const payload = body == null ? null
+      : typeof body === "string" ? body : JSON.stringify(body);
+    const r = await tauri.core.invoke("api", { method, path, body: payload });
     return {
       status: r.status,
       ok: r.status > 0 && r.status < 400,
