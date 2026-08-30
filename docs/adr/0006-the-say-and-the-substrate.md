@@ -27,15 +27,15 @@ faceplate's own decision.**
   nobody is speaking, and are the resting texture of every face. If
   no say ever arrives, the house is a very honest system monitor —
   complete, and beside the point.
-- **The ring owns the stage.** Delivery is an exchange with the face,
-  not an injection into the wire: the session pauses the substrate
-  (holding the freshest ground, dropping nothing that matters), the
-  face presents the message in its own style for its own duration,
-  and the face announces **DONE** when the message is *integrated* —
-  a momentary ring when its bloom ends, a latched alert as soon as
-  its steady state can take ground without unpainting the message.
-  The host holds a generous bound and resumes regardless: a face
-  that cannot answer cannot hold the stage.
+- **The ring owns the stage — on the face.** The orchestrator never
+  stops sending: the substrate flows at its own tempo, always. The
+  face applies the priority: while a splash is on the panel, low-
+  priority frames (ground, pulses) are acknowledged and skipped, the
+  face's own tick plays the moment, and when it ends the next ground
+  frame paints — the gap fills itself, no resume signal exists. A new
+  say during a splash replaces it; the newest ring wins. No stage
+  state, no DONE protocol, no host timing: the wire never carries a
+  frame the face cannot use, and the face never waits on the house.
 - **The say is semantic — and degrades at the instance.** The wire
   from the house to the instance carries signal, urgency and words —
   never pixels. The **faceplate's declaration states what its face
@@ -68,13 +68,11 @@ identify and say share one mechanism and one grammar; port naming
 follows the host OS because the house resolves targets against its
 own enumeration, never against patterns.
 
-**Negative / accepted costs.** Every face bundle must speak DONE
-(regenerated through the faceplate build); the session gains a stage
-and a held-ground slot — bounded, per-session, invisible when idle;
-the grammar reserves the ring and level words, so free text beginning
-with a signal word reads as a signal (the escape is a qualifier or a
-rephrase); the substrate to a presenting face is paused, so its
-numbers may lag by the length of the message.
+**Negative / accepted costs.** The grammar reserves the ring and
+level words, so free text beginning with a signal word reads as a
+signal (the escape is a qualifier or a rephrase); a face's numerals
+freeze for the length of its splash — the substrate never stops, the
+face simply chooses not to look.
 
 **Rejected.** Host-composed pixels for says (presentation is the
 faceplate's art, ADR-0001's asymmetry turned to the room); host-timed

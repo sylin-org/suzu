@@ -11,4 +11,3 @@ mount: usb-right                   # mounted on its long edge, connector to the 
 rings:
   qualifiers: false
   text: false
-  done: false

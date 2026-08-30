@@ -44,20 +44,6 @@ struct RingsDecl {
     qualifiers: bool,
     #[serde(default = "default_true")]
     text: bool,
-    #[serde(default = "default_true")]
-    done: bool,
-}
-
-impl Default for RingsDecl {
-    fn default() -> Self {
-        Self { qualifiers: true, text: true, done: true }
-    }
-}
-
-impl From<RingsDecl> for RingDialect {
-    fn from(r: RingsDecl) -> Self {
-        Self { qualifiers: r.qualifiers, text: r.text, done: r.done }
-    }
 }
 
 fn default_true() -> bool {
@@ -110,7 +96,10 @@ fn scan_faceplates(root: PathBuf) -> Vec<FaceplateInfo> {
                 mount: decl.mount,
                 based_on: decl.based_on,
                 has_preview,
-                rings: decl.rings.unwrap_or_default().into(),
+                rings: RingDialect {
+                    qualifiers: decl.rings.as_ref().map(|r| r.qualifiers).unwrap_or(true),
+                    text: decl.rings.as_ref().map(|r| r.text).unwrap_or(true),
+                },
                 dir: bundle,
             });
         }
@@ -128,13 +117,11 @@ pub struct RingDialect {
     pub qualifiers: bool,
     /// a words channel exists
     pub text: bool,
-    /// the face announces DONE when the message is integrated
-    pub done: bool,
 }
 
 impl Default for RingDialect {
     fn default() -> Self {
-        Self { qualifiers: true, text: true, done: true }
+        Self { qualifiers: true, text: true }
     }
 }
 
@@ -291,12 +278,10 @@ impl Catalog {
             // root; try the parent and the grandparent so both repo
             // layouts and SUZU_HARDWARE_DIR resolve.
             let mut faceplates = Vec::new();
-            for base in [root.parent(), root.parent().and_then(|p| p.parent())] {
-                if let Some(dir) = base {
-                    faceplates = scan_faceplates(dir.join("faceplates"));
-                    if !faceplates.is_empty() {
-                        break;
-                    }
+            for dir in [root.parent(), root.parent().and_then(|p| p.parent())].into_iter().flatten() {
+                faceplates = scan_faceplates(dir.join("faceplates"));
+                if !faceplates.is_empty() {
+                    break;
                 }
             }
             for dir in class_dirs {

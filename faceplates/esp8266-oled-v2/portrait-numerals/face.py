@@ -280,10 +280,9 @@ def set_pulse(v):
 def decay():
     global pulse_lit, idle, ring_label, ring_icon, ring_until
     if ring_until is not None and time.ticks_diff(time.ticks_ms(), ring_until) > 0:
-        ring_label = None             # the moment passed; the house returns
-        ring_icon = None
+        ring_label = None             # the moment passed; the substrate
+        ring_icon = None              # fills the gap on its next frame
         ring_until = None
-        r("DONE," + ring_seq)         # the stage is over; ground may flow
         redraw()
     if pulse_lit > pulse_target:      # decay exponential toward the target
         pulse_lit = pulse_target + (pulse_lit - pulse_target) * 3 // 4
@@ -361,7 +360,7 @@ def wake():
 # ── frames ──
 
 def cmd(line):
-    global last_rx, label, values
+    global last_rx, label, values, ring_until
     line = line.strip()
     if not line:
         return
@@ -392,14 +391,17 @@ def cmd(line):
             for i, key in enumerate(("cpu", "mem", "gpu")):
                 if len(p) > i + 1 and p[i + 1]:
                     values[key] = int(p[i + 1])
+            if ring_until is not None:
+                r("OK")               # a splash owns the panel; ground waits
+                return
             for i, label_text in enumerate(("CPU", "GPU", "MEM")):
                 draw_area(i, label_text)
             oled.show()
             r("OK")
         elif c == "A":
             p = a.split(",")
-            if len(p) >= 2 and p[0] == "audio.level":
-                set_pulse(int(p[1]))
+            if len(p) >= 2 and p[0] == "audio.level" and ring_until is None:
+                set_pulse(int(p[1]))  # the splash owns the dividers too
             r("OK")
         elif c == "J":
             import ujson
@@ -442,7 +444,6 @@ def cmd(line):
             if verb == "alert":
                 latch = True                    # alert latches until allclear
                 ring_until = None
-                r("DONE," + ring_seq)           # integrated: ground may flow
 
             else:
                 latch = False

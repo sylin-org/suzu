@@ -21,7 +21,6 @@ frames: [I, K, G, A, J, S, X, R]
 rings:
   qualifiers: true      # dotted signals arrive whole (WARN.disk)
   text: true            # a words channel exists (the band)
-  done: true            # the face announces integration
 
 # The tool installs what the faceplate declares — files are pushed
 # verbatim, never interpreted. Art lives in the files, not in the tool.

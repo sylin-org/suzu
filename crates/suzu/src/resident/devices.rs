@@ -58,25 +58,11 @@ pub enum DeviceState {
 }
 
 /// The ring dialect this session's face declared (ADR-0006): the
-/// instance degrades every say to it before a byte reaches the wire,
-/// and times the stage for faces that cannot say DONE.
+/// instance degrades every say to it before a byte reaches the wire.
 #[derive(Debug, Clone, Copy)]
 pub struct RingVoice {
     pub qualifiers: bool,
     pub text: bool,
-    pub done: bool,
-}
-
-impl RingVoice {
-    /// The house's net, not a metronome: faces that speak DONE get a
-    /// generous bound; faces that cannot are timed at a splash length.
-    pub fn stage_bound(&self) -> Duration {
-        if self.done {
-            Duration::from_secs(30)
-        } else {
-            Duration::from_secs(4)
-        }
-    }
 }
 
 impl RingDialect {
@@ -84,7 +70,6 @@ impl RingDialect {
         RingVoice {
             qualifiers: self.qualifiers,
             text: self.text,
-            done: self.done,
         }
     }
 }
@@ -261,15 +246,14 @@ pub fn parse_say(sentence: &str, ports: &[String]) -> SayParse {
             SayTarget::NotAPort => {}
         }
     }
-    if target.is_none() {
-        if let Some(first) = tokens.next() {
+    if target.is_none()
+        && let Some(first) = tokens.next() {
             if is_signal_word(first) {
                 signal = Some(first.to_lowercase());
             } else {
                 text.push(first);
             }
         }
-    }
     text.extend(tokens);
     SayParse {
         target,
@@ -554,7 +538,7 @@ impl Devices {
             .zip(facts.class.as_deref())
             .and_then(|(fp, class)| self.catalog.faceplate(class, fp))
             .map(|f| f.rings.voice())
-            .unwrap_or(RingVoice { qualifiers: true, text: true, done: true });
+            .unwrap_or(RingVoice { qualifiers: true, text: true });
         let streaming = Arc::new(AtomicBool::new(false));
         let close = Arc::new(AtomicBool::new(false));
         let port = facts.port.clone();
@@ -1335,32 +1319,6 @@ fn deliver_ground(
     true
 }
 
-/// Read what the face has said since the last look, bounded; true when
-/// it announced DONE for the stage's own ring. Stale seqs and other
-/// chatter are ignored.
-fn drain_done(serial: &mut Box<dyn SerialPort>, stage_seq: u32) -> bool {
-    let want = format!("DONE,{stage_seq}");
-    let mut acc: Vec<u8> = Vec::new();
-    for _ in 0..8 {
-        let waiting = serial.bytes_to_read().unwrap_or(0);
-        if waiting == 0 {
-            break;
-        }
-        let mut buf = [0u8; 128];
-        let n = serial.read(&mut buf).unwrap_or(0);
-        if n == 0 {
-            break;
-        }
-        acc.extend_from_slice(&buf[..n]);
-        if acc.len() > 1024 {
-            break;
-        }
-    }
-    String::from_utf8_lossy(&acc)
-        .lines()
-        .any(|l| l.trim() == want)
-}
-
 /// One blink of the frame lane: capture, render, publish. A face that
 /// misses a blink costs nothing but the attempt — the freshness bound
 /// on the shot doors is the honest voice for it.
@@ -1408,12 +1366,6 @@ fn session_loop(
     let mut seq: u8 = 0;
     let mut next_frame = Instant::now() + FRAME_PERIOD;
     let mut last_keepalive = Instant::now();
-    // The stage (ADR-0006): while a ring owns the face, the substrate
-    // pauses — the freshest ground is held for an instant resume, and
-    // the stage ends when the face announces DONE for the live seq, or
-    // at the house's bound. A face that cannot answer cannot hold it.
-    let mut stage: Option<(u32, Instant)> = None;
-    let mut held: Option<Arc<MachineReport>> = None;
 
     loop {
         if close.load(Ordering::Relaxed) {
@@ -1434,17 +1386,13 @@ fn session_loop(
                 if !streaming.load(Ordering::Relaxed) {
                     continue; // the roster has not granted this stream
                 }
-                if stage.is_some() {
-                    held = Some(g); // the stage owns the panel; keep the freshest
-                    continue;
-                }
                 if !deliver_ground(serial, port, suzu, &g, &mut named) {
                     return;
                 }
             }
             Ok(SessionMsg::Out(Outbound::Pulse { axis, value })) => {
-                if !suzu || !streaming.load(Ordering::Relaxed) || stage.is_some() {
-                    continue; // the stage is the moment; the divider rests
+                if !suzu || !streaming.load(Ordering::Relaxed) {
+                    continue;
                 }
                 let frame = format!("A,{axis},{value}");
                 if write_line_twice(serial, port, &frame).is_err() {
@@ -1458,8 +1406,7 @@ fn session_loop(
                 // The instance degrades the say to the face's declared
                 // dialect (ADR-0006): bare verbs where qualifiers are
                 // not spoken, no words where there is no text channel.
-                // A new say replaces the one showing, and the stage
-                // belongs to the newest ring.
+                // A new say replaces the one showing; the newest ring wins.
                 seq = seq.wrapping_add(1);
                 let sig = if voice.qualifiers {
                     signal.clone()
@@ -1477,7 +1424,6 @@ fn session_loop(
                 if write_line_twice(serial, port, &frame).is_err() {
                     return;
                 }
-                stage = Some((u32::from(seq), Instant::now() + voice.stage_bound()));
             }
             Ok(SessionMsg::Record { job_id, secs, fps }) => {
                 record_job(serial, port, &job_id, secs, fps, spec.as_ref(), &zones, jobs, events);
@@ -1498,20 +1444,6 @@ fn session_loop(
             Err(std_mpsc::RecvTimeoutError::Disconnected) => break,
         }
         let now = Instant::now();
-        // The stage ends when the face says DONE for the live ring, or
-        // at the house's bound — whichever comes first. The held
-        // ground paints instantly, and the substrate fills the gaps
-        // again.
-        if let Some((stage_seq, deadline)) = stage {
-            if drain_done(serial, stage_seq) || now >= deadline {
-                stage = None;
-                if let Some(g) = held.take() {
-                    if !deliver_ground(serial, port, suzu, &g, &mut named) {
-                        return;
-                    }
-                }
-            }
-        }
         // The media lane's blink, only for someone's eyes: the watch
         // flag (ADR-0004 amendment) rides beside the roster's stream
         // gate, and never interrupts a stage. A recording is work, not
@@ -1521,7 +1453,6 @@ fn session_loop(
             if suzu
                 && streaming.load(Ordering::Relaxed)
                 && media_watched.load(Ordering::Relaxed)
-                && stage.is_none()
                 && let Some(spec) = &spec
             {
                 frame_blink(serial, port, spec, &zones, events);
