@@ -112,6 +112,9 @@ pub struct Ctx {
     pub moments: mpsc::Sender<MomentsCmd>,
     pub roster: Arc<std::sync::RwLock<Roster>>,
     pub journal: Arc<Journal>,
+    /// Live `/api/events` connections. The watched lane holds only
+    /// while this is non-zero — a dead client holds nothing.
+    pub streams: std::sync::atomic::AtomicUsize,
 }
 
 /// The door is bound by the resident *before* any serial port is
@@ -219,6 +222,7 @@ async fn events_stream(ctx: Arc<Ctx>, mut stream: TcpStream) -> Result<()> {
     // idempotent — a replay costs nothing, a loss would not heal.
     let mut fact_rx = ctx.events.subscribe();
     let mut journal_rx = ctx.journal.subscribe();
+    ctx.streams.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
     let snap = snapshot_fact(&ctx).await;
     let snap_json =
@@ -274,6 +278,16 @@ async fn events_stream(ctx: Arc<Ctx>, mut stream: TcpStream) -> Result<()> {
             },
         }
     }
+    // The wire's own watch release: a client that quits while watching
+    // can send no "off", so the lane rests when its last listener
+    // leaves (ADR-0004, the watched lane — dead clients hold nothing).
+    let remaining = ctx.streams.fetch_sub(1, std::sync::atomic::Ordering::Relaxed) - 1;
+    if remaining == 0 {
+        let _ = ctx
+            .devices
+            .send(DevicesCmd::WatchMedia { on: false, reply: None })
+            .await;
+    }
     Ok(())
 }
 
@@ -288,6 +302,7 @@ fn is_delta(ev: &HouseEvent) -> bool {
             | HouseEvent::Job { .. }
             | HouseEvent::Frame { .. }
             | HouseEvent::Paused { .. }
+            | HouseEvent::MediaWatched { .. }
     )
 }
 
@@ -298,6 +313,7 @@ async fn snapshot_fact(ctx: &Ctx) -> HouseSnapshot {
         .unwrap_or_else(|_| DevicesSnapshot {
             devices: Vec::new(),
             paused: false,
+            media_watched: false,
             frames: Vec::new(),
         });
     let roster = ctx.roster.read().map(|r| r.snapshot()).unwrap_or_default();
@@ -312,6 +328,7 @@ async fn snapshot_fact(ctx: &Ctx) -> HouseSnapshot {
         jobs: ctx.jobs.all(),
         journal: ctx.journal.tail(200),
         frames: devs.frames,
+        media_watched: devs.media_watched,
     }
 }
 
@@ -409,6 +426,7 @@ async fn route(ctx: &Ctx, method: &str, path: &str, body: &str) -> (u16, &'stati
             }
         }
         ("POST", "/api/shutdown") => (200, "application/json", br#"{"stopping":true}"#.to_vec()),
+        ("POST", "/api/ui") => ui_action(ctx, body).await,
         ("POST", "/api/control") => control(ctx, body).await,
         ("POST", "/api/say") => say(ctx, body).await,
         _ => (404, "application/json", br#"{"error":"no such door"}"#.to_vec()),
@@ -540,6 +558,87 @@ async fn maintenance(ctx: &Ctx, port: &str, body: &str) -> (u16, &'static str, V
         ),
         Ok(Err(e)) => (409, "application/json", serde_json::to_vec(&serde_json::json!({ "error": format!("{e:#}") })).unwrap_or_default()),
         Err(e) => (504, "application/json", serde_json::to_vec(&serde_json::json!({ "error": e })).unwrap_or_default()),
+    }
+}
+
+/// The window's one action door: every client intent is a variant
+/// here, parsed and refused by name. Terse on the wire, honest in the
+/// reply — `confirmed` says whether the house *changed*, the echo says
+/// what was asked, and `message` says what is now true.
+#[derive(Debug, serde::Deserialize)]
+struct UiAction {
+    watch_media: Option<Watch>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum Watch {
+    On,
+    Off,
+}
+
+impl<'de> serde::Deserialize<'de> for Watch {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        match String::deserialize(d)?.as_str() {
+            "on" => Ok(Watch::On),
+            "off" => Ok(Watch::Off),
+            other => Err(serde::de::Error::custom(format!(
+                "watch_media is \"on\" or \"off\", not {other:?}"
+            ))),
+        }
+    }
+}
+
+impl Watch {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Watch::On => "on",
+            Watch::Off => "off",
+        }
+    }
+}
+
+async fn ui_action(ctx: &Ctx, body: &str) -> (u16, &'static str, Vec<u8>) {
+    let json = |v: serde_json::Value| (200u16, "application/json", serde_json::to_vec(&v).unwrap_or_default());
+    let Ok(action) = serde_json::from_str::<UiAction>(body) else {
+        return (
+            400,
+            "application/json",
+            serde_json::to_vec(&serde_json::json!({
+                "confirmed": false,
+                "message": "this door speaks {\"watch_media\":\"on\"|\"off\"}",
+            }))
+            .unwrap_or_default(),
+        );
+    };
+    let Some(watch) = action.watch_media else {
+        return json(serde_json::json!({
+            "confirmed": false,
+            "message": "nothing asked — the door holds watch_media so far",
+        }));
+    };
+    let on = watch == Watch::On;
+    match door(&ctx.devices, |reply| DevicesCmd::WatchMedia { on, reply: Some(reply) }).await {
+        Ok(report) => {
+            let message = match (on, report.changed) {
+                (true, true) => format!("Streaming captures on {} devices", report.blinking),
+                (true, false) => {
+                    format!("Streaming already enabled ({} devices)", report.blinking)
+                }
+                (false, true) => "Streaming captures resting".to_string(),
+                (false, false) => "Streaming captures already resting".to_string(),
+            };
+            json(serde_json::json!({
+                "confirmed": report.changed,
+                "watch_media": watch.as_str(),
+                "message": message,
+            }))
+        }
+        Err(e) => (
+            504,
+            "application/json",
+            serde_json::to_vec(&serde_json::json!({ "confirmed": false, "message": e }))
+                .unwrap_or_default(),
+        ),
     }
 }
 

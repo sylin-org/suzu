@@ -34,7 +34,9 @@ use tokio::sync::{broadcast::Sender, mpsc};
 /// The media lane's cadence, house-enforced: at most one capture in
 /// flight per face (the session thread is serial by construction) and
 /// one blink per `FRAME_PERIOD` — no client cadence can flood the wire
-/// because the client commands nothing (ADR-0004).
+/// because the client commands nothing about *how* the lane runs
+/// (ADR-0004). The lane is *watched* (the amendment): it blinks only
+/// while a window asserts the watch.
 const FRAME_PERIOD: Duration = Duration::from_secs(2);
 /// A frame older than this is not a frame: the shot door fails
 /// honestly instead of serving a memory of the face.
@@ -72,6 +74,10 @@ pub struct Device {
     /// signal ("spoke 4s ago") beats any checklist.
     #[serde(skip)]
     pub last_fed: Arc<Mutex<Option<Instant>>>,
+    /// Whether this face's session can blink frames at all (suzu wire,
+    /// frame law declared) — the watched-lane count's denominator.
+    #[serde(skip)]
+    pub blinks: bool,
 }
 
 impl Device {
@@ -106,7 +112,16 @@ pub enum Outbound {
 pub struct DevicesSnapshot {
     pub devices: Vec<DeviceRow>,
     pub paused: bool,
+    pub media_watched: bool,
     pub frames: Vec<FrameFacts>,
+}
+
+/// The watched lane's verdict, for the door's reply: whether the flag
+/// moved, and how many faces are blinking now.
+#[derive(Debug, Clone, Serialize)]
+pub struct WatchReport {
+    pub changed: bool,
+    pub blinking: usize,
 }
 
 pub enum DevicesCmd {
@@ -128,6 +143,10 @@ pub enum DevicesCmd {
     /// re-publish. In-memory only — it dies with the process.
     Pause { reply: mpsc::Sender<()> },
     Resume { reply: mpsc::Sender<()> },
+    /// The watched lane (ADR-0004 amendment): a window asserted (or
+    /// released) its watch on the media lane. The reply is optional —
+    /// the wire's own release on last-client-departure needs no ack.
+    WatchMedia { on: bool, reply: Option<mpsc::Sender<WatchReport>> },
     /// A moment bound for faces: the band shows the label briefly;
     /// the signal names an icon when the face has one.
     Ring { signal: String, label: String, urgency: u8 },
@@ -170,6 +189,9 @@ pub struct Devices {
     in_maintenance: BTreeMap<String, String>,
     pulse_announced: bool,
     paused: bool,
+    /// The watched lane's echo (ADR-0004 amendment): the gate's flag,
+    /// read by the session threads at wire speed.
+    media_watched: Arc<AtomicBool>,
     rows_dirty: bool,
 }
 
@@ -198,6 +220,7 @@ impl Devices {
             in_maintenance: BTreeMap::new(),
             pulse_announced: false,
             paused: false,
+            media_watched: Arc::new(AtomicBool::new(false)),
             rows_dirty: false,
         }
     }
@@ -235,6 +258,12 @@ impl Devices {
                         DevicesCmd::Resume { reply } => {
                             self.resume_stream().await;
                             let _ = reply.send(()).await;
+                        }
+                        DevicesCmd::WatchMedia { on, reply } => {
+                            let report = self.watch_media(on);
+                            if let Some(reply) = reply {
+                                let _ = reply.send(report).await;
+                            }
                         }
                         DevicesCmd::Ring { signal, label, urgency } => {
                             if !self.paused { self.ring(&signal, &label, urgency) }
@@ -343,11 +372,13 @@ impl Devices {
         }
         let (tx, rx) = std_mpsc::sync_channel::<SessionMsg>(SESSION_MAILBOX);
         let (spec, zones) = self.frame_law_of(facts);
+        let blinks = suzu && spec.is_some();
         let streaming = Arc::new(AtomicBool::new(false));
         let close = Arc::new(AtomicBool::new(false));
         let port = facts.port.clone();
         let events = self.events.clone();
         let jobs = Arc::clone(&self.jobs);
+        let media_watched = Arc::clone(&self.media_watched);
         let device_id = facts.device_id.clone();
         let class = facts.class.clone();
         let streaming2 = Arc::clone(&streaming);
@@ -357,7 +388,7 @@ impl Devices {
             .spawn(move || {
                 session_thread(
                     port, rx, close2, streaming2, suzu, spec, zones, events, jobs,
-                    device_id, class,
+                    media_watched, device_id, class,
                 )
             })
             .ok();
@@ -366,6 +397,7 @@ impl Devices {
         if let Some(device) = self.devices.get_mut(&facts.port) {
             device.outbound = Some(tx);
             device.streaming = streaming;
+            device.blinks = blinks;
         }
         self.rows_dirty = true;
     }
@@ -399,6 +431,24 @@ impl Devices {
                     urgency,
                 }));
             }
+        }
+    }
+
+    /// The watched lane's gate (ADR-0004 amendment): the window's
+    /// assertion arms the blink; the wire's liveness holds it. Idempotent
+    /// — every Media entry re-asserts, and repeats cost nothing.
+    fn watch_media(&mut self, on: bool) -> WatchReport {
+        let changed = self.media_watched.swap(on, Ordering::Relaxed) != on;
+        if changed {
+            let _ = self.events.send(HouseEvent::MediaWatched { watched: on });
+        }
+        WatchReport {
+            changed,
+            blinking: self
+                .devices
+                .values()
+                .filter(|d| d.blinks && d.streaming.load(Ordering::Relaxed))
+                .count(),
         }
     }
 
@@ -488,6 +538,7 @@ impl Devices {
                 outbound: None,
                 streaming: Arc::new(AtomicBool::new(false)),
                 last_fed: Arc::new(Mutex::new(None)),
+                blinks: false,
             },
         );
         self.rows_dirty = true;
@@ -885,11 +936,13 @@ impl Devices {
             .collect()
     }
 
-    /// The read model, whole: rows, the pause flag, the frame cache.
+    /// The read model, whole: rows, the pause flag, the watch flag,
+    /// the frame cache.
     fn devices_snapshot(&self) -> DevicesSnapshot {
         DevicesSnapshot {
             devices: self.snapshot(),
             paused: self.paused,
+            media_watched: self.media_watched.load(Ordering::Relaxed),
             frames: self
                 .frames
                 .iter()
@@ -918,6 +971,7 @@ fn session_thread(
     zones: DisplayZones,
     events: Sender<HouseEvent>,
     jobs: Arc<Jobs>,
+    media_watched: Arc<AtomicBool>,
     device_id: Option<String>,
     class: Option<String>,
 ) {
@@ -966,7 +1020,7 @@ fn session_thread(
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         session_loop(
             &mut serial, &rx, &close, &streaming, suzu, &port, spec, zones,
-            &events, &jobs, device_id, class,
+            &events, &jobs, &media_watched, device_id, class,
         );
     }));
     if outcome.is_err() {
@@ -1024,6 +1078,7 @@ fn session_loop(
     zones: DisplayZones,
     events: &Sender<HouseEvent>,
     jobs: &Jobs,
+    media_watched: &Arc<AtomicBool>,
     device_id: Option<String>,
     class: Option<String>,
 ) {
@@ -1107,16 +1162,19 @@ fn session_loop(
             Err(std_mpsc::RecvTimeoutError::Disconnected) => break,
         }
         let now = Instant::now();
-        // The media lane's blink. Only while the stream flows — an
-        // ungranted face rests honestly; recording subsumes it (the
-        // record loop is inside its own message handler, so the two
-        // can never interleave on the port).
+        // The media lane's blink, only for someone's eyes: the watch
+        // flag (ADR-0004 amendment) rides beside the roster's stream
+        // gate. A recording is work, not a glance — its frames publish
+        // from inside its own handler, watched or not.
         if now >= next_frame {
             next_frame = now + FRAME_PERIOD;
-            if suzu && streaming.load(Ordering::Relaxed)
-                && let Some(spec) = &spec {
-                    frame_blink(serial, port, spec, &zones, events);
-                }
+            if suzu
+                && streaming.load(Ordering::Relaxed)
+                && media_watched.load(Ordering::Relaxed)
+                && let Some(spec) = &spec
+            {
+                frame_blink(serial, port, spec, &zones, events);
+            }
         }
         // Keepalive: only while the stream flows (see FRAME_PERIOD note).
         if now.duration_since(last_keepalive) >= KEEPALIVE_PERIOD {

@@ -260,6 +260,14 @@ pub(crate) fn format_house_event(ev: &HouseEvent) -> (&'static str, String) {
                 "stream resumed — the faces redress".to_string()
             },
         ),
+        HouseEvent::MediaWatched { watched } => say(
+            "media",
+            if *watched {
+                "the media lane is watched — the faces blink for the window".to_string()
+            } else {
+                "media unwatched — the faces rest their blinks".to_string()
+            },
+        ),
     }
 }
 //
@@ -551,6 +559,7 @@ pub async fn run(catalog: Arc<Catalog>) -> anyhow::Result<()> {
         moments: house.moments_door(),
         roster: Arc::clone(&roster),
         journal: Arc::clone(&journal),
+        streams: std::sync::atomic::AtomicUsize::new(0),
     }), listener));
 
     // the visitor door, by hand: `tell <label>`

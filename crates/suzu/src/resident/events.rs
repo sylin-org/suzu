@@ -86,6 +86,9 @@ pub struct HouseSnapshot {
     /// The journal tail, oldest first.
     pub journal: Vec<JournalLine>,
     pub frames: Vec<FrameFacts>,
+    /// Whether the media lane is watched — a window asserted it and
+    /// no restart has reset it (the amendment to this ADR).
+    pub media_watched: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -192,6 +195,8 @@ pub enum HouseEvent {
     Roster { individuals: Vec<super::roster::Individual> },
     /// The pause flag moved.
     Paused { paused: bool },
+    /// The media lane's watch flag moved (ADR-0004, the watched lane).
+    MediaWatched { watched: bool },
     /// A face's latest frame — the media lane, house-cadenced (ADR-0004).
     /// Data, not news: never journaled, never announced in text.
     Frame { port: String, png: String },

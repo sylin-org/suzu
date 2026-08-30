@@ -78,9 +78,37 @@
     });
   }
 
+  // ── the watched lane (ADR-0004 amendment) ────────────────────────
+  // Entering Media asserts the watch; leaving arms a 10-second
+  // linger — come back and nothing is sent, stay away and the faces
+  // rest their blinks. Repeats are free house-side, and a snapshot
+  // that says unwatched while Media is open re-asserts (resident
+  // restarts reset the flag; the window heals it).
+  const MEDIA_LINGER_MS = 10000;
+  let mediaLinger = null;
+
+  function watchMedia(on) {
+    call("POST", "/api/ui", { watch_media: on ? "on" : "off" }).catch(() => {});
+  }
+
+  function armMediaLinger() {
+    clearTimeout(mediaLinger);
+    mediaLinger = setTimeout(() => {
+      mediaLinger = null;
+      watchMedia(false);
+    }, MEDIA_LINGER_MS);
+  }
+
   // ── navigation — client UI state, not house state ────────────────
   function setView(name) {
     activeView = name;
+    if (name === "media") {
+      clearTimeout(mediaLinger);
+      mediaLinger = null;
+      watchMedia(true);
+    } else if (Store.state.mediaWatched) {
+      armMediaLinger();
+    }
     document.querySelectorAll(".tab").forEach((t) => {
       const on = t.dataset.view === name;
       t.classList.toggle("active", on);
@@ -434,6 +462,11 @@
       Store.retryPhotos();
       if (!Store.state.links) fetchLinks();
     }
+    // A fresh snapshot that says unwatched while Media is open means
+    // the flag was reset under us (resident restart) — assert again.
+    if (slices.includes("media") && activeView === "media" && !Store.state.mediaWatched) {
+      watchMedia(true);
+    }
     const routes = SLICE_ROUTES[activeView] ?? [];
     if (slices.some((s) => routes.includes(s))) renderView();
   });
@@ -441,6 +474,18 @@
   // ── first paint: the truth arrives on the wire ───────────────────
   setView("status");
   fetchLinks();
+
+  // Hidden to the tray is the same as leaving the tab: the faces rest
+  // after the linger unless the keeper comes back.
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      if (activeView === "media" && Store.state.mediaWatched) armMediaLinger();
+    } else if (activeView === "media") {
+      clearTimeout(mediaLinger);
+      mediaLinger = null;
+      watchMedia(true);
+    }
+  });
 
   // the surface is up: let the shell show it
   tauri?.core?.invoke("ready")?.catch?.(() => {});

@@ -25,6 +25,8 @@
     frames: new Map(),  // port → { png: data URI, at: ms }
     photos: new Map(),  // class → url (fetched once per class)
     links: null,        // the About page's destinations, fetched once
+    /// the watched lane: the house's echo of the window's watch
+    mediaWatched: false,
   };
 
   // The client's journal keeps the house's own bound.
@@ -74,7 +76,8 @@
       (snap.frames ?? []).map((f) => [f.port, { png: dataUri(f.png), at: Date.now() }])
     );
     state.journal = new Map((snap.journal ?? []).map((line) => [journalKey(line), line]));
-    mark("service", "devices", "roster", "jobs", "frames", "journal", "stream");
+    state.mediaWatched = !!snap.media_watched;
+    mark("service", "devices", "roster", "jobs", "frames", "journal", "stream", "media");
   }
 
   /// One delta fact, routed by its type tag.
@@ -108,6 +111,11 @@
       case "paused": {
         state.service = { ...state.service, paused: !!fact.paused };
         mark("service");
+        break;
+      }
+      case "media_watched": {
+        state.mediaWatched = !!fact.watched;
+        mark("media");
         break;
       }
       default:
