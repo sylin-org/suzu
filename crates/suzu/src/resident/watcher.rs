@@ -70,6 +70,7 @@ pub fn identify_facts(catalog: &Catalog, port: &str, vid: u16, pid: u16) -> Resu
         variant: field("variant"),
         version: field("version"),
         proto: field("proto"),
+        faceplate: field("faceplate"),
         device_id,
         legacy: t.legacy_line.is_some(),
     })

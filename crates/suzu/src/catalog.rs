@@ -39,6 +39,32 @@ pub type DisplayZones = Vec<(usize, usize, [u8; 3])>;
 /// hang. `based_on` marks a derived bundle (regenerated, never
 /// hand-edited); `has_preview` says whether a captured preview ships.
 #[derive(Debug, Deserialize)]
+struct RingsDecl {
+    #[serde(default = "default_true")]
+    qualifiers: bool,
+    #[serde(default = "default_true")]
+    text: bool,
+    #[serde(default = "default_true")]
+    done: bool,
+}
+
+impl Default for RingsDecl {
+    fn default() -> Self {
+        Self { qualifiers: true, text: true, done: true }
+    }
+}
+
+impl From<RingsDecl> for RingDialect {
+    fn from(r: RingsDecl) -> Self {
+        Self { qualifiers: r.qualifiers, text: r.text, done: r.done }
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Deserialize)]
 struct FaceplateDecl {
     name: String,
     class: String,
@@ -50,6 +76,8 @@ struct FaceplateDecl {
     mount: Option<String>,
     #[serde(default)]
     based_on: Option<String>,
+    #[serde(default)]
+    rings: Option<RingsDecl>,
 }
 
 /// Scan a faceplates root (`<repo>/faceplates/<class-dir>/<id>/`).
@@ -82,12 +110,32 @@ fn scan_faceplates(root: PathBuf) -> Vec<FaceplateInfo> {
                 mount: decl.mount,
                 based_on: decl.based_on,
                 has_preview,
+                rings: decl.rings.unwrap_or_default().into(),
                 dir: bundle,
             });
         }
     }
     out.sort_by_key(|f| (f.based_on.is_some(), f.id.clone()));
     out
+}
+
+/// The ring voice a faceplate declares (ADR-0006): what the instance
+/// may say to this face, and whether it announces integration. A
+/// declaration that says nothing is heard whole.
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+pub struct RingDialect {
+    /// dotted signals arrive whole (WARN.disk)
+    pub qualifiers: bool,
+    /// a words channel exists
+    pub text: bool,
+    /// the face announces DONE when the message is integrated
+    pub done: bool,
+}
+
+impl Default for RingDialect {
+    fn default() -> Self {
+        Self { qualifiers: true, text: true, done: true }
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -102,6 +150,7 @@ pub struct FaceplateInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub based_on: Option<String>,
     pub has_preview: bool,
+    pub rings: RingDialect,
     #[serde(skip)]
     pub dir: PathBuf,
 }

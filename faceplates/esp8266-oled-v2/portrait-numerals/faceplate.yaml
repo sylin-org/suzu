@@ -16,6 +16,15 @@ extras: [audio.level]
 # suzu/1 frames this face answers (see README).
 frames: [I, K, G, A, J, S, X, R]
 
+# The ring voice (ADR-0006): what this face can speak. The instance
+# degrades every say to this dialect before a byte reaches the wire.
+# The ring voice (ADR-0006): what this face can speak. The instance
+# degrades every say to this dialect before a byte reaches the wire.
+rings:
+  qualifiers: true      # dotted signals arrive whole (WARN.disk)
+  text: true            # a words channel exists (the band)
+  done: true            # the face announces integration
+
 # The tool installs what the faceplate declares — files are pushed
 # verbatim, never interpreted. Art lives in the files, not in the tool.
 resources:

@@ -478,11 +478,20 @@ async fn route(ctx: &Ctx, method: &str, path: &str, body: &str) -> (u16, &'stati
                 None => no_such("no such device on the roster"),
             }
         }
-        ("POST", p) if p.starts_with("/api/device/") && p.ends_with("/identify") => {
-            let target = p.trim_start_matches("/api/device/").trim_end_matches("/identify");
-            match resolve_target(ctx, target) {
+        ("GET", p) if p.starts_with("/api/device/identify/") => {
+            // The utterance reads as itself: identify device COM24.
+            let token = p.trim_start_matches("/api/device/identify/");
+            let port = resolve_target(ctx, token).or_else(|| {
+                let ports: Vec<String> =
+                    crate::enumerate().into_iter().map(|e| e.name).collect();
+                match super::devices::resolve_target_token(token, &ports) {
+                    super::devices::SayTarget::Port(known) => Some(known),
+                    _ => None,
+                }
+            });
+            match port {
                 Some(port) => identify(ctx, &port).await,
-                None => no_such("no such device on the roster"),
+                None => no_such("no such port on this machine"),
             }
         }
         ("POST", p) if p.starts_with("/api/device/") && p.ends_with("/pause") => {
@@ -624,17 +633,25 @@ async fn admission(ctx: &Ctx, port: &str) -> (u16, &'static str, Vec<u8>) {
     }
 }
 
-/// The identify door: one face rings its own name (the port), so
-/// twins on a desk can be told apart and the ring path proves itself.
+/// The identify door: one face takes the stage and rings its own
+/// name (the port), so twins on a desk can be told apart and the say
+/// cycle proves itself end to end.
 async fn identify(ctx: &Ctx, port: &str) -> (u16, &'static str, Vec<u8>) {
-    match door(&ctx.devices, |reply| DevicesCmd::Identify { port: port.to_string(), reply }).await {
+    match door(&ctx.devices, |reply| DevicesCmd::Say {
+        port: port.to_string(),
+        signal: "info".to_string(),
+        text: Some(format!("Hello from {port}!")),
+        reply,
+    })
+    .await
+    {
         Ok(Ok(())) => (
             200,
             "application/json",
             serde_json::to_vec(&serde_json::json!({
                 "confirmed": true,
                 "identify": port,
-                "message": format!("{port} rings its name — the band shows it for a few seconds"),
+                "message": format!("{port} takes the stage — it rings its name for a moment"),
             }))
             .unwrap_or_default(),
         ),

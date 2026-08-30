@@ -584,7 +584,16 @@ async fn main() -> anyhow::Result<()> {
             let (path, n) = shot::record_first(&faces, secs, fps, "record")?;
             println!("{n} frames → {}", path.display());
         }
-        Some("say") | Some("show") => {
+        Some("say") => {
+            // ADR-0006: [port] [signal] [text…] — a port targets one
+            // face, a ring word broadcasts, prose rides as transition.
+            let text = args[2..].join(" ");
+            if text.is_empty() {
+                anyhow::bail!("usage: suzu say [port] [signal] <text>  (e.g. suzu say COM24 INFO Hello!)");
+            }
+            control::chirp(&format!("say {text}")).await?;
+        }
+        Some("show") => {
             let text = args[2..].join(" ");
             if text.is_empty() {
                 anyhow::bail!("usage: suzu show <tag> <text ...>  (e.g. suzu show INFO.disk Disk at 50%)");

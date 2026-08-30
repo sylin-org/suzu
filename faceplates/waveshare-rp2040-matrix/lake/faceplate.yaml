@@ -1,0 +1,14 @@
+name: lake
+class: waveshare-rp2040-matrix
+display_name: The Lake
+blurb: Raindrops and atom fireflies — color speaks, words do not
+mount: usb-right                   # mounted on its long edge, connector to the right
+
+# The ring voice (ADR-0006): the lake splashes color. Qualifiers and
+# text are degraded away by the instance — the face receives bare
+# verbs (R,WARN) — and it cannot announce DONE, so the house times
+# the stage.
+rings:
+  qualifiers: false
+  text: false
+  done: false

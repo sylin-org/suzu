@@ -20,7 +20,7 @@ use super::events::{DeviceFacts, DeviceRow, FrameFacts, HouseEvent};
 use super::jobs::{Job, Jobs};
 use super::roster::Roster;
 use super::sensor::MachineReport;
-use crate::catalog::{Catalog, DisplayZones, FrameSpec};
+use crate::catalog::{Catalog, DisplayZones, FrameSpec, RingDialect};
 use serde::Serialize;
 use serialport::SerialPort;
 use std::collections::BTreeMap;
@@ -55,6 +55,38 @@ pub enum DeviceState {
     Accepted,
     #[allow(dead_code)] // used by the servicing engine (unplug mid-pipeline)
     Disposed,
+}
+
+/// The ring dialect this session's face declared (ADR-0006): the
+/// instance degrades every say to it before a byte reaches the wire,
+/// and times the stage for faces that cannot say DONE.
+#[derive(Debug, Clone, Copy)]
+pub struct RingVoice {
+    pub qualifiers: bool,
+    pub text: bool,
+    pub done: bool,
+}
+
+impl RingVoice {
+    /// The house's net, not a metronome: faces that speak DONE get a
+    /// generous bound; faces that cannot are timed at a splash length.
+    pub fn stage_bound(&self) -> Duration {
+        if self.done {
+            Duration::from_secs(30)
+        } else {
+            Duration::from_secs(4)
+        }
+    }
+}
+
+impl RingDialect {
+    pub fn voice(&self) -> RingVoice {
+        RingVoice {
+            qualifiers: self.qualifiers,
+            text: self.text,
+            done: self.done,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -132,6 +164,120 @@ pub struct StreamReport {
     pub ports: usize,
 }
 
+/// The say target's resolution ladder (ADR-0006): exact port name,
+/// then unique suffix of the live enumeration — never a guess. A
+/// port-shaped token that enumerates nothing is refused as such;
+/// anything else is prose, not hardware.
+pub enum SayTarget {
+    Port(String),
+    NotAPort,
+    NotFound(String),
+    Ambiguous(Vec<String>),
+}
+
+pub fn resolve_target_token(token: &str, ports: &[String]) -> SayTarget {
+    if ports.iter().any(|p| p == token) {
+        return SayTarget::Port(token.to_string());
+    }
+    let suffixes: Vec<String> =
+        ports.iter().filter(|p| p.ends_with(token)).cloned().collect();
+    match suffixes.len() {
+        1 => return SayTarget::Port(suffixes[0].clone()),
+        n if n > 1 => return SayTarget::Ambiguous(suffixes),
+        _ => {}
+    }
+    let shaped = token.starts_with("/dev/")
+        || (token.starts_with("COM")
+            && token["COM".len()..]
+                .bytes()
+                .all(|b| b.is_ascii_digit()));
+    if shaped {
+        SayTarget::NotFound(token.to_string())
+    } else {
+        SayTarget::NotAPort
+    }
+}
+
+/// The ring and level words a sentence may open with; everything else
+/// is prose. Case-insensitive, dot-qualifiers welcome.
+const SIGNAL_WORDS: &[&str] = &[
+    "alert", "allclear", "completion", "discovery", "begin", "departure",
+    "tended", "transition", "heartbeat", "info", "warn", "crit", "ok",
+];
+
+fn is_signal_word(word: &str) -> bool {
+    let base = word.split('.').next().unwrap_or("").to_lowercase();
+    SIGNAL_WORDS.contains(&base.as_str())
+}
+
+pub fn urgency_for(signal: &str) -> u8 {
+    match signal.split('.').next().unwrap_or("").to_lowercase().as_str() {
+        "crit" => 5,
+        "alert" => 4,
+        "warn" => 3,
+        "heartbeat" => 0,
+        _ => 2,
+    }
+}
+
+/// One sentence of the say grammar:
+/// `[port] [signal] [text…]` — each optional after the first.
+pub struct SayParse {
+    /// Some(Ok(port)) — targeted. Some(Err(reason)) — port-shaped but
+    /// refused. None — broadcast.
+    pub target: Option<Result<String, String>>,
+    pub signal: Option<String>,
+    pub text: Option<String>,
+}
+
+pub fn parse_say(sentence: &str, ports: &[String]) -> SayParse {
+    let mut tokens = sentence.split_whitespace().peekable();
+    let mut target = None;
+    let mut signal = None;
+    let mut text: Vec<&str> = Vec::new();
+
+    if let Some(first) = tokens.peek().copied() {
+        match resolve_target_token(first, ports) {
+            SayTarget::Port(port) => {
+                tokens.next();
+                target = Some(Ok(port));
+                if let Some(second) = tokens.next() {
+                    if is_signal_word(second) {
+                        signal = Some(second.to_lowercase());
+                    } else {
+                        text.push(second);
+                    }
+                }
+            }
+            SayTarget::NotFound(r) => {
+                target = Some(Err(format!("{r}: no such port on this machine")));
+            }
+            SayTarget::Ambiguous(list) => {
+                target = Some(Err(format!(
+                    "{first} is ambiguous — {}; say which",
+                    list.join(", ")
+                )));
+            }
+            SayTarget::NotAPort => {}
+        }
+    }
+    if target.is_none() {
+        if let Some(first) = tokens.next() {
+            if is_signal_word(first) {
+                signal = Some(first.to_lowercase());
+            } else {
+                text.push(first);
+            }
+        }
+    }
+    text.extend(tokens);
+    SayParse {
+        target,
+        signal,
+        text: (!text.is_empty()).then(|| text.join(" ")),
+    }
+}
+
 pub enum DevicesCmd {
     Mind(DeviceFacts),
     Gone { port: String },
@@ -166,9 +312,15 @@ pub enum DevicesCmd {
     /// The keeper lifted one device off the stream (per-device pause):
     /// the gate closes, the session stays, the face falls to its
     /// garden. Resume re-subscribes without a re-test.
-    /// The keeper points at one face among twins: "this is me".
-    /// A targeted ring — one session, no budget, no broadcast.
-    Identify { port: String, reply: mpsc::Sender<anyhow::Result<()>> },
+    /// A targeted say (ADR-0006): one face takes the stage. The
+    /// target arrives already resolved; the session degrades the
+    /// say to the face's declared dialect.
+    Say {
+        port: String,
+        signal: String,
+        text: Option<String>,
+        reply: mpsc::Sender<anyhow::Result<()>>,
+    },
     PauseDevice { port: String, reply: mpsc::Sender<anyhow::Result<()>> },
     ResumeDevice { port: String, reply: mpsc::Sender<anyhow::Result<()>> },
     /// Hand the individual to a maintenance saga: the session closes,
@@ -294,8 +446,8 @@ impl Devices {
                             let res = self.admission_retry(&port);
                             let _ = reply.send(res).await;
                         }
-                        DevicesCmd::Identify { port, reply } => {
-                            let res = self.identify(&port);
+                        DevicesCmd::Say { port, signal, text, reply } => {
+                            let res = self.say_to(&port, &signal, text.as_deref());
                             let _ = reply.send(res).await;
                         }
                         DevicesCmd::PauseDevice { port, reply } => {
@@ -395,6 +547,14 @@ impl Devices {
         let (tx, rx) = std_mpsc::sync_channel::<SessionMsg>(SESSION_MAILBOX);
         let (spec, zones) = self.frame_law_of(facts);
         let blinks = suzu && spec.is_some();
+        // The dialect this face declared (absent or unknown: heard whole)
+        let voice = facts
+            .faceplate
+            .as_deref()
+            .zip(facts.class.as_deref())
+            .and_then(|(fp, class)| self.catalog.faceplate(class, fp))
+            .map(|f| f.rings.voice())
+            .unwrap_or(RingVoice { qualifiers: true, text: true, done: true });
         let streaming = Arc::new(AtomicBool::new(false));
         let close = Arc::new(AtomicBool::new(false));
         let port = facts.port.clone();
@@ -410,7 +570,7 @@ impl Devices {
             .spawn(move || {
                 session_thread(
                     port, rx, close2, streaming2, suzu, spec, zones, events, jobs,
-                    media_watched, device_id, class,
+                    media_watched, voice, device_id, class,
                 )
             })
             .ok();
@@ -712,24 +872,27 @@ impl Devices {
         self.send_to_session(port, SessionMsg::Admission)
     }
 
-    /// The keeper points at one face: it rings its own name on the
-    /// band for a few seconds. A targeted ring rides straight to the
-    /// owning session — the moments budget governs visitors, not the
-    /// keeper pointing at hardware.
-    fn identify(&mut self, port: &str) -> anyhow::Result<()> {
+    /// A targeted say: one face takes the stage, undisturbed. No
+    /// moments budget — the keeper or an application aimed here, and
+    /// the latest ask replaces whatever is showing.
+    fn say_to(&mut self, port: &str, signal: &str, text: Option<&str>) -> anyhow::Result<()> {
         let device = self
             .devices
             .get(port)
             .ok_or_else(|| anyhow::anyhow!("{port}: no minded device"))?;
         if !device.streaming.load(Ordering::Relaxed) {
-            anyhow::bail!("{port}: is not on the stream — only a live face can hear its name");
+            anyhow::bail!("{port}: is not on the stream — only a live face hears its name");
         }
         self.send_to_session(
             port,
             SessionMsg::Out(Outbound::Ring {
-                signal: "info".to_string(),
-                words: vec![port.to_string()],
-                urgency: 3,
+                signal: signal.to_string(),
+                words: text
+                    .unwrap_or("")
+                    .split_whitespace()
+                    .map(|s| s.to_string())
+                    .collect(),
+                urgency: urgency_for(signal),
             }),
         )
     }
@@ -1075,6 +1238,7 @@ fn session_thread(
     events: Sender<HouseEvent>,
     jobs: Arc<Jobs>,
     media_watched: Arc<AtomicBool>,
+    voice: RingVoice,
     device_id: Option<String>,
     class: Option<String>,
 ) {
@@ -1123,7 +1287,7 @@ fn session_thread(
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         session_loop(
             &mut serial, &rx, &close, &streaming, suzu, &port, spec, zones,
-            &events, &jobs, &media_watched, device_id, class,
+            &events, &jobs, &media_watched, voice, device_id, class,
         );
     }));
     if outcome.is_err() {
@@ -1147,6 +1311,54 @@ fn write_line_twice(
     write_line(serial, frame).inspect_err(|_| {
         println!("[sessions] {port}: write failed twice — disposing");
     })
+}
+
+/// One translated ground to the wire, with the second chance. False
+/// means the wire refused twice — the session is over.
+fn deliver_ground(
+    serial: &mut Box<dyn SerialPort>,
+    port: &str,
+    suzu: bool,
+    g: &Arc<MachineReport>,
+    named: &mut Option<String>,
+) -> bool {
+    let frames = if suzu {
+        translate_suzu(g, named)
+    } else {
+        translate(g)
+    };
+    for frame in frames {
+        if write_line_twice(serial, port, &frame).is_err() {
+            return false;
+        }
+    }
+    true
+}
+
+/// Read what the face has said since the last look, bounded; true when
+/// it announced DONE for the stage's own ring. Stale seqs and other
+/// chatter are ignored.
+fn drain_done(serial: &mut Box<dyn SerialPort>, stage_seq: u32) -> bool {
+    let want = format!("DONE,{stage_seq}");
+    let mut acc: Vec<u8> = Vec::new();
+    for _ in 0..8 {
+        let waiting = serial.bytes_to_read().unwrap_or(0);
+        if waiting == 0 {
+            break;
+        }
+        let mut buf = [0u8; 128];
+        let n = serial.read(&mut buf).unwrap_or(0);
+        if n == 0 {
+            break;
+        }
+        acc.extend_from_slice(&buf[..n]);
+        if acc.len() > 1024 {
+            break;
+        }
+    }
+    String::from_utf8_lossy(&acc)
+        .lines()
+        .any(|l| l.trim() == want)
 }
 
 /// One blink of the frame lane: capture, render, publish. A face that
@@ -1182,6 +1394,7 @@ fn session_loop(
     events: &Sender<HouseEvent>,
     jobs: &Jobs,
     media_watched: &Arc<AtomicBool>,
+    voice: RingVoice,
     device_id: Option<String>,
     class: Option<String>,
 ) {
@@ -1195,6 +1408,12 @@ fn session_loop(
     let mut seq: u8 = 0;
     let mut next_frame = Instant::now() + FRAME_PERIOD;
     let mut last_keepalive = Instant::now();
+    // The stage (ADR-0006): while a ring owns the face, the substrate
+    // pauses — the freshest ground is held for an instant resume, and
+    // the stage ends when the face announces DONE for the live seq, or
+    // at the house's bound. A face that cannot answer cannot hold it.
+    let mut stage: Option<(u32, Instant)> = None;
+    let mut held: Option<Arc<MachineReport>> = None;
 
     loop {
         if close.load(Ordering::Relaxed) {
@@ -1215,20 +1434,17 @@ fn session_loop(
                 if !streaming.load(Ordering::Relaxed) {
                     continue; // the roster has not granted this stream
                 }
-                let frames = if suzu {
-                    translate_suzu(&g, &mut named)
-                } else {
-                    translate(&g)
-                };
-                for frame in frames {
-                    if write_line_twice(serial, port, &frame).is_err() {
-                        return;
-                    }
+                if stage.is_some() {
+                    held = Some(g); // the stage owns the panel; keep the freshest
+                    continue;
+                }
+                if !deliver_ground(serial, port, suzu, &g, &mut named) {
+                    return;
                 }
             }
             Ok(SessionMsg::Out(Outbound::Pulse { axis, value })) => {
-                if !suzu || !streaming.load(Ordering::Relaxed) {
-                    continue;
+                if !suzu || !streaming.load(Ordering::Relaxed) || stage.is_some() {
+                    continue; // the stage is the moment; the divider rests
                 }
                 let frame = format!("A,{axis},{value}");
                 if write_line_twice(serial, port, &frame).is_err() {
@@ -1239,12 +1455,29 @@ fn session_loop(
                 if !suzu || !streaming.load(Ordering::Relaxed) {
                     continue;
                 }
+                // The instance degrades the say to the face's declared
+                // dialect (ADR-0006): bare verbs where qualifiers are
+                // not spoken, no words where there is no text channel.
+                // A new say replaces the one showing, and the stage
+                // belongs to the newest ring.
                 seq = seq.wrapping_add(1);
-                let mut frame = format!("R,{signal},{urgency},0,1,{seq},{}", words.join(","));
+                let sig = if voice.qualifiers {
+                    signal.clone()
+                } else {
+                    signal
+                        .split('.')
+                        .next()
+                        .unwrap_or(&signal)
+                        .to_string()
+                };
+                let spoken = if voice.text { words } else { Vec::new() };
+                let mut frame =
+                    format!("R,{sig},{urgency},0,1,{seq},{}", spoken.join(","));
                 frame = with_checksum(&frame);
                 if write_line_twice(serial, port, &frame).is_err() {
                     return;
                 }
+                stage = Some((u32::from(seq), Instant::now() + voice.stage_bound()));
             }
             Ok(SessionMsg::Record { job_id, secs, fps }) => {
                 record_job(serial, port, &job_id, secs, fps, spec.as_ref(), &zones, jobs, events);
@@ -1265,15 +1498,30 @@ fn session_loop(
             Err(std_mpsc::RecvTimeoutError::Disconnected) => break,
         }
         let now = Instant::now();
+        // The stage ends when the face says DONE for the live ring, or
+        // at the house's bound — whichever comes first. The held
+        // ground paints instantly, and the substrate fills the gaps
+        // again.
+        if let Some((stage_seq, deadline)) = stage {
+            if drain_done(serial, stage_seq) || now >= deadline {
+                stage = None;
+                if let Some(g) = held.take() {
+                    if !deliver_ground(serial, port, suzu, &g, &mut named) {
+                        return;
+                    }
+                }
+            }
+        }
         // The media lane's blink, only for someone's eyes: the watch
         // flag (ADR-0004 amendment) rides beside the roster's stream
-        // gate. A recording is work, not a glance — its frames publish
-        // from inside its own handler, watched or not.
+        // gate, and never interrupts a stage. A recording is work, not
+        // a glance — its frames publish from inside its own handler.
         if now >= next_frame {
             next_frame = now + FRAME_PERIOD;
             if suzu
                 && streaming.load(Ordering::Relaxed)
                 && media_watched.load(Ordering::Relaxed)
+                && stage.is_none()
                 && let Some(spec) = &spec
             {
                 frame_blink(serial, port, spec, &zones, events);
@@ -1491,4 +1739,49 @@ fn write_line(serial: &mut Box<dyn SerialPort>, line: &str) -> anyhow::Result<()
 
 fn now() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
+
+#[cfg(test)]
+mod say_tests {
+    use super::*;
+
+    fn ports() -> Vec<String> {
+        vec!["COM12".into(), "COM24".into(), "/dev/ttyUSB0".into()]
+    }
+
+    #[test]
+    fn a_port_opens_the_targeted_form() {
+        let p = parse_say("COM24 INFO Hello from COM24!", &ports());
+        assert_eq!(p.target, Some(Ok("COM24".into())));
+        assert_eq!(p.signal.as_deref(), Some("info"));
+        assert_eq!(p.text.as_deref(), Some("Hello from COM24!"));
+    }
+
+    #[test]
+    fn a_signal_without_port_is_broadcast() {
+        let p = parse_say("alert.disk Disk at 91%", &ports());
+        assert_eq!(p.target, None);
+        assert_eq!(p.signal.as_deref(), Some("alert.disk")); // the qualifier names the icon
+        assert_eq!(p.text.as_deref(), Some("Disk at 91%"));
+    }
+
+    #[test]
+    fn bare_prose_is_a_broadcast_transition() {
+        let p = parse_say("everything is fine", &ports());
+        assert_eq!(p.target, None);
+        assert_eq!(p.signal, None);
+        assert_eq!(p.text.as_deref(), Some("everything is fine"));
+    }
+
+    #[test]
+    fn an_unknown_port_is_refused_not_broadcast() {
+        let p = parse_say("COM99 INFO hi", &ports());
+        assert!(matches!(p.target, Some(Err(_))));
+    }
+
+    #[test]
+    fn a_unique_suffix_resolves() {
+        let p = parse_say("ttyUSB0 INFO hi", &ports());
+        assert_eq!(p.target, Some(Ok("/dev/ttyUSB0".into())));
+    }
 }

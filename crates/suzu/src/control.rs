@@ -27,33 +27,73 @@ pub async fn listen(
     let mut buf = [0u8; 1024]; // show carries text
     loop {
         let (n, peer) = socket.recv_from(&mut buf).await?;
-        let msg = String::from_utf8_lossy(&buf[..n]).trim().to_lowercase();
-        let reply = match msg.as_str() {
-            _ if msg.starts_with("say ") || msg.starts_with("show ") => {
-                // suzu say alert.disk "Disk at 95%" — the nine-ring
-                // vocabulary; urgency comes from the ring's own story.
-                let spec = msg["say ".len()..].trim();
-                let (tag, text) = spec.split_once(' ').unwrap_or((spec, ""));
-                let verb = tag.split('.').next().unwrap_or(tag).to_lowercase();
-                let urgency = match verb.as_str() {
-                    "alert" => 4,
-                    "heartbeat" => 0,
-                    "tended" | "begin" | "completion" | "discovery" | "departure" | "allclear" => 2,
-                    _ => 1,
-                };
-                let label = if text.is_empty() { tag.to_string() } else { text.to_string() };
-                if moments
-                    .send(MomentsCmd::tell("keeper", &verb, Some(label), urgency))
-                    .await
-                    .is_err()
-                {
-                    return Ok(());
+        let raw = String::from_utf8_lossy(&buf[..n]).trim().to_string();
+        let msg = raw.to_lowercase(); // commands match case-blind; payloads keep their case
+        let reply: String = match msg.as_str() {
+            _ if msg.starts_with("say ") => {
+                // The sentence grammar (ADR-0006): [port] [signal] [text…].
+                // A port resolves against the live enumeration — exact
+                // name or unique suffix; prose is a broadcast through
+                // the moments budget.
+                let sentence = raw["say ".len()..].trim();
+                let ports: Vec<String> = crate::enumerate()
+                    .into_iter()
+                    .map(|e| e.name)
+                    .collect();
+                let parsed =
+                    crate::resident::devices::parse_say(sentence, &ports);
+                match parsed.target {
+                    Some(Ok(port)) => {
+                        let signal =
+                            parsed.signal.unwrap_or_else(|| "info".to_string());
+                        let (reply_tx, mut reply_rx) = tokio::sync::mpsc::channel(1);
+                        if tx
+                            .send(DevicesCmd::Say {
+                                port: port.clone(),
+                                signal,
+                                text: parsed.text,
+                                reply: reply_tx,
+                            })
+                            .await
+                            .is_err()
+                        {
+                            return Ok(());
+                        }
+                        match tokio::time::timeout(
+                            Duration::from_secs(5),
+                            reply_rx.recv(),
+                        )
+                        .await
+                        {
+                            Ok(Some(Ok(()))) => {
+                                format!("ok say — {port} takes the stage")
+                            }
+                            Ok(Some(Err(e))) => format!("err {e:#}"),
+                            _ => "err the house did not answer".to_string(),
+                        }
+                    }
+                    Some(Err(reason)) => format!("err {reason}"),
+                    None => {
+                        // broadcast: the moments budget governs visitors
+                        let kind = parsed
+                            .signal
+                            .unwrap_or_else(|| "transition".to_string());
+                        let urgency =
+                            crate::resident::devices::urgency_for(&kind);
+                        if moments
+                            .send(MomentsCmd::tell("keeper", &kind, parsed.text, urgency))
+                            .await
+                            .is_err()
+                        {
+                            return Ok(());
+                        }
+                        "ok say (broadcast)".to_string()
+                    }
                 }
-                "ok say"
             }
             _ if msg.starts_with("show ") => {
                 // suzu show INFO.disk "Disk at 50%" — a moment for faces
-                let spec = msg["show ".len()..].trim();
+                let spec = raw["show ".len()..].trim();
                 let (tag, text) = spec
                     .split_once(' ')
                     .unwrap_or((spec, ""));
@@ -75,25 +115,25 @@ pub async fn listen(
                 {
                     return Ok(());
                 }
-                "ok show"
+                "ok show".to_string()
             }
             "pause" => {
-                // The chirp's ack is the UDP reply below; the command's
+                // the chirp's ack is the UDP reply below; the command's
                 // own door reply is not needed here.
                 let (reply, _rx) = tokio::sync::mpsc::channel(1);
                 if tx.send(DevicesCmd::Pause { reply }).await.is_err() {
                     return Ok(());
                 }
-                "ok pause"
+                "ok pause".to_string()
             }
             "resume" => {
                 let (reply, _rx) = tokio::sync::mpsc::channel(1);
                 if tx.send(DevicesCmd::Resume { reply }).await.is_err() {
                     return Ok(());
                 }
-                "ok resume"
+                "ok resume".to_string()
             }
-            _ => "err unknown",
+            _ => "err unknown".to_string(),
         };
         let _ = socket.send_to(reply.as_bytes(), peer).await;
     }
@@ -105,7 +145,7 @@ pub async fn chirp(word: &str) -> anyhow::Result<()> {
     socket
         .send_to(word.as_bytes(), ("127.0.0.1", CONTROL_PORT))
         .await?;
-    let mut buf = [0u8; 32];
+    let mut buf = [0u8; 256]; // acks may carry reasons
     let ack = match tokio::time::timeout(
         Duration::from_secs(1),
         socket.recv_from(&mut buf),
@@ -130,6 +170,10 @@ pub async fn chirp(word: &str) -> anyhow::Result<()> {
         "ok say" => {
             println!("said — the ring rides the wire; the face carries the story");
         }
+        a if a.starts_with("ok say") => {
+            println!("{a}");
+        }
+        a if a.starts_with("err") => return Err(anyhow!("{a}")),
         other => return Err(anyhow!("unexpected ack: {other}")),
     }
     Ok(())

@@ -392,8 +392,11 @@
       if (d.message) toast(d.message);
     } else if (action === "identify") {
       button.disabled = true;
-      const d = await postOrToast(`/api/device/${port}/identify`, {});
+      // the utterance is the request: identify device COM24
+      const r = await call("GET", `/api/device/identify/${port}`);
+      const d = r.json();
       if (d.message) toast(d.message);
+      else if (!r.ok) toast(`identify failed (${r.status})`);
       // the next devices fact re-renders the card and the button
     } else if (action === "faceplate") {
       const row = Store.state.devices.get(port);

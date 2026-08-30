@@ -35,6 +35,9 @@ ring_label = None          # a moment's text, shown in the band briefly
 ring_icon = None           # its icon's index, when the signal has one
 ring_verb = None           # the objective: alert latches, the rest bloom
 latch = False              # True while an alert is up
+ring_seq = "0"             # the stage's ring: DONE carries it, so a
+                           # dropped animation can never answer for
+                           # the one that replaced it
 band_lit = True            # the band's blink phase during a latched alert
 last_blink = 0
 ring_verb = None           # the ring objective: alert latches, others bloom
@@ -280,6 +283,7 @@ def decay():
         ring_label = None             # the moment passed; the house returns
         ring_icon = None
         ring_until = None
+        r("DONE," + ring_seq)         # the stage is over; ground may flow
         redraw()
     if pulse_lit > pulse_target:      # decay exponential toward the target
         pulse_lit = pulse_target + (pulse_lit - pulse_target) * 3 // 4
@@ -438,10 +442,14 @@ def cmd(line):
             if verb == "alert":
                 latch = True                    # alert latches until allclear
                 ring_until = None
+                r("DONE," + ring_seq)           # integrated: ground may flow
+
             else:
                 latch = False
                 ring_until = time.ticks_add(time.ticks_ms(), 5000)
             band_lit = True
+            if len(p) > 4:
+                ring_seq = p[4]
             ring_draw()
             oled.show()
             ack = "OK," + p[4] if len(p) > 4 else "OK"   # echo the seq
