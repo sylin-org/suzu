@@ -134,7 +134,14 @@ async fn serve_one(mut stream: TcpStream, ctx: Arc<Ctx>) -> Result<()> {
     let request_line = lines.next().unwrap_or("");
     let mut parts = request_line.split_whitespace();
     let method = parts.next().unwrap_or("").to_string();
-    let path = parts.next().unwrap_or("/").to_string();
+    // query strings are transport noise (?t= cache busters and friends)
+    let path = parts
+        .next()
+        .unwrap_or("/")
+        .split('?')
+        .next()
+        .unwrap_or("/")
+        .to_string();
     let mut content_length = 0usize;
     for line in lines {
         if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
