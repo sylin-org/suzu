@@ -79,6 +79,7 @@ const DESTINATIONS: &[(&str, &str, &str, &str, &str)] = &[
 ];
 
 pub struct Ctx {
+    pub catalog: Arc<crate::Catalog>,
     pub devices: mpsc::Sender<DevicesCmd>,
     pub moments: mpsc::Sender<MomentsCmd>,
     pub roster: Arc<std::sync::RwLock<Roster>>,
@@ -165,6 +166,10 @@ async fn route(ctx: &Ctx, method: &str, path: &str, body: &str) -> (u16, &'stati
             })).collect::<Vec<_>>()
         )),
         ("GET", p) if p.starts_with("/api/shot/") => shot(ctx, p).await,
+        ("GET", p) if p.starts_with("/api/device-image/") => {
+            let class = p.trim_start_matches("/api/device-image/");
+            device_image(ctx, class)
+        }
         ("POST", p) if p.starts_with("/api/capture/") && p.ends_with("/save") => {
             let port = p.trim_start_matches("/api/capture/").trim_end_matches("/save");
             capture_save(ctx, port).await
@@ -188,6 +193,19 @@ async fn route(ctx: &Ctx, method: &str, path: &str, body: &str) -> (u16, &'stati
         ("POST", "/api/control") => control(ctx, body).await,
         ("POST", "/api/say") => say(ctx, body).await,
         _ => (404, "application/json", br#"{"error":"no such door"}"#.to_vec()),
+    }
+}
+
+/// The class's product photo, straight from its manifest folder. The
+/// class id is whitelisted against the catalog's own manifest map, so
+/// the path can never wander outside hardware/classes/.
+fn device_image(ctx: &Ctx, class: &str) -> (u16, &'static str, Vec<u8>) {
+    let Some(file) = ctx.catalog.device_image(class) else {
+        return (404, "application/json", br#"{"error":"no image declared for this class"}"#.to_vec());
+    };
+    match std::fs::read(&file) {
+        Ok(bytes) => (200, "image/jpeg", bytes),
+        Err(_) => (404, "application/json", br#"{"error":"declared image is missing"}"#.to_vec()),
     }
 }
 

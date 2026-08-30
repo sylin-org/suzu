@@ -974,3 +974,10 @@ body.readonly #form-destroy { display: none !important; }
   background: #000; min-height: 60px; border: 1px solid var(--line);
 }
 .media-age { font-size: 11px; color: var(--muted); flex: 1 1 auto; text-align: right; }
+
+.device-card { flex-direction: row; align-items: center; gap: 12px; }
+.device-photo {
+  width: 84px; height: 84px; object-fit: cover; flex: none;
+  border-radius: 10px; border: 1px solid var(--line); background: #000;
+}
+.device-body { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 9px; }

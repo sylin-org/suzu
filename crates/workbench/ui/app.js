@@ -98,8 +98,13 @@
       ? `<div class="device-saga">${escapeHtml(saga.kind)} saga · ${escapeHtml(saga.state)} · ${escapeHtml(saga.steps.map((s) => s.name).join(" → ") || "starting")}</div>`
       : "";
     const maintenance = lifecycle === "undermaintenance";
+    const photo = row.class
+      ? `<img class="device-photo" alt="" src="${API}/api/device-image/${encodeURIComponent(row.class)}" onerror="this.remove()">`
+      : "";
     return `
       <article class="device-card" data-port="${escapeHtml(row.port)}">
+        ${photo}
+        <div class="device-body">
         <div class="device-head">
           <span class="chip ${row.streaming ? "on" : ""}"><span class="dot"></span>${escapeHtml(row.port)}</span>
           <span class="device-class">${escapeHtml(row.class ?? "no class")}</span>
@@ -118,6 +123,7 @@
           <button class="ghost-button" data-action="record" ${maintenance ? "disabled" : ""}>Record 4s</button>
           <button class="ghost-button" data-action="soft" ${maintenance ? "disabled" : ""}>Reinstall (soft)</button>
           <button class="danger-button" data-action="factory" ${maintenance ? "disabled" : ""}>Factory wipe</button>
+        </div>
         </div>
       </article>`;
   }

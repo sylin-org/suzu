@@ -1,4 +1,5 @@
 schema: 1
+image: device.jpg               # product photo, XIAO ESP32S3 Sense with camera (Hackaday.io via image search)
 id: xiao-esp32s3-sense
 coverage_target: suzu-a            # as an ember until a display is attached
 flash:

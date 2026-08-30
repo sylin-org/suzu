@@ -451,7 +451,7 @@ pub async fn run(catalog: Arc<Catalog>) -> anyhow::Result<()> {
         };
         tokio::spawn(watcher.run());
     }
-    spawn_devices_supervised(Arc::clone(&house), devices_rx, Arc::clone(&roster), catalog);
+    spawn_devices_supervised(Arc::clone(&house), devices_rx, Arc::clone(&roster), Arc::clone(&catalog));
     spawn_moments_supervised(Arc::clone(&house), moments_rx);
     spawn_sensor_supervised(Arc::clone(&house));
     spawn_publisher_supervised(Arc::clone(&house));
@@ -462,6 +462,7 @@ pub async fn run(catalog: Arc<Catalog>) -> anyhow::Result<()> {
 
     // the workbench's door: the loopback read API (ADR-0002)
     tokio::spawn(api::listen(Arc::new(api::Ctx {
+        catalog: Arc::clone(&catalog),
         devices: house.devices_door(),
         moments: house.moments_door(),
         roster: Arc::clone(&roster),

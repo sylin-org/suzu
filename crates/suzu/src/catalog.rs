@@ -91,6 +91,8 @@ pub struct ClassManifest {
     pub id: String,
     pub display: Option<DisplaySpec>,
     pub frame: Option<FrameSpec>,
+    /// The class's product photo, relative to the class folder.
+    pub image: Option<String>,
 }
 
 #[derive(Clone)]
@@ -102,6 +104,8 @@ pub struct Catalog {
     index: HashMap<u16, Vec<(Option<u16>, usize)>>,
     /// class id -> its manifest's servicing bits (display zones …)
     manifests: HashMap<String, ClassManifest>,
+    /// Where the manifests were found — image paths resolve against these.
+    roots: Vec<PathBuf>,
 }
 
 /// `#rrggbb` -> RGB triple; unparsable colors fall back to white.
@@ -197,6 +201,7 @@ impl Catalog {
                 classes,
                 index,
                 manifests,
+                roots: vec![root.clone()],
             };
         }
 
@@ -205,7 +210,21 @@ impl Catalog {
             classes: Vec::new(),
             index: HashMap::new(),
             manifests: HashMap::new(),
+            roots: Vec::new(),
         }
+    }
+
+    /// The class's declared product photo, resolved against the
+    /// catalog roots. `None` when the class declares no image or the
+    /// file is missing — the workbench shows nothing rather than a
+    /// placeholder pretending to be hardware.
+    pub fn device_image(&self, class_id: &str) -> Option<PathBuf> {
+        let manifest = self.manifests.get(class_id)?;
+        let image = manifest.image.as_ref()?;
+        self.roots
+            .iter()
+            .map(|root| root.join(class_id).join(image))
+            .find(|p| p.exists())
     }
 
     /// VID/PID lookup — used when the port is silent (fresh firmware).

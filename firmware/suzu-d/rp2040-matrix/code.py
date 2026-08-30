@@ -41,11 +41,13 @@ except AttributeError:
 NUM = 25
 COLS = 5
 ROWS = 5
-# These LEDs are GRB-wired; the library's silent default is RGB, which
-# swaps red and green on the physical board while the J shot (logical
-# rgb) stays truthful - preview and pond disagreed until this was set.
+# These LEDs are RGB-wired; CircuitPython's neopixel silently defaults
+# to GRB, which swaps red and green on the physical board while the J
+# shot (logical rgb) stays truthful - preview and pond disagreed until
+# this was set. Confirmed empirically 2026-08-30: GRB order showed
+# amber frames as green pixels.
 pixels = neopixel.NeoPixel(board.GP16, NUM, brightness=0.3, auto_write=False,
-                           pixel_order=neopixel.GRB)
+                           pixel_order=neopixel.RGB)
 
 _VERSION = "1.0.0"
 TICK = 0.05
