@@ -129,6 +129,9 @@ called the faces candles, not strobes.
 
 ## References
 
+- [`docs/the-door-contract.md`](../../docs/the-door-contract.md) — the
+  semantic exchange every command door speaks (adopted with the
+  watched lane)
 - `docs/adr/0002-the-workbench.md` — the window's framing, kept intact
 - `docs/adr/0003-the-roster.md` — the lifecycle the Status view renders
 - `crates/suzu/src/resident/api.rs` — the door: snapshot, deltas, bounded command shape

@@ -124,6 +124,14 @@ pub struct WatchReport {
     pub blinking: usize,
 }
 
+/// The stream toggle's verdict, for the door's reply: whether the
+/// pause flag moved, and how many minded ports the stream touches.
+#[derive(Debug, Clone, Serialize)]
+pub struct StreamReport {
+    pub changed: bool,
+    pub ports: usize,
+}
+
 pub enum DevicesCmd {
     Mind(DeviceFacts),
     Gone { port: String },
@@ -141,8 +149,8 @@ pub enum DevicesCmd {
     /// The control chirp: stop streaming and release the ports (the
     /// faces fall idle into their animations), then re-open and
     /// re-publish. In-memory only — it dies with the process.
-    Pause { reply: mpsc::Sender<()> },
-    Resume { reply: mpsc::Sender<()> },
+    Pause { reply: mpsc::Sender<StreamReport> },
+    Resume { reply: mpsc::Sender<StreamReport> },
     /// The watched lane (ADR-0004 amendment): a window asserted (or
     /// released) its watch on the media lane. The reply is optional —
     /// the wire's own release on last-client-departure needs no ack.
@@ -252,12 +260,12 @@ impl Devices {
                             let _ = reply.send(res).await;
                         }
                         DevicesCmd::Pause { reply } => {
-                            self.pause_stream();
-                            let _ = reply.send(()).await;
+                            let report = self.pause_stream();
+                            let _ = reply.send(report).await;
                         }
                         DevicesCmd::Resume { reply } => {
-                            self.resume_stream().await;
-                            let _ = reply.send(()).await;
+                            let report = self.resume_stream().await;
+                            let _ = reply.send(report).await;
                         }
                         DevicesCmd::WatchMedia { on, reply } => {
                             let report = self.watch_media(on);
@@ -455,9 +463,9 @@ impl Devices {
     /// Pause: sessions close, ports release, the ground stops. The
     /// faces fall idle into their animations; the devices stay minded
     /// so `resume` re-opens without replug.
-    fn pause_stream(&mut self) {
+    fn pause_stream(&mut self) -> StreamReport {
         if self.paused {
-            return;
+            return StreamReport { changed: false, ports: self.devices.len() };
         }
         self.paused = true;
         let ports: Vec<String> = self.devices.keys().cloned().collect();
@@ -473,14 +481,15 @@ impl Devices {
             "[devices] stream paused — {} port(s) released, faces fall idle (`suzu resume` to restart)",
             self.devices.len()
         );
+        StreamReport { changed: true, ports: self.devices.len() }
     }
 
     /// Resume: sessions re-open (each re-taking its admission exam),
     /// and the publisher republishes its last ground so admitted faces
     /// redress at once.
-    async fn resume_stream(&mut self) {
+    async fn resume_stream(&mut self) -> StreamReport {
         if !self.paused {
-            return;
+            return StreamReport { changed: false, ports: self.devices.len() };
         }
         self.paused = false;
         let ports: Vec<String> = self.devices.keys().cloned().collect();
@@ -496,6 +505,7 @@ impl Devices {
             });
         }
         let _ = self.events.send(HouseEvent::Paused { paused: false });
+        StreamReport { changed: true, ports: self.devices.len() }
     }
 
     fn mind(&mut self, mut facts: DeviceFacts) {
@@ -697,11 +707,26 @@ impl Devices {
             .get(port)
             .and_then(|d| d.device_id().map(|s| s.to_string()))
             .ok_or_else(|| anyhow::anyhow!("{port}: no minded device"))?;
-        self.roster
-            .write()
-            .map_err(|_| anyhow::anyhow!("roster lock poisoned"))?
-            .pause(&device_id)
-            .map_err(|e| anyhow::anyhow!("{port}: cannot pause ({e:?})"))?;
+        {
+            let mut roster = self
+                .roster
+                .write()
+                .map_err(|_| anyhow::anyhow!("roster lock poisoned"))?;
+            let current = roster
+                .individual(&device_id)
+                .map(|i| format!("{:?}", i.lifecycle).to_lowercase());
+            roster.pause(&device_id).map_err(|e| {
+                anyhow::anyhow!("{port}: cannot pause — {}", match e {
+                    super::roster::Refusal::NotFrom(from) => format!(
+                        "that move is only from {from} (this face is {})",
+                        current.as_deref().unwrap_or("unknown")
+                    ),
+                    super::roster::Refusal::Unknown => {
+                        "the roster holds no such individual".to_string()
+                    }
+                })
+            })?;
+        }
         if let Some(d) = self.devices.get_mut(port) {
             d.streaming.store(false, Ordering::Relaxed);
         }
@@ -720,11 +745,26 @@ impl Devices {
             .get(port)
             .and_then(|d| d.device_id().map(|s| s.to_string()))
             .ok_or_else(|| anyhow::anyhow!("{port}: no minded device"))?;
-        self.roster
-            .write()
-            .map_err(|_| anyhow::anyhow!("roster lock poisoned"))?
-            .resume(&device_id)
-            .map_err(|e| anyhow::anyhow!("{port}: cannot resume ({e:?})"))?;
+        {
+            let mut roster = self
+                .roster
+                .write()
+                .map_err(|_| anyhow::anyhow!("roster lock poisoned"))?;
+            let current = roster
+                .individual(&device_id)
+                .map(|i| format!("{:?}", i.lifecycle).to_lowercase());
+            roster.resume(&device_id).map_err(|e| {
+                anyhow::anyhow!("{port}: cannot resume — {}", match e {
+                    super::roster::Refusal::NotFrom(from) => format!(
+                        "that move is only from {from} (this face is {})",
+                        current.as_deref().unwrap_or("unknown")
+                    ),
+                    super::roster::Refusal::Unknown => {
+                        "the roster holds no such individual".to_string()
+                    }
+                })
+            })?;
+        }
         if let Some(d) = self.devices.get_mut(port) {
             d.streaming.store(true, Ordering::Relaxed);
         }

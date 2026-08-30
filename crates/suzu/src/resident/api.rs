@@ -368,6 +368,31 @@ fn find_headers_end(buf: &[u8]) -> Option<usize> {
     buf.windows(4).position(|w| w == b"\r\n\r\n").map(|p| p + 4)
 }
 
+/// The door contract's envelope (docs/the-door-contract.md): was
+/// anything changed, what was asked, what is true now.
+fn envelope(confirmed: bool, message: impl serde::Serialize) -> (u16, &'static str, Vec<u8>) {
+    (
+        if confirmed { 200 } else { 409 },
+        "application/json",
+        serde_json::to_vec(&serde_json::json!({
+            "confirmed": confirmed,
+            "message": message,
+        }))
+        .unwrap_or_default(),
+    )
+}
+
+/// The ask names nothing the house knows (the door contract: the
+/// refusal is the envelope, and names what *is* known).
+fn no_such(msg: &'static str) -> (u16, &'static str, Vec<u8>) {
+    (
+        404,
+        "application/json",
+        serde_json::to_vec(&serde_json::json!({ "confirmed": false, "message": msg }))
+            .unwrap_or_default(),
+    )
+}
+
 async fn route(ctx: &Ctx, method: &str, path: &str, body: &str) -> (u16, &'static str, Vec<u8>) {
     let json = |v: serde_json::Value| (200u16, "application/json", serde_json::to_vec(&v).unwrap_or_default());
     match (method, path) {
@@ -387,49 +412,53 @@ async fn route(ctx: &Ctx, method: &str, path: &str, body: &str) -> (u16, &'stati
             let target = p.trim_start_matches("/api/capture/").trim_end_matches("/save");
             match resolve_target(ctx, target) {
                 Some(port) => capture_save(ctx, &port).await,
-                None => (404, "application/json", br#"{"error":"no such device on the roster"}"#.to_vec()),
+                None => no_such("no such device on the roster"),
             }
         }
         ("POST", p) if p.starts_with("/api/record/") => {
             let target = p.trim_start_matches("/api/record/");
             match resolve_target(ctx, target) {
                 Some(port) => record_start(ctx, &port, body).await,
-                None => (404, "application/json", br#"{"error":"no such device on the roster"}"#.to_vec()),
+                None => no_such("no such device on the roster"),
             }
         }
         ("POST", p) if p.starts_with("/api/admission/") => {
             let target = p.trim_start_matches("/api/admission/");
             match resolve_target(ctx, target) {
                 Some(port) => admission(ctx, &port).await,
-                None => (404, "application/json", br#"{"error":"no such device on the roster"}"#.to_vec()),
+                None => no_such("no such device on the roster"),
             }
         }
         ("POST", p) if p.starts_with("/api/device/") && p.ends_with("/pause") => {
             let target = p.trim_start_matches("/api/device/").trim_end_matches("/pause");
             match resolve_target(ctx, target) {
                 Some(port) => device_stream_toggle(ctx, &port, false).await,
-                None => (404, "application/json", br#"{"error":"no such device on the roster"}"#.to_vec()),
+                None => no_such("no such device on the roster"),
             }
         }
         ("POST", p) if p.starts_with("/api/device/") && p.ends_with("/resume") => {
             let target = p.trim_start_matches("/api/device/").trim_end_matches("/resume");
             match resolve_target(ctx, target) {
                 Some(port) => device_stream_toggle(ctx, &port, true).await,
-                None => (404, "application/json", br#"{"error":"no such device on the roster"}"#.to_vec()),
+                None => no_such("no such device on the roster"),
             }
         }
         ("POST", p) if p.starts_with("/api/maintenance/") => {
             let target = p.trim_start_matches("/api/maintenance/");
             match resolve_target(ctx, target) {
                 Some(port) => maintenance(ctx, &port, body).await,
-                None => (404, "application/json", br#"{"error":"no such device on the roster"}"#.to_vec()),
+                None => no_such("no such device on the roster"),
             }
         }
-        ("POST", "/api/shutdown") => (200, "application/json", br#"{"stopping":true}"#.to_vec()),
+        ("POST", "/api/shutdown") => (200, "application/json", serde_json::to_vec(&serde_json::json!({
+        "confirmed": true,
+        "stopping": true,
+        "message": "the resident rests — the garden keeps breathing",
+    })).unwrap_or_default()),
         ("POST", "/api/ui") => ui_action(ctx, body).await,
         ("POST", "/api/control") => control(ctx, body).await,
         ("POST", "/api/say") => say(ctx, body).await,
-        _ => (404, "application/json", br#"{"error":"no such door"}"#.to_vec()),
+        _ => no_such("no such door"),
     }
 }
 
@@ -454,20 +483,12 @@ async fn shot(ctx: &Ctx, path: &str) -> (u16, &'static str, Vec<u8>) {
         return (404, "application/json", br#"{"error":"shots are /api/shot/PORT.png"}"#.to_vec());
     };
     let Some(port) = resolve_target(ctx, raw) else {
-        return (404, "application/json", br#"{"error":"no such device on the roster"}"#.to_vec());
+        return no_such("no such device on the roster");
     };
     match door(&ctx.devices, |reply| DevicesCmd::LatestFrame { port, reply }).await {
         Ok(Ok(png)) => (200, "image/png", png),
-        Ok(Err(e)) => (
-            409,
-            "application/json",
-            serde_json::to_vec(&serde_json::json!({ "error": format!("{e:#}") })).unwrap_or_default(),
-        ),
-        Err(e) => (
-            504,
-            "application/json",
-            serde_json::to_vec(&serde_json::json!({ "error": e })).unwrap_or_default(),
-        ),
+        Ok(Err(e)) => envelope(false, format!("{e:#}")),
+        Err(e) => envelope(false, e),
     }
 }
 
@@ -476,10 +497,15 @@ async fn capture_save(ctx: &Ctx, port: &str) -> (u16, &'static str, Vec<u8>) {
         Ok(Ok(path)) => (
             200,
             "application/json",
-            serde_json::to_vec(&serde_json::json!({ "saved": path })).unwrap_or_default(),
+            serde_json::to_vec(&serde_json::json!({
+                "confirmed": true,
+                "saved": path,
+                "message": format!("the newest frame of {port}, saved"),
+            }))
+            .unwrap_or_default(),
         ),
-        Ok(Err(e)) => (409, "application/json", serde_json::to_vec(&serde_json::json!({ "error": format!("{e:#}") })).unwrap_or_default()),
-        Err(e) => (504, "application/json", serde_json::to_vec(&serde_json::json!({ "error": e })).unwrap_or_default()),
+        Ok(Err(e)) => envelope(false, format!("{e:#}")),
+        Err(e) => envelope(false, e),
     }
 }
 
@@ -510,9 +536,18 @@ async fn record_start(ctx: &Ctx, port: &str, body: &str) -> (u16, &'static str, 
     })
     .await
     {
-        Ok(Ok(())) => (200, "application/json", br#"{"started":true,"note":"the job's verdict arrives as a Job fact"}"#.to_vec()),
-        Ok(Err(e)) => (409, "application/json", serde_json::to_vec(&serde_json::json!({ "error": format!("{e:#}") })).unwrap_or_default()),
-        Err(e) => (504, "application/json", serde_json::to_vec(&serde_json::json!({ "error": e })).unwrap_or_default()),
+        Ok(Ok(())) => (
+            200,
+            "application/json",
+            serde_json::to_vec(&serde_json::json!({
+                "confirmed": true,
+                "record": { "secs": secs, "fps": fps },
+                "message": format!("recording {port} — {secs}s at {fps} fps; the GIF's verdict arrives as a Job fact"),
+            }))
+            .unwrap_or_default(),
+        ),
+        Ok(Err(e)) => envelope(false, format!("{e:#}")),
+        Err(e) => envelope(false, e),
     }
 }
 
@@ -521,10 +556,15 @@ async fn admission(ctx: &Ctx, port: &str) -> (u16, &'static str, Vec<u8>) {
         Ok(Ok(())) => (
             200,
             "application/json",
-            serde_json::to_vec(&serde_json::json!({ "started": true, "note": "the verdict arrives on the log" })).unwrap_or_default(),
+            serde_json::to_vec(&serde_json::json!({
+                "confirmed": true,
+                "admission": "retry",
+                "message": format!("the exam re-runs on {port} — the verdict arrives on the log"),
+            }))
+            .unwrap_or_default(),
         ),
-        Ok(Err(e)) => (409, "application/json", serde_json::to_vec(&serde_json::json!({ "error": format!("{e:#}") })).unwrap_or_default()),
-        Err(e) => (504, "application/json", serde_json::to_vec(&serde_json::json!({ "error": e })).unwrap_or_default()),
+        Ok(Err(e)) => envelope(false, format!("{e:#}")),
+        Err(e) => envelope(false, e),
     }
 }
 
@@ -540,24 +580,39 @@ async fn device_stream_toggle(ctx: &Ctx, port: &str, resume: bool) -> (u16, &'st
         Ok(Ok(())) => (
             200,
             "application/json",
-            serde_json::to_vec(&serde_json::json!({ "stream": if resume { "on" } else { "off" } })).unwrap_or_default(),
+            serde_json::to_vec(&serde_json::json!({
+                "confirmed": true,
+                "stream": if resume { "on" } else { "off" },
+                "message": format!("{port} {}", if resume { "back on the stream — no re-test needed" } else { "lifted off the stream — the face rests" }),
+            }))
+            .unwrap_or_default(),
         ),
-        Ok(Err(e)) => (409, "application/json", serde_json::to_vec(&serde_json::json!({ "error": format!("{e:#}") })).unwrap_or_default()),
-        Err(e) => (504, "application/json", serde_json::to_vec(&serde_json::json!({ "error": e })).unwrap_or_default()),
+        Ok(Err(e)) => envelope(false, format!("{e:#}")),
+        Err(e) => envelope(false, e),
     }
 }
 
 async fn maintenance(ctx: &Ctx, port: &str, body: &str) -> (u16, &'static str, Vec<u8>) {
     let parsed: serde_json::Value = serde_json::from_str(body).unwrap_or(serde_json::json!({}));
     let kind = parsed.get("kind").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    match door(&ctx.devices, |reply| DevicesCmd::MaintenanceStart { port: port.to_string(), kind, reply }).await {
+    match door(&ctx.devices, |reply| DevicesCmd::MaintenanceStart {
+        port: port.to_string(),
+        kind: kind.clone(),
+        reply,
+    })
+    .await {
         Ok(Ok(())) => (
             200,
             "application/json",
-            serde_json::to_vec(&serde_json::json!({ "started": true, "note": "the saga's steps arrive on the log" })).unwrap_or_default(),
+            serde_json::to_vec(&serde_json::json!({
+                "confirmed": true,
+                "maintenance": kind,
+                "message": format!("the {kind} saga owns {port} — its steps arrive on the log"),
+            }))
+            .unwrap_or_default(),
         ),
-        Ok(Err(e)) => (409, "application/json", serde_json::to_vec(&serde_json::json!({ "error": format!("{e:#}") })).unwrap_or_default()),
-        Err(e) => (504, "application/json", serde_json::to_vec(&serde_json::json!({ "error": e })).unwrap_or_default()),
+        Ok(Err(e)) => envelope(false, format!("{e:#}")),
+        Err(e) => envelope(false, e),
     }
 }
 
@@ -655,12 +710,31 @@ async fn control(ctx: &Ctx, body: &str) -> (u16, &'static str, Vec<u8>) {
                 }
             };
             match door(&ctx.devices, asked).await {
-                Ok(()) => (
-                    200,
-                    "application/json",
-                    serde_json::to_vec(&serde_json::json!({ "paused": !resume })).unwrap_or_default(),
-                ),
-                Err(e) => (504, "application/json", serde_json::to_vec(&serde_json::json!({ "error": e })).unwrap_or_default()),
+                Ok(report) => {
+                    let message = match (resume, report.changed) {
+                        (true, true) => format!(
+                            "stream resumed — {} session(s) re-open, the faces redress",
+                            report.ports
+                        ),
+                        (true, false) => "the stream was already flowing".to_string(),
+                        (false, true) => format!(
+                            "stream paused — {} port(s) released, the faces fall idle",
+                            report.ports
+                        ),
+                        (false, false) => "the stream was already paused".to_string(),
+                    };
+                    (
+                        200,
+                        "application/json",
+                        serde_json::to_vec(&serde_json::json!({
+                            "confirmed": report.changed,
+                            "verb": verb,
+                            "message": message,
+                        }))
+                        .unwrap_or_default(),
+                    )
+                }
+                Err(e) => envelope(false, e),
             }
         }
         _ => (400, "application/json", br#"{"error":"verb is pause | resume"}"#.to_vec()),
@@ -678,9 +752,18 @@ async fn say(ctx: &Ctx, body: &str) -> (u16, &'static str, Vec<u8>) {
     let urgency = parsed.get("urgency").and_then(|v| v.as_u64()).unwrap_or(2) as u8;
     let _ = ctx
         .moments
-        .send(MomentsCmd::tell("workbench", &kind, Some(label), urgency.min(5)))
+        .send(MomentsCmd::tell("workbench", &kind, Some(label.clone()), urgency.min(5)))
         .await;
-    (200, "application/json", br#"{"rung":true}"#.to_vec())
+    (
+        200,
+        "application/json",
+        serde_json::to_vec(&serde_json::json!({
+            "confirmed": true,
+            "say": kind,
+            "message": format!("the moment is handed to the house — {}", label),
+        }))
+        .unwrap_or_default(),
+    )
 }
 
 async fn write_response(stream: &mut TcpStream, status: u16, content_type: &str, payload: Vec<u8>) -> Result<()> {

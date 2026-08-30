@@ -54,7 +54,7 @@
     try {
       const r = await call("POST", path, body);
       const d = r.json();
-      if (!r.ok) toast(d.error ?? `${path} failed`);
+      if (!r.ok) toast(d.message ?? `${path} failed (${r.status})`);
       return d;
     } catch (e) {
       toast(`the house did not answer: ${e.message ?? e}`);
@@ -288,7 +288,7 @@
       );
       if (ok) {
         const d = await postOrToast(`/api/maintenance/${port}`, { kind: "install" });
-        if (d.started) toast(`${port}: the saga begins \u2014 follow the steps here`);
+        if (d.message) toast(d.message);
       }
     } else if (action === "factory") {
       const ok = await confirmChange(
@@ -378,10 +378,10 @@
     if (!port) return;
     if (button.dataset.maction === "shot") {
       const d = await postOrToast(`/api/capture/${port}/save`, {});
-      if (d.saved) toast(`saved ${d.saved}`);
+      if (d.saved) toast(d.message);
     } else {
       const d = await postOrToast(`/api/record/${port}`, { secs: 4, fps: 3 });
-      if (d.started) toast(`${port}: recording — the pane shows what the GIF takes`);
+      if (d.message) toast(d.message);
     }
   });
 
