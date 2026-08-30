@@ -214,6 +214,16 @@
   }
 
   // ── log ─────────────────────────────────────────────────────────
+  function appendLogLine(domain, text, at) {
+    if (activeView !== "log") return;
+    const row = document.createElement("div");
+    row.className = "stream-row";
+    row.innerHTML = `<span class="row-when">${escapeHtml((at ?? "").slice(11))}</span>`
+      + `<span class="row-domain">${escapeHtml(domain)}</span>`
+      + `<span class="row-text">${escapeHtml(text)}</span>`;
+    el.log_stream.prepend(row);
+  }
+
   async function pollLog() {
     try {
       const lines = await getJSON("/api/log");
@@ -255,7 +265,7 @@
       const age = document.getElementById(`age-${port}`);
       img.onload = () => { if (age) age.textContent = `frame ${new Date().toLocaleTimeString()}`; };
       img.onerror = () => { if (age) age.textContent = "no shot — unreachable"; };
-      img.src = `${API}/api/shot/${port}.png?t=${Date.now()}`;
+      img.src = `${API}/api/shot/${port}.png?scale=1&t=${Date.now()}`;
       }
       const rec = document.getElementById("media-note");
       try {
@@ -341,11 +351,24 @@
   // The live wire: the house's facts arrive as they happen, and the
   // roster re-renders within a beat of each one.
   let pollQueued = false;
+  // The announcement pipeline: one stream, routed by type. Roster
+  // facts refresh the cards; rings and saga steps flow to the Log.
+  const ROSTER_EVENTS = new Set([
+    "device_minded", "device_released", "device_homecoming",
+    "individual_held", "admission_report", "stream_attached",
+    "stream_detached", "maintenance_started", "maintenance_step",
+    "maintenance_completed",
+  ]);
   if (window.__TAURI__?.event?.listen) {
-    window.__TAURI__.event.listen("house", () => {
-      if (!pollQueued) {
+    window.__TAURI__.event.listen("house", (e) => {
+      let msg;
+      try { msg = JSON.parse(e.payload); } catch { return; }
+      if (ROSTER_EVENTS.has(msg.type) && !pollQueued) {
         pollQueued = true;
         setTimeout(() => { pollQueued = false; pollStatus(); }, 150);
+      }
+      if (activeView === "log" && msg.text) {
+        appendLogLine(msg.domain, msg.text, msg.at);
       }
     });
   }
@@ -353,8 +376,8 @@
   await pollStatus();
   await renderAbout();
   renderWheel();
-  setInterval(pollStatus, 2000);
-  setInterval(() => { if (activeView === "log") pollLog(); }, 2000);
+  setInterval(pollStatus, 10000); // the safety net; announcements do the work
+  setInterval(() => { if (activeView === "log") pollLog(); }, 10000);
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) stopMedia();
     else if (activeView === "media") startMedia();

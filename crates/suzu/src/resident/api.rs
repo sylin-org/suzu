@@ -14,6 +14,7 @@
 //! same machine as the faces).
 
 use super::devices::{DevicesCmd, RecordState};
+use super::events::HouseEvent;
 use super::moments::MomentsCmd;
 use super::roster::Roster;
 use anyhow::Result;
@@ -90,6 +91,7 @@ const DESTINATIONS: &[(&str, &str, &str, &str, &str)] = &[
 
 pub struct Ctx {
     pub catalog: Arc<crate::Catalog>,
+    pub events: tokio::sync::broadcast::Sender<HouseEvent>,
     pub devices: mpsc::Sender<DevicesCmd>,
     pub moments: mpsc::Sender<MomentsCmd>,
     pub roster: Arc<std::sync::RwLock<Roster>>,
@@ -165,9 +167,12 @@ async fn serve_one(mut stream: TcpStream, ctx: Arc<Ctx>) -> Result<()> {
 
     let started = Instant::now();
     let (status, content_type, payload) = route(&ctx, &method, &path, &body).await;
+    let journaled = method == "POST" && path != "/api/shot";
     if path != "/api/shot" {
         // One honest access line per request — shots poll too fast to matter.
-        ctx.journal.record("api", &format!("{method} {path} → {status} ({} ms)", started.elapsed().as_millis()));
+        if journaled {
+            ctx.journal.record("api", &format!("{method} {path} → {status} ({} ms)", started.elapsed().as_millis()));
+        }
     }
     write_response(&mut stream, status, &content_type, payload).await
 }
@@ -177,17 +182,35 @@ async fn serve_one(mut stream: TcpStream, ctx: Arc<Ctx>) -> Result<()> {
 async fn events_stream(ctx: Arc<Ctx>, mut stream: TcpStream) -> Result<()> {
     let head = "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n                cache-control: no-cache\r\naccess-control-allow-origin: *\r\n                connection: keep-alive\r\n\r\n";
     stream.write_all(head.as_bytes()).await?;
+    // seed with the recent past, then stream the house's facts
     for line in ctx.journal.tail(30) {
         let payload = serde_json::to_string(&line).unwrap_or_default();
         stream.write_all(format!("data: {payload}\n\n").as_bytes()).await?;
     }
     stream.flush().await?;
-    let mut rx = ctx.journal.subscribe();
+    let mut rx = ctx.events.subscribe();
     loop {
         match rx.recv().await {
-            Ok(line) => {
-                let payload = serde_json::to_string(&line).unwrap_or_default();
-                stream.write_all(format!("data: {payload}\n\n").as_bytes()).await?;
+            Ok(ev) => {
+                // the pulse lane is data at 5 Hz, not an announcement
+                if matches!(ev, HouseEvent::Pulse { .. }) {
+                    continue;
+                }
+                let (domain, text) = crate::resident::format_house_event(&ev);
+                let event = serde_json::to_value(&ev).unwrap_or_default();
+                let kind = event
+                    .get("type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+                let payload = serde_json::json!({
+                    "type": kind,
+                    "at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                    "domain": domain,
+                    "text": text,
+                    "event": event,
+                });
+                stream.write_all(format!("data: {}\n\n", serde_json::to_string(&payload).unwrap_or_default()).as_bytes()).await?;
                 stream.flush().await?;
             }
             Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
@@ -221,7 +244,7 @@ async fn route(ctx: &Ctx, method: &str, path: &str, body: &str) -> (u16, &'stati
                 "group": group, "key": key, "title": title, "blurb": blurb, "url": url,
             })).collect::<Vec<_>>()
         )),
-        ("GET", p) if p.starts_with("/api/shot/") => shot(ctx, p).await,
+        ("GET", p) if p.starts_with("/api/shot/") => shot(ctx, p, "").await,
         ("GET", p) if p.starts_with("/api/device-image/") => {
             let class = p.trim_start_matches("/api/device-image/");
             device_image(ctx, class)
@@ -311,7 +334,7 @@ async fn status(ctx: &Ctx) -> (u16, &'static str, Vec<u8>) {
     (200, "application/json", serde_json::to_vec(&json).unwrap_or_default())
 }
 
-async fn shot(ctx: &Ctx, path: &str) -> (u16, &'static str, Vec<u8>) {
+async fn shot(ctx: &Ctx, path: &str, query: &str) -> (u16, &'static str, Vec<u8>) {
     let Some(raw) = path.trim_start_matches("/api/shot/").strip_suffix(".png") else {
         return (404, "application/json", br#"{"error":"shots are /api/shot/PORT.png"}"#.to_vec());
     };

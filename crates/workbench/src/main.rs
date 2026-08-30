@@ -37,17 +37,21 @@ fn ready(app: tauri::AppHandle) {
 /// Open one of the About page's destinations. Anything outside the
 /// product's own surfaces is refused, not merely unlinked.
 #[tauri::command]
-fn open_destination(url: String) -> Result<(), String> {
+async fn open_destination(url: String) -> Result<(), String> {
     if !url_is_ours(&url) {
         return Err(format!("refused: {url} points outside the product's own surfaces"));
     }
-    open_externally(&url)
+    tauri::async_runtime::spawn_blocking(move || open_externally(&url))
+        .await
+        .map_err(|e| format!("worker: {e}"))?
 }
 
 /// Reveal a captures folder in the system file manager.
 #[tauri::command]
-fn reveal_path(path: String) -> Result<(), String> {
-    open_externally(&path)
+async fn reveal_path(path: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || open_externally(&path))
+        .await
+        .map_err(|e| format!("worker: {e}"))?
 }
 
 fn open_externally(target: &str) -> Result<(), String> {
@@ -72,34 +76,43 @@ fn open_externally(target: &str) -> Result<(), String> {
 /// One HTTP round trip to the Resident, performed by the Rust side.
 /// The webview never speaks cross-origin HTTP — no CORS, no
 /// preflights, and no webpage can reach the Resident through us.
+/// Async on a blocking worker: a slow or absent Resident must never
+/// freeze the window (the UI-thread lock, learned 2026-08-30).
 #[tauri::command]
-fn api(method: String, path: String, body: Option<String>) -> Result<serde_json::Value, String> {
+async fn api(
+    method: String,
+    path: String,
+    body: Option<String>,
+) -> Result<serde_json::Value, String> {
     use std::io::{Read, Write};
-    use std::time::Duration;
-
     if !path.starts_with("/api/") || path.contains("..") {
         return Err("refused: only /api/ paths on the Resident".into());
     }
     let payload = body.unwrap_or_default();
-    let mut stream = std::net::TcpStream::connect(RESIDENT).map_err(|e| e.to_string())?;
-    stream
-        .set_read_timeout(Some(Duration::from_secs(30)))
-        .map_err(|e| e.to_string())?;
-    let request = format!(
-        "{method} {path} HTTP/1.1\r\nhost: {RESIDENT}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{payload}",
-        payload.len()
-    );
-    stream.write_all(request.as_bytes()).map_err(|e| e.to_string())?;
-    let mut buf = Vec::new();
-    stream.read_to_end(&mut buf).map_err(|e| e.to_string())?;
-    let text = String::from_utf8_lossy(&buf).to_string();
-    let status: u16 = text
-        .split_whitespace()
-        .nth(1)
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0);
-    let body = text.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
-    Ok(serde_json::json!({ "status": status, "body": body }))
+    tauri::async_runtime::spawn_blocking(move || {
+        use std::io::{Read, Write};
+        let mut stream = std::net::TcpStream::connect(RESIDENT).map_err(|e| e.to_string())?;
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(15)))
+            .map_err(|e| e.to_string())?;
+        let request = format!(
+            "{method} {path} HTTP/1.1\r\nhost: {RESIDENT}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{payload}",
+            payload.len()
+        );
+        stream.write_all(request.as_bytes()).map_err(|e| e.to_string())?;
+        let mut buf = Vec::new();
+        stream.read_to_end(&mut buf).map_err(|e| e.to_string())?;
+        let text = String::from_utf8_lossy(&buf).to_string();
+        let status: u16 = text
+            .split_whitespace()
+            .nth(1)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+        let body = text.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
+        Ok(serde_json::json!({ "status": status, "body": body }))
+    })
+    .await
+    .map_err(|e| format!("worker: {e}"))?
 }
 
 /// The live wire: hold one SSE connection to the Resident and republish

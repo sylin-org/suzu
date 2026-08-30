@@ -61,6 +61,11 @@ impl House {
         *self.devices.write().expect("house devices lock") = tx;
     }
 
+    /// The announcement wire — the bus every client subscribes to.
+    pub fn events_door(&self) -> broadcast::Sender<HouseEvent> {
+        self.events.clone()
+    }
+
     /// The moments door — visitors speak here.
     pub fn moments_door(&self) -> mpsc::Sender<MomentsCmd> {
         self.moments.read().expect("house moments lock").clone()
@@ -94,10 +99,18 @@ fn line(domain: &str, text: &str) {
 }
 
 fn house_line(ev: &HouseEvent, journal: &Journal) {
-    let say = |domain: &str, text: String| {
-        line(domain, &text);
-        journal.record(domain, &text);
-    };
+    let (domain, text) = format_house_event(ev);
+    if text.is_empty() {
+        return; // the fast lane is data, not news
+    }
+    line(&domain, &text);
+    journal.record(&domain, &text);
+}
+
+/// The house's facts, in the house's voice — one formatting, shared by
+/// the console, the journal and the announcement wire.
+pub(crate) fn format_house_event(ev: &HouseEvent) -> (&'static str, String) {
+    let say = |domain: &'static str, text: String| (domain, text);
     match ev {
         HouseEvent::DeviceSensed { port } => say("watcher", format!("sensed {port}")),
         HouseEvent::DeviceIdentified(f) => {
@@ -115,8 +128,8 @@ fn house_line(ev: &HouseEvent, journal: &Journal) {
                     f.family.as_deref().unwrap_or("?"),
                     f.variant.as_deref().unwrap_or("?"),
                     version,
-                ),
-            );
+                )
+            )
         }
         HouseEvent::DeviceGone { port } => say("watcher", format!("gone {port}")),
         HouseEvent::PortBusy { port, reason } => say(
@@ -162,7 +175,7 @@ fn house_line(ev: &HouseEvent, journal: &Journal) {
             "moments",
             format!("ring: [{signal}] {label} (urgency {urgency})"),
         ),
-        HouseEvent::Pulse { .. } => {} // the pulse lane is silent by design
+        HouseEvent::Pulse { .. } => ("pulse", String::new()), // the fast lane is data, not news
         HouseEvent::SplashDecided { decision, label } => {
             say("moments", format!("splash: {decision} {}", label.as_deref().unwrap_or("")))
         }
@@ -463,6 +476,7 @@ pub async fn run(catalog: Arc<Catalog>) -> anyhow::Result<()> {
     // the workbench's door: the loopback read API (ADR-0002)
     tokio::spawn(api::listen(Arc::new(api::Ctx {
         catalog: Arc::clone(&catalog),
+        events: house.events_door(),
         devices: house.devices_door(),
         moments: house.moments_door(),
         roster: Arc::clone(&roster),
