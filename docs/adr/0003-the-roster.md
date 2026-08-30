@@ -28,11 +28,13 @@ Discovered → Convalescing → Streaming ⇄ UnderMaintenance → Convalescing
                                                                     ↘ Retired
 ```
 
-- **Streaming is granted exactly one way**: an admission test passed
+- **Live is granted exactly one way**: an admission test passed
   (handshake, ack law, label round-trip where the face declares a
   label, and a display-truth assertion captured through the J shot and
   decoded per the class manifest). Prior trust never skips the test —
-  a homecoming individual re-enters Convalescing like anyone else.
+  a homecoming individual re-enters New like anyone else. The
+  card shows the verdict ("Working"), never the checklist; the
+  checklist lives in the Log, where evidence belongs.
 - **Maintenance is a saga**: the session closes (one master per
   port), steps are journaled as house events, and the saga keys on
   device_id — a replug mid-flash is the saga waiting, not a failure.
