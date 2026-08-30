@@ -1,18 +1,21 @@
 //! The roster — the fleet's individuals and their lifecycle (ADR-0003).
 //!
-//! A device is an *individual* (its `device_id`), not a port. The
-//! roster owns the lifecycle:
+//! The user-facing formula is the law, and it is deliberately short.
+//! A device is **New**, **Live**, or **Paused**:
 //!
 //! ```text
-//! Discovered → Convalescing → Streaming ⇄ UnderMaintenance → Convalescing
-//!                                                                    ↘ Retired
+//! new --admission passed--> live ⇄ paused      (the keeper's toggle)
+//!  |  ^-- install brings it back --^
+//!  └─ retired (deliberate, final)
 //! ```
 //!
-//! The law this module enforces: **a subscription to the streams
-//! (ground, pulses, rings) is granted only by `admission_result`, and
-//! only a passing admission test grants one.** Nothing else — not port
-//! presence, not prior trust, not a keeper's impatience — moves an
-//! individual into Streaming.
+//! - **Live** — subscribed to the streams (ground, pulses, rings).
+//!   Granted exactly one way: a passing admission test, from New.
+//! - **New** — present, not on the stream. Whatever the reason (just
+//!   plugged in, failed its exam, pre-suzu firmware) the remedy is the
+//!   same pair of tools: Install Firmware, or Factory Reset.
+//! - **Paused** — the keeper lifted it off the stream. Trust is not
+//!   withdrawn: resume re-subscribes without a re-test.
 //!
 //! The roster is a pure domain: no serial, no sockets, no tokio. It
 //! consumes house facts and answers questions. Transport (the devices
@@ -23,20 +26,17 @@ use super::events::AdmissionStep;
 use serde::Serialize;
 use std::collections::BTreeMap;
 
-/// The lifecycle of an individual.
+/// The lifecycle of an individual, in the keeper's own words.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Lifecycle {
-    /// Seen, known to the roster, never yet admitted.
-    Discovered,
-    /// On the roster but untrusted: admission not yet passed this
-    /// session. Receives nothing.
-    Convalescing,
-    /// Admission passed: ground, pulses and rings route to it.
-    Streaming,
-    /// Owned by a maintenance saga: the subscription is withdrawn.
-    UnderMaintenance,
-    /// Deliberately retired by the keeper. Never streamed again.
+    /// Present, not on the stream. Install firmware or factory reset.
+    New,
+    /// On the stream: ground, pulses and rings route to it.
+    Live,
+    /// The keeper lifted it off the stream. Resume re-subscribes.
+    Paused,
+    /// Deliberately retired. Never streamed again.
     Retired,
 }
 
@@ -80,19 +80,19 @@ pub struct Individual {
     pub maintenance: Option<SagaState>,
 }
 
+/// Why a transition was refused — the roster never lies by omission.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Refusal {
+    /// No such individual.
+    Unknown,
+    /// The transition makes no sense from this lifecycle.
+    NotFrom(&'static str),
+}
+
 /// The roster's read model — the truth the workbench renders.
 #[derive(Debug, Default, Serialize)]
 pub struct Roster {
     individuals: BTreeMap<String, Individual>,
-}
-
-/// Why a transition was refused — the roster never lies by omission.
-#[derive(Debug, PartialEq, Eq)]
-pub enum Refusal {
-    /// No such individual: hold_for_admission first.
-    Unknown,
-    /// The transition makes no sense from this lifecycle.
-    NotFrom(&'static str, &'static str),
 }
 
 impl Roster {
@@ -100,10 +100,10 @@ impl Roster {
         Self::default()
     }
 
-    /// A candidate appeared on `port`: held for admission. A known
-    /// individual coming back (homecoming, maintenance finished)
-    /// re-enters Convalescing — prior trust never skips the test.
-    pub fn hold_for_admission(
+    /// A candidate appeared on `port`: it is New — present, not on the
+    /// stream, whatever its firmware. Everything that follows is the
+    /// keeper's choice or the exam's verdict.
+    pub fn hold(
         &mut self,
         device_id: &str,
         port: &str,
@@ -116,13 +116,13 @@ impl Roster {
                 label: None,
                 class: class.map(|s| s.to_string()),
                 last_port: Some(port.to_string()),
-                lifecycle: Lifecycle::Discovered,
+                lifecycle: Lifecycle::New,
                 since: now.to_string(),
                 admission: None,
                 maintenance: None,
             },
         );
-        individual.lifecycle = Lifecycle::Convalescing;
+        individual.lifecycle = Lifecycle::New;
         individual.last_port = Some(port.to_string());
         if class.is_some() {
             individual.class = class.map(|s| s.to_string());
@@ -130,7 +130,7 @@ impl Roster {
         Ok(())
     }
 
-    /// The admission verdict: only a pass grants the stream.
+    /// The admission verdict: only a pass brings a New device Live.
     pub fn admission_result(
         &mut self,
         device_id: &str,
@@ -141,13 +141,43 @@ impl Roster {
         };
         let passed = record.passed;
         ind.admission = Some(record);
-        if passed && ind.lifecycle == Lifecycle::Convalescing {
-            ind.lifecycle = Lifecycle::Streaming;
+        if passed && ind.lifecycle == Lifecycle::New {
+            ind.lifecycle = Lifecycle::Live;
         }
         Ok(ind.lifecycle)
     }
 
-    /// A maintenance saga took ownership of the individual.
+    /// The keeper lifted the individual off the stream. Only a Live
+    /// device can pause; trust is not withdrawn, so resume needs no
+    /// re-test.
+    pub fn pause(&mut self, device_id: &str) -> Result<Lifecycle, Refusal> {
+        let Some(ind) = self.individuals.get_mut(device_id) else {
+            return Err(Refusal::Unknown);
+        };
+        if ind.lifecycle != Lifecycle::Live {
+            return Err(Refusal::NotFrom("live"));
+        }
+        ind.lifecycle = Lifecycle::Paused;
+        Ok(ind.lifecycle)
+    }
+
+    /// The keeper put it back: Paused → Live. The one re-subscription
+    /// that is not an admission — the keeper paused it, the keeper
+    /// resumes it.
+    pub fn resume(&mut self, device_id: &str) -> Result<Lifecycle, Refusal> {
+        let Some(ind) = self.individuals.get_mut(device_id) else {
+            return Err(Refusal::Unknown);
+        };
+        if ind.lifecycle != Lifecycle::Paused {
+            return Err(Refusal::NotFrom("paused"));
+        }
+        ind.lifecycle = Lifecycle::Live;
+        Ok(ind.lifecycle)
+    }
+
+    /// A maintenance saga took ownership: the device is not on the
+    /// stream while it runs. When the saga ends it is New again — the
+    /// exam decides whether it ever goes Live.
     pub fn maintenance_started(
         &mut self,
         device_id: &str,
@@ -156,13 +186,10 @@ impl Roster {
         let Some(ind) = self.individuals.get_mut(device_id) else {
             return Err(Refusal::Unknown);
         };
-        match ind.lifecycle {
-            Lifecycle::UnderMaintenance | Lifecycle::Retired => {
-                return Err(Refusal::NotFrom("maintenance", "already under maintenance or retired"))
-            }
-            _ => {}
+        if ind.maintenance.as_ref().is_some_and(|s| s.state == "running") {
+            return Err(Refusal::NotFrom("a saga is already running"));
         }
-        ind.lifecycle = Lifecycle::UnderMaintenance;
+        ind.lifecycle = Lifecycle::New;
         ind.maintenance = Some(SagaState {
             kind: kind.to_string(),
             state: "running".into(),
@@ -180,26 +207,29 @@ impl Roster {
         }
     }
 
-    /// The saga finished. The individual lands in Convalescing either
-    /// way: only a fresh admission test grants the stream again.
-    pub fn maintenance_completed(&mut self, device_id: &str, ok: bool) -> Result<Lifecycle, Refusal> {
+    /// The saga finished. Still New — admission decides the stream.
+    pub fn maintenance_completed(
+        &mut self,
+        device_id: &str,
+        ok: bool,
+    ) -> Result<Lifecycle, Refusal> {
         let Some(ind) = self.individuals.get_mut(device_id) else {
             return Err(Refusal::Unknown);
         };
         if let Some(saga) = &mut ind.maintenance {
             saga.state = if ok { "done".into() } else { "failed".into() };
         }
-        ind.lifecycle = Lifecycle::Convalescing;
+        ind.lifecycle = Lifecycle::New;
         Ok(ind.lifecycle)
     }
 
-    /// The port went away: remembered, unattached. Streaming ends.
+    /// The port went away: remembered, off the stream.
     pub fn departed(&mut self, device_id: &str) -> Result<Lifecycle, Refusal> {
         let Some(ind) = self.individuals.get_mut(device_id) else {
             return Err(Refusal::Unknown);
         };
-        if ind.lifecycle == Lifecycle::Streaming || ind.lifecycle == Lifecycle::Convalescing {
-            ind.lifecycle = Lifecycle::Discovered;
+        if ind.lifecycle != Lifecycle::Retired {
+            ind.lifecycle = Lifecycle::New;
         }
         Ok(ind.lifecycle)
     }
@@ -217,7 +247,7 @@ impl Roster {
     pub fn is_streaming(&self, device_id: &str) -> bool {
         self.individuals
             .get(device_id)
-            .is_some_and(|i| i.lifecycle == Lifecycle::Streaming)
+            .is_some_and(|i| i.lifecycle == Lifecycle::Live)
     }
 
     /// Cheap snapshot, ordered by device_id.
@@ -231,7 +261,9 @@ impl Roster {
 
     /// The individual currently on `port`, if the roster knows one.
     pub fn by_port(&self, port: &str) -> Option<&Individual> {
-        self.individuals.values().find(|i| i.last_port == Some(port.to_string()))
+        self.individuals
+            .values()
+            .find(|i| i.last_port == Some(port.to_string()))
     }
 }
 
@@ -239,65 +271,87 @@ impl Roster {
 mod tests {
     use super::*;
 
-    fn held(roster: &mut Roster) {
-        roster
-            .hold_for_admission("id-1", "COM9", Some("class"), "now")
-            .unwrap();
+    fn held(r: &mut Roster) {
+        r.hold("id-1", "COM9", Some("class"), "now").unwrap();
     }
 
-    #[test]
-    fn nothing_streams_without_a_passing_admission() {
-        let mut r = Roster::new();
-        held(&mut r);
-        assert!(!r.is_streaming("id-1"), "held individuals never stream");
-
-        let rec = |passed| AdmissionRecord {
-            passed,
-            at: "now".into(),
-            steps: vec![AdmissionStep { name: "handshake".into(), ok: passed, detail: "".into() }],
-        };
-        assert_eq!(r.admission_result("id-1", rec(false)).unwrap(), Lifecycle::Convalescing);
-        assert!(!r.is_streaming("id-1"), "a failed admission never streams");
-
-        assert_eq!(r.admission_result("id-1", rec(true)).unwrap(), Lifecycle::Streaming);
-        assert!(r.is_streaming("id-1"));
-    }
-
-    #[test]
-    fn prior_trust_never_skips_the_test() {
-        let mut r = Roster::new();
-        held(&mut r);
-        let pass = AdmissionRecord { passed: true, at: "now".into(), steps: vec![] };
-        r.admission_result("id-1", pass.clone()).unwrap();
-        assert!(r.is_streaming("id-1"));
-
-        // The device replugs: homecoming re-enters Convalescing.
-        held(&mut r);
-        assert!(!r.is_streaming("id-1"), "homecoming must re-test");
-        r.admission_result("id-1", pass).unwrap();
-        assert!(r.is_streaming("id-1"));
-    }
-
-    #[test]
-    fn maintenance_withdraws_the_stream_and_ends_in_convalescing() {
-        let mut r = Roster::new();
-        held(&mut r);
+    fn pass(r: &mut Roster) {
         r.admission_result(
             "id-1",
             AdmissionRecord { passed: true, at: "now".into(), steps: vec![] },
         )
         .unwrap();
+    }
+
+    #[test]
+    fn new_devices_are_not_live_until_the_exam_passes() {
+        let mut r = Roster::new();
+        held(&mut r);
+        assert_eq!(r.individual("id-1").unwrap().lifecycle, Lifecycle::New);
+        assert!(!r.is_streaming("id-1"));
+
+        r.admission_result(
+            "id-1",
+            AdmissionRecord { passed: false, at: "now".into(), steps: vec![] },
+        )
+        .unwrap();
+        assert!(!r.is_streaming("id-1"), "a failed exam never goes live");
+
+        pass(&mut r);
+        assert!(r.is_streaming("id-1"));
+    }
+
+    #[test]
+    fn prior_trust_never_skips_the_exam() {
+        let mut r = Roster::new();
+        held(&mut r);
+        pass(&mut r);
         assert!(r.is_streaming("id-1"));
 
-        r.maintenance_started("id-1", "soft").unwrap();
-        assert!(!r.is_streaming("id-1"), "maintenance withdraws the stream");
+        // replug: back to New, re-examined like anyone else
+        held(&mut r);
+        assert!(!r.is_streaming("id-1"));
+        pass(&mut r);
+        assert!(r.is_streaming("id-1"));
+    }
+
+    #[test]
+    fn pause_and_resume_are_the_keepers_toggle() {
+        let mut r = Roster::new();
+        held(&mut r);
+        pass(&mut r);
+        assert!(r.is_streaming("id-1"));
+
+        r.pause("id-1").unwrap();
+        assert_eq!(r.individual("id-1").unwrap().lifecycle, Lifecycle::Paused);
+        assert!(!r.is_streaming("id-1"));
+
+        // resubscribing is not re-testing
+        r.resume("id-1").unwrap();
+        assert!(r.is_streaming("id-1"));
+        assert!(r.individual("id-1").unwrap().admission.is_some());
+    }
+
+    #[test]
+    fn pause_only_applies_to_live_devices() {
+        let mut r = Roster::new();
+        held(&mut r);
+        assert!(matches!(r.pause("id-1"), Err(Refusal::NotFrom(_))));
+    }
+
+    #[test]
+    fn maintenance_ends_new_and_the_exam_decides() {
+        let mut r = Roster::new();
+        held(&mut r);
+        pass(&mut r);
+        r.maintenance_started("id-1", "install").unwrap();
+        assert!(!r.is_streaming("id-1"));
         r.maintenance_step("id-1", SagaStep { name: "backup".into(), ok: true, detail: "".into() });
         r.maintenance_completed("id-1", true).unwrap();
 
         let ind = r.individual("id-1").unwrap();
-        assert_eq!(ind.lifecycle, Lifecycle::Convalescing);
+        assert_eq!(ind.lifecycle, Lifecycle::New);
         assert_eq!(ind.maintenance.as_ref().unwrap().state, "done");
-        assert!(!r.is_streaming("id-1"), "the stream returns only via admission");
     }
 
     #[test]
@@ -306,20 +360,7 @@ mod tests {
         held(&mut r);
         r.departed("id-1").unwrap();
         let ind = r.individual("id-1").unwrap();
-        assert_eq!(ind.lifecycle, Lifecycle::Discovered);
-        assert_eq!(ind.last_port.as_deref(), Some("COM9"), "the roster remembers");
-    }
-
-    #[test]
-    fn retire_is_final() {
-        let mut r = Roster::new();
-        held(&mut r);
-        r.retire("id-1").unwrap();
-        assert!(matches!(
-            r.hold_for_admission("id-1", "COM9", None, "now"),
-            Ok(())
-        ));
-        // Retirement is overridden only by an explicit new admission hold.
-        assert_eq!(r.individual("id-1").unwrap().lifecycle, Lifecycle::Convalescing);
+        assert_eq!(ind.lifecycle, Lifecycle::New);
+        assert_eq!(ind.last_port.as_deref(), Some("COM9"));
     }
 }

@@ -186,6 +186,14 @@ async fn route(ctx: &Ctx, method: &str, path: &str, body: &str) -> (u16, &'stati
             let port = p.trim_start_matches("/api/admission/");
             admission(ctx, port).await
         }
+        ("POST", p) if p.starts_with("/api/device/") && p.ends_with("/pause") => {
+            let port = p.trim_start_matches("/api/device/").trim_end_matches("/pause");
+            device_stream_toggle(ctx, port, false).await
+        }
+        ("POST", p) if p.starts_with("/api/device/") && p.ends_with("/resume") => {
+            let port = p.trim_start_matches("/api/device/").trim_end_matches("/resume");
+            device_stream_toggle(ctx, port, true).await
+        }
         ("POST", p) if p.starts_with("/api/maintenance/") => {
             let port = p.trim_start_matches("/api/maintenance/");
             maintenance(ctx, port, body).await
@@ -307,6 +315,25 @@ async fn admission(ctx: &Ctx, port: &str) -> (u16, &'static str, Vec<u8>) {
             200,
             "application/json",
             serde_json::to_vec(&serde_json::json!({ "started": true, "note": "the verdict arrives on the log" })).unwrap_or_default(),
+        ),
+        Some(Err(e)) => (409, "application/json", serde_json::to_vec(&serde_json::json!({ "error": format!("{e:#}") })).unwrap_or_default()),
+        None => (500, "application/json", br#"{"error":"devices domain is gone"}"#.to_vec()),
+    }
+}
+
+async fn device_stream_toggle(ctx: &Ctx, port: &str, resume: bool) -> (u16, &'static str, Vec<u8>) {
+    let (tx, mut rx) = mpsc::channel(1);
+    let cmd = if resume {
+        DevicesCmd::ResumeDevice { port: port.to_string(), reply: tx }
+    } else {
+        DevicesCmd::PauseDevice { port: port.to_string(), reply: tx }
+    };
+    let _ = ctx.devices.send(cmd).await;
+    match rx.recv().await {
+        Some(Ok(())) => (
+            200,
+            "application/json",
+            serde_json::to_vec(&serde_json::json!({ "stream": if resume { "on" } else { "off" } })).unwrap_or_default(),
         ),
         Some(Err(e)) => (409, "application/json", serde_json::to_vec(&serde_json::json!({ "error": format!("{e:#}") })).unwrap_or_default()),
         None => (500, "application/json", br#"{"error":"devices domain is gone"}"#.to_vec()),

@@ -329,13 +329,13 @@ fn process_roster_event(
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     match ev {
         HouseEvent::DeviceMinded { port, device_id: Some(id), class, .. } => {
-            r.hold_for_admission(&id, &port, class.as_deref(), &now).ok()?;
+            r.hold(&id, &port, class.as_deref(), &now).ok()?;
             Some(HouseEvent::IndividualHeld { device_id: id, port, class })
         }
         HouseEvent::AdmissionReport { device_id, port, passed, steps } => {
             let record = roster::AdmissionRecord { passed, at: now, steps };
             match r.admission_result(&device_id, record) {
-                Ok(roster::Lifecycle::Streaming) => {
+                Ok(roster::Lifecycle::Live) => {
                     Some(HouseEvent::StreamAttached { device_id, port })
                 }
                 Ok(_) => Some(HouseEvent::StreamDetached {
@@ -351,7 +351,7 @@ fn process_roster_event(
                 r.by_port(&port).map(|i| i.device_id.clone())
             })?;
             let was_streaming =
-                r.individual(&id).is_some_and(|i| i.lifecycle == roster::Lifecycle::Streaming);
+                r.individual(&id).is_some_and(|i| i.lifecycle == roster::Lifecycle::Live);
             r.departed(&id).ok()?;
             was_streaming.then(|| HouseEvent::StreamDetached {
                 device_id: id,

@@ -34,10 +34,13 @@ pub fn run(
     device_id: &str,
 ) -> Result<()> {
     let outcome = match (class, kind) {
-        (Some("waveshare-rp2040-matrix"), "soft") => rp2040_soft(events, device_id),
+        (Some("waveshare-rp2040-matrix"), "install" | "adopt" | "soft") => {
+            rp2040_soft(events, device_id)
+        }
         (Some("waveshare-rp2040-matrix"), "factory") => rp2040_factory(events, device_id),
         (Some(c), kind) if c.contains("esp8266") => match kind {
-            "soft" => esp8266_soft(port, events, device_id),
+            "install" | "soft" => esp8266_soft(port, events, device_id),
+            "adopt" => esp8266_adopt(port, events, device_id),
             "factory" => esp8266_factory(port, events, device_id),
             _ => bail!("no saga for kind {kind:?}"),
         },
@@ -274,6 +277,15 @@ fn rp2040_factory(events: &Sender<HouseEvent>, device_id: &str) -> Result<()> {
 
     write_face_files(&drive, device_id)?;
     marco(events, device_id, "face-files", "code.py + suzu.json verified by read-back".into());
+    Ok(())
+}
+
+/// An ancestor walks in: the full install (the proven fresh push that
+/// gives it the suzu face, identity kept), then the exam decides.
+fn esp8266_adopt(port: &str, events: &Sender<HouseEvent>, device_id: &str) -> Result<()> {
+    marco(events, device_id, "adopt", "the fresh install - suzu face, identity kept".into());
+    let out = push_face_files(port, device_id, true)?;
+    marco(events, device_id, "adopt-done", last_line(&out));
     Ok(())
 }
 

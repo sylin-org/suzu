@@ -62,6 +62,10 @@ pub struct Device {
     /// at wire speed. The roster is the truth; this is the echo.
     #[serde(skip)]
     pub streaming: Arc<AtomicBool>,
+    /// When the face last heard from the house — the honest aliveness
+    /// signal ("spoke 4s ago") beats any checklist.
+    #[serde(skip)]
+    pub last_fed: Arc<Mutex<Option<Instant>>>,
 }
 
 impl Device {
@@ -105,6 +109,8 @@ pub struct DeviceRow {
     pub lifecycle: Option<String>,
     /// Whether the stream currently flows to this device.
     pub streaming: bool,
+    /// Seconds since the face last heard from the house.
+    pub last_data_s: Option<u64>,
 }
 
 pub enum DevicesCmd {
@@ -131,6 +137,11 @@ pub enum DevicesCmd {
     RecordStatus { port: String, reply: mpsc::Sender<Option<RecordState>> },
     /// Re-run the admission exam through the owning session.
     AdmissionRetry { port: String, reply: mpsc::Sender<anyhow::Result<()>> },
+    /// The keeper lifted one device off the stream (per-device pause):
+    /// the gate closes, the session stays, the face falls to its
+    /// garden. Resume re-subscribes without a re-test.
+    PauseDevice { port: String, reply: mpsc::Sender<anyhow::Result<()>> },
+    ResumeDevice { port: String, reply: mpsc::Sender<anyhow::Result<()>> },
     /// Hand the individual to a maintenance saga: the session closes,
     /// the port goes to the saga, the stream returns only after the
     /// saga's admission test passes.
@@ -226,6 +237,14 @@ impl Devices {
                         }
                         DevicesCmd::AdmissionRetry { port, reply } => {
                             let res = self.admission_retry(&port);
+                            let _ = reply.send(res).await;
+                        }
+                        DevicesCmd::PauseDevice { port, reply } => {
+                            let res = self.pause_device(&port);
+                            let _ = reply.send(res).await;
+                        }
+                        DevicesCmd::ResumeDevice { port, reply } => {
+                            let res = self.resume_device(&port);
                             let _ = reply.send(res).await;
                         }
                         DevicesCmd::MaintenanceStart { port, kind, reply } => {
@@ -414,6 +433,7 @@ impl Devices {
                 minded_at: now(),
                 outbound: None,
                 streaming: Arc::new(AtomicBool::new(false)),
+                last_fed: Arc::new(Mutex::new(None)),
             },
         );
         // A paused house stays silent: the session spawns on resume.
@@ -470,6 +490,8 @@ impl Devices {
             }
             if outbound.send(SessionMsg::Out(Outbound::Ground(Arc::clone(ground)))).is_err() {
                 dead.push(device.facts.port.clone());
+            } else if let Ok(mut t) = device.last_fed.lock() {
+                *t = Some(Instant::now());
             }
         }
         for port in dead {
@@ -585,6 +607,52 @@ impl Devices {
 
     fn admission_retry(&self, port: &str) -> anyhow::Result<()> {
         self.send_to_session(port, SessionMsg::Admission)
+    }
+
+    /// Per-device pause: withdraw the subscription but keep the
+    /// session — resume is instant and the port is never churned.
+    /// The face, hearing nothing, honestly falls to its garden.
+    fn pause_device(&mut self, port: &str) -> anyhow::Result<()> {
+        let device_id = self
+            .devices
+            .get(port)
+            .and_then(|d| d.device_id().map(|s| s.to_string()))
+            .ok_or_else(|| anyhow::anyhow!("{port}: no minded device"))?;
+        self.roster
+            .write()
+            .map_err(|_| anyhow::anyhow!("roster lock poisoned"))?
+            .pause(&device_id)
+            .map_err(|e| anyhow::anyhow!("{port}: cannot pause ({e:?})"))?;
+        if let Some(d) = self.devices.get_mut(port) {
+            d.streaming.store(false, Ordering::Relaxed);
+        }
+        let _ = self.events.send(HouseEvent::StreamDetached {
+            device_id,
+            port: port.to_string(),
+            reason: "paused by the keeper".into(),
+        });
+        Ok(())
+    }
+
+    fn resume_device(&mut self, port: &str) -> anyhow::Result<()> {
+        let device_id = self
+            .devices
+            .get(port)
+            .and_then(|d| d.device_id().map(|s| s.to_string()))
+            .ok_or_else(|| anyhow::anyhow!("{port}: no minded device"))?;
+        self.roster
+            .write()
+            .map_err(|_| anyhow::anyhow!("roster lock poisoned"))?
+            .resume(&device_id)
+            .map_err(|e| anyhow::anyhow!("{port}: cannot resume ({e:?})"))?;
+        if let Some(d) = self.devices.get_mut(port) {
+            d.streaming.store(true, Ordering::Relaxed);
+        }
+        let _ = self.events.send(HouseEvent::StreamAttached {
+            device_id,
+            port: port.to_string(),
+        });
+        Ok(())
     }
 
     fn send_to_session(&self, port: &str, msg: SessionMsg) -> anyhow::Result<()> {
@@ -709,6 +777,12 @@ impl Devices {
                     })
                     .map(|l| format!("{l:?}").to_lowercase()),
                 streaming: d.streaming.load(Ordering::Relaxed),
+                last_data_s: d
+                    .last_fed
+                    .lock()
+                    .ok()
+                    .and_then(|t| *t)
+                    .map(|t| t.elapsed().as_secs()),
             })
             .collect()
     }

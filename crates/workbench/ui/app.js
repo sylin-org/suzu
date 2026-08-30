@@ -87,43 +87,55 @@
 
   // ── status ──────────────────────────────────────────────────────
   function deviceCard(row, rosterEntry) {
-    const lifecycle = row.lifecycle ?? "unknown";
-    const tone = lifecycle === "streaming" ? "good" : (lifecycle === "convalescing" ? "warn" : "info");
-    const admission = rosterEntry?.admission;
-    const admissionLine = admission
-      ? `admission ${admission.passed ? "passed" : "FAILED"} · ${admission.steps.map((s) => s.name).join(", ")}`
-      : "no admission verdict yet";
+    // The keeper's formula: a device is LIVE, NEW, or PAUSED - and the
+    // buttons are exactly the ones its state offers, nothing else.
+    const lc = row.lifecycle ?? "new";
+    const pill = { live: "LIVE", new: "NEW", paused: "PAUSED" }[lc] ?? escapeHtml(lc.toUpperCase());
+    const pillTone = { live: "good", new: "warn", paused: "info" }[lc] ?? "info";
     const saga = rosterEntry?.maintenance;
-    const sagaLine = saga
-      ? `<div class="device-saga">${escapeHtml(saga.kind)} saga · ${escapeHtml(saga.state)} · ${escapeHtml(saga.steps.map((s) => s.name).join(" → ") || "starting")}</div>`
+    const sagaLine = saga?.state === "running"
+      ? `<div class="device-saga">${escapeHtml(saga.kind)} - ${escapeHtml(saga.steps.map((x) => x.name).join(" \u2192 ") || "starting")}</div>`
       : "";
-    const maintenance = lifecycle === "undermaintenance";
+
+    let line = "";
+    if (lc === "live") {
+      line = row.last_data_s != null
+        ? `on the stream \u00b7 last data ${row.last_data_s}s ago`
+        : "on the stream";
+    } else if (lc === "paused") {
+      line = "off the stream - the face rests";
+    } else if (!row.proto) {
+      line = `pre-suzu firmware (${escapeHtml(row.version ?? "?")}) - not on the stream`;
+    } else {
+      line = "installed - joining the stream\u2026";
+    }
+
+    const streamButton = lc === "live"
+      ? `<button class="ghost-button" data-action="pause">Pause</button>`
+      : lc === "paused"
+        ? `<button class="ghost-button" data-action="resume">Resume</button>`
+        : `<button class="ghost-button" data-action="install" ${sagaLine ? "disabled" : ""}>Install Firmware</button>`;
+    const reinstall = `<button class="ghost-button" data-action="install" ${sagaLine ? "disabled" : ""}>Reinstall Firmware</button>`;
+    const factory = `<button class="danger-button" data-action="factory" ${sagaLine ? "disabled" : ""}>Factory Reset</button>`;
+    const tools = lc === "new" ? streamButton + factory : streamButton + reinstall + factory;
+
     const photo = row.class
       ? `<img class="device-photo" alt="" src="${API}/api/device-image/${encodeURIComponent(row.class)}" onerror="this.remove()">`
       : "";
+
     return `
       <article class="device-card" data-port="${escapeHtml(row.port)}">
         ${photo}
         <div class="device-body">
         <div class="device-head">
           <span class="chip ${row.streaming ? "on" : ""}"><span class="dot"></span>${escapeHtml(row.port)}</span>
-          <span class="device-class">${escapeHtml(row.class ?? "no class")}</span>
-          <span class="pill ${tone}">${escapeHtml(lifecycle)}</span>
+          <span class="device-class">${escapeHtml(row.class ?? "unknown device")}</span>
+          <span class="pill ${pillTone}">${pill}</span>
         </div>
-        <div class="device-facts mono">
-          ${escapeHtml(row.family ?? "?")}/${escapeHtml(row.variant ?? "?")} v${escapeHtml(row.version ?? "?")}
-          · ${escapeHtml(row.proto ?? "no proto")}
-          · id <b>${escapeHtml((row.device_id ?? "?").slice(0, 13))}…</b>
-        </div>
-        <div class="device-admission">${escapeHtml(admissionLine)}</div>
+        <div class="device-facts mono">${escapeHtml(row.family ?? "?")}/${escapeHtml(row.variant ?? "?")} v${escapeHtml(row.version ?? "?")}</div>
+        <div class="device-admission">${line}</div>
         ${sagaLine}
-        <div class="device-actions">
-          <button class="ghost-button" data-action="admission" ${maintenance ? "disabled" : ""}>Test again</button>
-          <button class="ghost-button" data-action="shot" ${maintenance ? "disabled" : ""}>Screenshot</button>
-          <button class="ghost-button" data-action="record" ${maintenance ? "disabled" : ""}>Record 4s</button>
-          <button class="ghost-button" data-action="soft" ${maintenance ? "disabled" : ""}>Reinstall (soft)</button>
-          <button class="danger-button" data-action="factory" ${maintenance ? "disabled" : ""}>Factory wipe</button>
-        </div>
+        <div class="device-actions">${tools}</div>
         </div>
       </article>`;
   }
@@ -157,36 +169,28 @@
     if (!port) return;
     const action = button.dataset.action;
 
-    if (action === "admission") {
+    if (action === "pause" || action === "resume") {
       button.disabled = true;
-      await postOrToast(`/api/admission/${port}`, {});
-      toast(`${port}: the exam runs — its verdict lands on the log`);
-    } else if (action === "shot") {
-      button.disabled = true;
-      try {
-        const r = await fetch(`${API}/api/capture/${port}/save`, { method: "POST" });
-        const d = await r.json();
-        if (d.saved) toast(`saved ${d.saved}`);
-        else toast(`no shot: ${d.error ?? "unknown"}`);
-      } catch (e) { toast(`no shot: ${e.message}`); }
-      button.disabled = false;
-    } else if (action === "record") {
-      button.disabled = true;
-      await postOrToast(`/api/record/${port}`, { secs: 4, fps: 3 });
-    } else if (action === "soft" || action === "factory") {
-      const kind = action;
+      await postOrToast(`/api/device/${port}/${action}`, {});
+    } else if (action === "install") {
       const ok = await confirmChange(
-        kind === "factory"
-          ? `Factory wipe ${port}?`
-          : `Reinstall the face on ${port}?`,
-        kind === "factory"
-          ? "Every flash cell is erased, the runtime is rebuilt, and the face must pass its admission test before it streams again. The individual's identity is backed up first and restored after."
-          : "The face files return to ship state and the face re-runs its admission test. The runtime is untouched.",
+        `Install firmware on ${port}?`,
+        "The face files return to ship state (its identity is kept), the face restarts, and it is tested before it goes live again.",
       );
       if (ok) {
         button.disabled = true;
-        await postOrToast(`/api/maintenance/${port}`, { kind });
-        toast(`${port}: the ${kind} saga began — follow it here`);
+        await postOrToast(`/api/maintenance/${port}`, { kind: "install" });
+        toast(`${port}: installing - follow the steps here`);
+      }
+    } else if (action === "factory") {
+      const ok = await confirmChange(
+        `Factory reset ${port}?`,
+        "Every flash cell is erased and the firmware is rebuilt from the vendored artifacts. The individual's identity is backed up first and restored after, and the face is tested before it goes live again.",
+      );
+      if (ok) {
+        button.disabled = true;
+        await postOrToast(`/api/maintenance/${port}`, { kind: "factory" });
+        toast(`${port}: factory reset began - follow the steps here`);
       }
     }
   });
