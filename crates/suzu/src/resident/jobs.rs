@@ -14,9 +14,9 @@ use tokio::sync::broadcast::Sender;
 
 use super::events::HouseEvent;
 
-/// One job, in full. `preview` carries the trail camera's latest frame
-/// while a record runs — the workbench's preview reads it, so the pane
-/// shows the very frames the GIF is taking.
+/// One job, in full. Its progress and verdict travel as Job facts on
+/// the house wire; while a record runs, the frames the GIF takes ride
+/// the frame lane (recording subsumes the preview).
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct Job {
     pub id: String,
@@ -30,8 +30,6 @@ pub struct Job {
     pub label: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gif: Option<String>,
-    #[serde(skip)]
-    pub preview: Option<Vec<u8>>,
     pub started_at: String,
 }
 
@@ -109,6 +107,15 @@ impl Jobs {
             }
         }
         None
+    }
+
+    /// Every job, whole — the snapshot fact's slice (ADR-0004).
+    pub fn all(&self) -> Vec<Job> {
+        let map = self.map.lock().expect("jobs lock");
+        map.values()
+            .filter_map(|j| j.lock().ok())
+            .map(|j| j.clone())
+            .collect()
     }
 
     fn announce(&self, shared: &SharedJob) {

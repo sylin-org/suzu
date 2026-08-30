@@ -78,13 +78,17 @@ pub async fn listen(
                 "ok show"
             }
             "pause" => {
-                if tx.send(DevicesCmd::Pause).await.is_err() {
+                // The chirp's ack is the UDP reply below; the command's
+                // own door reply is not needed here.
+                let (reply, _rx) = tokio::sync::mpsc::channel(1);
+                if tx.send(DevicesCmd::Pause { reply }).await.is_err() {
                     return Ok(());
                 }
                 "ok pause"
             }
             "resume" => {
-                if tx.send(DevicesCmd::Resume).await.is_err() {
+                let (reply, _rx) = tokio::sync::mpsc::channel(1);
+                if tx.send(DevicesCmd::Resume { reply }).await.is_err() {
                     return Ok(());
                 }
                 "ok resume"

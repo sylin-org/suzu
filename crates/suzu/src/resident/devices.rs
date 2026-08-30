@@ -2,14 +2,21 @@
 //! consumers of published ground.
 //!
 //! Each live device owns a session thread that owns its port
-//! exclusively: stream translation, the J shot, the trail-camera
+//! exclusively: stream translation, the frame lane, the trail-camera
 //! record, and the admission test all ride that one thread, because a
 //! serial port answers one master. Whether the stream *flows* is not
 //! this domain's decision — the roster grants the subscription
 //! (ADR-0003), and this domain merely obeys the gate.
+//!
+//! The actor's law (ADR-0004): **the loop only routes.** Nothing here
+//! waits on a face — a session answers through its mailbox, the frame
+//! lane publishes on the house's own cadence, and a stuck face
+//! degrades only that face. The read model rides the wire whole:
+//! whenever the rows change, one `Devices` fact replaces every
+//! client's slice.
 
 use super::admission;
-use super::events::{DeviceFacts, HouseEvent};
+use super::events::{DeviceFacts, DeviceRow, FrameFacts, HouseEvent};
 use super::jobs::{Job, Jobs};
 use super::roster::Roster;
 use super::sensor::MachineReport;
@@ -24,6 +31,23 @@ use std::time::{Duration, Instant};
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::{broadcast::Sender, mpsc};
 
+/// The media lane's cadence, house-enforced: at most one capture in
+/// flight per face (the session thread is serial by construction) and
+/// one blink per `FRAME_PERIOD` — no client cadence can flood the wire
+/// because the client commands nothing (ADR-0004).
+const FRAME_PERIOD: Duration = Duration::from_secs(2);
+/// A frame older than this is not a frame: the shot door fails
+/// honestly instead of serving a memory of the face.
+const MAX_FRAME_AGE: Duration = Duration::from_secs(5);
+/// The session mailbox is bounded: a session that cannot keep up is a
+/// stuck session, and a full mailbox disposes it loudly (law: every
+/// channel has capacity, every overload a journal line).
+const SESSION_MAILBOX: usize = 64;
+/// The session's keepalive beat: a suzu face rests after 10 s of
+/// silence, the ancestor idles to its fireflies — a frame every 5 s
+/// holds either face.
+const KEEPALIVE_PERIOD: Duration = Duration::from_secs(5);
+
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub enum DeviceState {
     Accepted,
@@ -31,34 +55,15 @@ pub enum DeviceState {
     Disposed,
 }
 
-/// The trail camera's shared state: what the record job is doing, and
-/// the latest frame it lifted — recording subsumes the preview, so the
-/// workbench's shot endpoint serves these frames while a record runs.
-#[derive(Debug, Default, Clone, Serialize)]
-pub struct RecordState {
-    /// idle · recording · done
-    pub phase: String,
-    pub frames: usize,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub gif_path: Option<String>,
-    #[serde(skip)]
-    pub latest_png: Option<Vec<u8>>,
-}
-
-impl RecordState {
-    pub fn is_recording(&self) -> bool {
-        self.phase == "recording"
-    }
-}
-
 #[derive(Debug, Clone, Serialize)]
 pub struct Device {
     pub facts: DeviceFacts,
     pub state: DeviceState,
     pub minded_at: String,
-    /// The session mailbox — this device's consumer.
+    /// The session mailbox — this device's consumer. Bounded: a full
+    /// mailbox is a stuck session, not a queue to grow forever.
     #[serde(skip)]
-    pub outbound: Option<std_mpsc::Sender<SessionMsg>>,
+    pub outbound: Option<std_mpsc::SyncSender<SessionMsg>>,
     /// The roster's gate, mirrored here for the session thread to read
     /// at wire speed. The roster is the truth; this is the echo.
     #[serde(skip)]
@@ -80,10 +85,10 @@ impl Device {
 /// translation on its own side of the port.
 pub enum SessionMsg {
     Out(Outbound),
-    /// One in-band shot, decoded per the class manifest, as PNG bytes.
-    Capture { reply: std_mpsc::SyncSender<Vec<u8>> },
-    /// The trail camera: exclusive on the session until done.
-    Record { job: Arc<Mutex<Job>>, secs: u32, fps: u32 },
+    /// The trail camera: exclusive on the session until done. The
+    /// registry is the record — progress and verdict travel as Job
+    /// facts, and the frames the GIF takes ride the frame lane.
+    Record { job_id: String, secs: u32, fps: u32 },
     /// Re-run the admission exam (roster decides what it means).
     Admission,
     Close,
@@ -95,23 +100,13 @@ pub enum Outbound {
     Ring { signal: String, words: Vec<String>, urgency: u8 },
 }
 
-/// Cheap snapshot — copies, safe to hold from any surface.
+/// The devices read model plus the service facts the door needs — one
+/// round trip for the snapshot fact (ADR-0004).
 #[derive(Debug, Clone, Serialize)]
-pub struct DeviceRow {
-    pub port: String,
-    pub class: Option<String>,
-    pub family: Option<String>,
-    pub variant: Option<String>,
-    pub version: Option<String>,
-    pub proto: Option<String>,
-    pub device_id: Option<String>,
-    pub state: DeviceState,
-    /// The roster's lifecycle verdict for this individual, if known.
-    pub lifecycle: Option<String>,
-    /// Whether the stream currently flows to this device.
-    pub streaming: bool,
-    /// Seconds since the face last heard from the house.
-    pub last_data_s: Option<u64>,
+pub struct DevicesSnapshot {
+    pub devices: Vec<DeviceRow>,
+    pub paused: bool,
+    pub frames: Vec<FrameFacts>,
 }
 
 pub enum DevicesCmd {
@@ -120,21 +115,25 @@ pub enum DevicesCmd {
     /// The publisher's outbound pipeline: one call, every live consumer.
     Publish(Arc<MachineReport>),
     Pulse { axis: String, value: u8 },
-    Snapshot { reply: mpsc::Sender<Vec<DeviceRow>> },
+    /// The read model, taken by the owning domain. Answers at once —
+    /// the loop routes, it never waits.
+    Snapshot { reply: mpsc::Sender<DevicesSnapshot> },
+    /// The newest frame for a port, under the freshness bound. An
+    /// honest error when the face has not blinked lately.
+    LatestFrame { port: String, reply: mpsc::Sender<anyhow::Result<Vec<u8>>> },
+    /// Save the newest frame into the captures folder; replies the path.
+    CaptureSave { port: String, reply: mpsc::Sender<anyhow::Result<String>> },
     /// The control chirp: stop streaming and release the ports (the
     /// faces fall idle into their animations), then re-open and
     /// re-publish. In-memory only — it dies with the process.
-    Pause,
-    Resume,
+    Pause { reply: mpsc::Sender<()> },
+    Resume { reply: mpsc::Sender<()> },
     /// A moment bound for faces: the band shows the label briefly;
     /// the signal names an icon when the face has one.
     Ring { signal: String, label: String, urgency: u8 },
-    /// One in-band shot as PNG bytes, through the owning session.
-    Capture { port: String, reply: std_mpsc::SyncSender<Vec<u8>> },
-    /// Save one shot into the captures folder; replies with the path.
-    CaptureSave { port: String, reply: mpsc::Sender<anyhow::Result<String>> },
-    /// The trail camera, on the owning session.
-    RecordStart { port: String, job: Arc<Mutex<Job>>, secs: u32, fps: u32 },
+    /// The trail camera, on the owning session. Acks whether the
+    /// session took the job; the verdict travels as Job facts.
+    RecordStart { port: String, job_id: String, secs: u32, fps: u32, reply: mpsc::Sender<anyhow::Result<()>> },
     /// Re-run the admission exam through the owning session.
     AdmissionRetry { port: String, reply: mpsc::Sender<anyhow::Result<()>> },
     /// The keeper lifted one device off the stream (per-device pause):
@@ -154,6 +153,9 @@ pub enum DevicesCmd {
         ok: bool,
         fresh: Option<DeviceFacts>,
     },
+    /// A finished saga's session, re-identified off-loop (the
+    /// identification ladder blocks), handed back through the door.
+    SessionRespawn { port: String, facts: DeviceFacts },
 }
 
 pub struct Devices {
@@ -164,23 +166,18 @@ pub struct Devices {
     devices: BTreeMap<String, Device>,
     sessions: BTreeMap<String, SessionHandle>,
     jobs: Arc<Jobs>,
+    /// The frame lane's cache: the newest frame per port, and when it
+    /// was taken. The shot doors read it; freshness is the truth test.
+    frames: BTreeMap<String, (Instant, String)>,
     in_maintenance: BTreeMap<String, String>,
     pulse_announced: bool,
     paused: bool,
+    rows_dirty: bool,
 }
 
 struct SessionHandle {
     close: Arc<AtomicBool>,
     join: Option<std::thread::JoinHandle<()>>,
-}
-
-impl Drop for SessionHandle {
-    fn drop(&mut self) {
-        self.close.store(true, Ordering::Relaxed);
-        if let Some(join) = self.join.take() {
-            let _ = join.join();
-        }
-    }
 }
 
 impl Devices {
@@ -198,10 +195,12 @@ impl Devices {
             catalog,
             devices: BTreeMap::new(),
             sessions: BTreeMap::new(),
-            jobs: Arc::clone(&jobs),
+            jobs,
+            frames: BTreeMap::new(),
             in_maintenance: BTreeMap::new(),
             pulse_announced: false,
             paused: false,
+            rows_dirty: false,
         }
     }
 
@@ -220,22 +219,31 @@ impl Devices {
                             if !self.paused { self.pulse(&axis, value) }
                         }
                         DevicesCmd::Snapshot { reply } => {
-                            let _ = reply.send(self.snapshot()).await;
+                            let snap = self.devices_snapshot();
+                            let _ = reply.send(snap).await;
                         }
-                        DevicesCmd::Pause => self.pause_stream(),
-                        DevicesCmd::Resume => self.resume_stream().await,
-                        DevicesCmd::Ring { signal, label, urgency } => {
-                            if !self.paused { self.ring(&signal, &label, urgency) }
-                        }
-                        DevicesCmd::Capture { port, reply } => {
-                            self.capture(&port, reply);
+                        DevicesCmd::LatestFrame { port, reply } => {
+                            let res = self.latest_frame(&port);
+                            let _ = reply.send(res).await;
                         }
                         DevicesCmd::CaptureSave { port, reply } => {
                             let res = self.capture_save(&port);
                             let _ = reply.send(res).await;
                         }
-                        DevicesCmd::RecordStart { port, job, secs, fps } => {
-                            self.record_start(&port, job, secs, fps);
+                        DevicesCmd::Pause { reply } => {
+                            self.pause_stream();
+                            let _ = reply.send(()).await;
+                        }
+                        DevicesCmd::Resume { reply } => {
+                            self.resume_stream().await;
+                            let _ = reply.send(()).await;
+                        }
+                        DevicesCmd::Ring { signal, label, urgency } => {
+                            if !self.paused { self.ring(&signal, &label, urgency) }
+                        }
+                        DevicesCmd::RecordStart { port, job_id, secs, fps, reply } => {
+                            let res = self.record_start(&port, &job_id, secs, fps);
+                            let _ = reply.send(res).await;
                         }
                         DevicesCmd::AdmissionRetry { port, reply } => {
                             let res = self.admission_retry(&port);
@@ -256,6 +264,9 @@ impl Devices {
                         DevicesCmd::MaintenanceFinished { port, device_id, ok, fresh } => {
                             self.maintenance_finish(&port, &device_id, ok, fresh).await;
                         }
+                        DevicesCmd::SessionRespawn { port, facts } => {
+                            self.session_respawn(&port, facts);
+                        }
                     }
                 }
                 ev = bus.recv() => {
@@ -263,18 +274,33 @@ impl Devices {
                         Ok(HouseEvent::StreamAttached { port, .. }) => {
                             if let Some(d) = self.devices.get_mut(&port) {
                                 d.streaming.store(true, Ordering::Relaxed);
+                                self.rows_dirty = true;
                             }
                         }
                         Ok(HouseEvent::StreamDetached { port, .. }) => {
                             if let Some(d) = self.devices.get_mut(&port) {
                                 d.streaming.store(false, Ordering::Relaxed);
+                                self.rows_dirty = true;
                             }
+                        }
+                        // The frame lane loops back through the bus: the
+                        // session publishes, the actor caches for the
+                        // shot doors and the snapshot fact.
+                        Ok(HouseEvent::Frame { port, png }) => {
+                            self.frames.insert(port, (Instant::now(), png));
                         }
                         Ok(_) => {}
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
                         Err(_) => break,
                     }
                 }
+            }
+            // The read model rides the wire whole: one fact replaces
+            // every client's slice whenever the rows changed.
+            if self.rows_dirty {
+                self.rows_dirty = false;
+                let rows = self.snapshot();
+                let _ = self.events.send(HouseEvent::Devices { rows });
             }
         }
     }
@@ -307,14 +333,26 @@ impl Devices {
             return; // minded, but no consumer translation yet — silent
         }
         // One master per port: an older session (homecoming without a
-        // gone, resume after resume) is closed and joined first.
-        self.close_session(&facts.port);
-        let (tx, rx) = std_mpsc::channel::<SessionMsg>();
+        // gone, resume after resume) is closed and left to exit; the
+        // new session's open retries until the port is free. The loop
+        // never joins a thread.
+        let joining = self.close_session(&facts.port);
+        if let Some(join) = joining {
+            let port = facts.port.clone();
+            std::thread::Builder::new()
+                .name(format!("reaper:{port}"))
+                .spawn(move || {
+                    let _ = join.join();
+                })
+                .ok();
+        }
+        let (tx, rx) = std_mpsc::sync_channel::<SessionMsg>(SESSION_MAILBOX);
         let (spec, zones) = self.frame_law_of(facts);
         let streaming = Arc::new(AtomicBool::new(false));
         let close = Arc::new(AtomicBool::new(false));
         let port = facts.port.clone();
         let events = self.events.clone();
+        let jobs = Arc::clone(&self.jobs);
         let device_id = facts.device_id.clone();
         let class = facts.class.clone();
         let streaming2 = Arc::clone(&streaming);
@@ -323,7 +361,8 @@ impl Devices {
             .name(format!("session:{port}"))
             .spawn(move || {
                 session_thread(
-                    port, rx, close2, streaming2, suzu, spec, zones, events, device_id, class,
+                    port, rx, close2, streaming2, suzu, spec, zones, events, jobs,
+                    device_id, class,
                 )
             })
             .ok();
@@ -333,21 +372,24 @@ impl Devices {
             device.outbound = Some(tx);
             device.streaming = streaming;
         }
+        self.rows_dirty = true;
     }
 
-    fn close_session(&mut self, port: &str) {
-        if let Some(mut handle) = self.sessions.remove(port) {
-            handle.close.store(true, Ordering::Relaxed);
-            if let Some(outbound) = self.devices.get_mut(port) {
-                if let Some(out) = outbound.outbound.take() {
-                    let _ = out.send(SessionMsg::Close);
-                }
-                outbound.streaming.store(false, Ordering::Relaxed);
+    /// Close a session and hand back its thread, if it has one. The
+    /// caller joins only when it must (a saga needs the port to
+    /// itself); everyone else lets the thread exit on its own — the
+    /// close flag and the Close message wake it within seconds.
+    fn close_session(&mut self, port: &str) -> Option<std::thread::JoinHandle<()>> {
+        let mut handle = self.sessions.remove(port)?;
+        handle.close.store(true, Ordering::Relaxed);
+        if let Some(outbound) = self.devices.get_mut(port) {
+            if let Some(out) = outbound.outbound.take() {
+                let _ = out.send(SessionMsg::Close);
             }
-            if let Some(join) = handle.join.take() {
-                let _ = join.join();
-            }
+            outbound.streaming.store(false, Ordering::Relaxed);
         }
+        self.frames.remove(port);
+        handle.join.take()
     }
 
     /// A ring: every live session tells its face that something
@@ -356,7 +398,7 @@ impl Devices {
         let words: Vec<String> = label.split_whitespace().map(|s| s.to_string()).collect();
         for device in self.devices.values_mut() {
             if let Some(outbound) = &device.outbound {
-                let _ = outbound.send(SessionMsg::Out(Outbound::Ring {
+                let _ = outbound.try_send(SessionMsg::Out(Outbound::Ring {
                     signal: signal.to_string(),
                     words: words.clone(),
                     urgency,
@@ -380,6 +422,8 @@ impl Devices {
                 device.outbound = None;
             }
         }
+        self.rows_dirty = true;
+        let _ = self.events.send(HouseEvent::Paused { paused: true });
         println!(
             "[devices] stream paused — {} port(s) released, faces fall idle (`suzu resume` to restart)",
             self.devices.len()
@@ -406,6 +450,7 @@ impl Devices {
                 state: format!("{:?}", DeviceState::Accepted),
             });
         }
+        let _ = self.events.send(HouseEvent::Paused { paused: false });
     }
 
     fn mind(&mut self, mut facts: DeviceFacts) {
@@ -450,6 +495,7 @@ impl Devices {
                 last_fed: Arc::new(Mutex::new(None)),
             },
         );
+        self.rows_dirty = true;
         // A paused house stays silent: the session spawns on resume.
         if !self.paused {
             self.spawn_session(&facts);
@@ -460,6 +506,7 @@ impl Devices {
         if let Some(mut device) = self.devices.remove(port) {
             self.close_session(port);
             device.outbound = None;
+            self.rows_dirty = true;
             let _ = self.events.send(HouseEvent::DeviceReleased {
                 port: port.to_string(),
                 device_id: device.device_id().map(|s| s.to_string()),
@@ -493,8 +540,9 @@ impl Devices {
 
     /// Fan-out: every live consumer takes the full published object as
     /// a cheap copy and translates on its own side. A consumer whose
-    /// mailbox is gone (its thread died) is disposed here — the port
-    /// is released and the watcher's next cycle can re-mind it.
+    /// mailbox is gone or full (its thread died or stalled) is
+    /// disposed here — the port is released and the watcher's next
+    /// cycle can re-mind it.
     fn publish(&mut self, ground: &Arc<MachineReport>) {
         let mut dead: Vec<String> = Vec::new();
         for device in self.devices.values_mut() {
@@ -502,8 +550,10 @@ impl Devices {
             if !Self::may_stream(&self.roster, device) {
                 continue; // the roster has not granted this stream
             }
-            if outbound.send(SessionMsg::Out(Outbound::Ground(Arc::clone(ground)))).is_err() {
-                dead.push(device.facts.port.clone());
+            if let Err(e) = outbound.try_send(SessionMsg::Out(Outbound::Ground(Arc::clone(ground)))) {
+                if matches!(e, std_mpsc::TrySendError::Disconnected(_)) {
+                    dead.push(device.facts.port.clone());
+                }
             } else if let Ok(mut t) = device.last_fed.lock() {
                 *t = Some(Instant::now());
             }
@@ -512,6 +562,7 @@ impl Devices {
             println!("[devices] {port}: consumer died — disposing");
             self.gone(&port);
         }
+        self.rows_dirty = true;
     }
 
     /// The lane forwards to every live session; ancestors drop it at
@@ -525,11 +576,10 @@ impl Devices {
                 continue;
             }
             consumers += 1;
-            if outbound
-                .send(SessionMsg::Out(Outbound::Pulse { axis: axis.to_string(), value }))
-                .is_err()
-            {
-                dead.push(device.facts.port.clone());
+            if let Err(e) = outbound.try_send(SessionMsg::Out(Outbound::Pulse { axis: axis.to_string(), value })) {
+                if matches!(e, std_mpsc::TrySendError::Disconnected(_)) {
+                    dead.push(device.facts.port.clone());
+                }
             }
         }
         for port in dead {
@@ -542,43 +592,29 @@ impl Devices {
         }
     }
 
-    /// One in-band shot through the owning session, decoded to PNG.
-    /// While a record runs on the port, recording subsumes the
-    /// preview: the served frame is the frame the GIF is taking.
-    fn capture(&self, port: &str, reply: std_mpsc::SyncSender<Vec<u8>>) {
-        if let Some(job) = self.jobs.latest(port, "record") {
-            if job.state == "recording" {
-                let _ = reply.send(job.preview.clone().unwrap_or_default());
-                return;
-            }
-        }
-        let png = match self.devices.get(port).and_then(|d| d.outbound.as_ref()) {
-            Some(outbound) => {
-                let (tx, rx) = std_mpsc::sync_channel(1);
-                match outbound.send(SessionMsg::Capture { reply: tx }) {
-                    Ok(()) => rx
-                        .recv_timeout(Duration::from_secs(10))
-                        .unwrap_or_default(),
-                    Err(_) => Vec::new(),
-                }
-            }
-            None => Vec::new(), // no live session: an honest empty shot
+    /// The newest frame for a port, under the freshness bound. This is
+    /// the whole capture story (ADR-0004): the house blinks on its own
+    /// cadence, the door serves the cached truth, and a stuck face
+    /// fails honestly in bounded time — here, instantly.
+    fn latest_frame(&self, port: &str) -> anyhow::Result<Vec<u8>> {
+        let Some((at, png_b64)) = self.frames.get(port) else {
+            anyhow::bail!("{port}: no frame yet — the face has not blinked");
         };
-        let _ = reply.send(png);
+        let age = at.elapsed();
+        if age > MAX_FRAME_AGE {
+            anyhow::bail!(
+                "{port}: the face last blinked {}s ago — unreachable or stuck",
+                age.as_secs()
+            );
+        }
+        Ok(crate::shot::decode_b64(png_b64))
     }
 
     /// One shot, saved into the captures folder. The folder is
     /// `SUZU_CAPTURES_DIR`, or `captures/` beside the resident.
     fn capture_save(&self, port: &str) -> anyhow::Result<String> {
-        let (tx, rx) = std_mpsc::sync_channel(1);
-        self.capture(port, tx);
-        let png = rx
-            .recv_timeout(Duration::from_secs(10))
-            .map_err(|_| anyhow::anyhow!("{port}: the session answered no shot within 10 s"))?;
-        if png.is_empty() {
-            anyhow::bail!("{port}: empty shot — face unreachable or frame law missing");
-        }
-        let dir = std::env::var("SUZU_CAPTURES_DIR").unwrap_or_else(|_| "captures".into());
+        let png = self.latest_frame(port)?;
+        let dir = captures_dir();
         std::fs::create_dir_all(&dir)?;
         let stamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
         let path = format!("{dir}/shot-{port}-{stamp}.png");
@@ -586,14 +622,21 @@ impl Devices {
         Ok(path)
     }
 
-    fn record_start(&mut self, port: &str, job: Arc<Mutex<Job>>, secs: u32, fps: u32) {
+    /// The trail camera: hand the job to the owning session and ack.
+    /// The registry is the record — progress and the GIF's verdict
+    /// travel as Job facts; the ack only says whether the session
+    /// took the job.
+    fn record_start(&mut self, port: &str, job_id: &str, secs: u32, fps: u32) -> anyhow::Result<()> {
         let secs = secs.clamp(1, 60);
         let fps = fps.clamp(1, 5);
-        self.send_to_session(port, SessionMsg::Record { job, secs, fps });
-    }
-
-    fn record_status(&self, port: &str) -> Option<Job> {
-        self.jobs.latest(port, "record")
+        if let Err(e) = self.send_to_session(port, SessionMsg::Record { job_id: job_id.to_string(), secs, fps }) {
+            self.jobs.with(job_id, |j: &mut Job| {
+                j.state = "failed".into();
+                j.label = format!("{e:#}");
+            });
+            return Err(e);
+        }
+        Ok(())
     }
 
     fn admission_retry(&self, port: &str) -> anyhow::Result<()> {
@@ -617,6 +660,7 @@ impl Devices {
         if let Some(d) = self.devices.get_mut(port) {
             d.streaming.store(false, Ordering::Relaxed);
         }
+        self.rows_dirty = true;
         let _ = self.events.send(HouseEvent::StreamDetached {
             device_id,
             port: port.to_string(),
@@ -639,6 +683,7 @@ impl Devices {
         if let Some(d) = self.devices.get_mut(port) {
             d.streaming.store(true, Ordering::Relaxed);
         }
+        self.rows_dirty = true;
         let _ = self.events.send(HouseEvent::StreamAttached {
             device_id,
             port: port.to_string(),
@@ -655,7 +700,14 @@ impl Devices {
             .outbound
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("{port}: no live session — is the stream paused?"))?;
-        outbound.send(msg).map_err(|_| anyhow::anyhow!("{port}: session died mid-request"))
+        outbound.try_send(msg).map_err(|e| match e {
+            std_mpsc::TrySendError::Full(_) => {
+                anyhow::anyhow!("{port}: the session mailbox is full — the face is stuck")
+            }
+            std_mpsc::TrySendError::Disconnected(_) => {
+                anyhow::anyhow!("{port}: session died mid-request")
+            }
+        })
     }
 
     /// Hand the individual to a maintenance saga. The session closes
@@ -700,11 +752,15 @@ impl Devices {
             port: port.to_string(),
             reason: format!("maintenance:{kind}"),
         });
-        self.close_session(port);
+        // The saga needs the port to itself: join the retired session's
+        // thread before the tools open the port — on the saga's own
+        // task, never on this loop.
+        let joining = self.close_session(port);
         if let Some(d) = self.devices.get_mut(port) {
             d.outbound = None;
         }
         self.in_maintenance.insert(port.to_string(), kind.to_string());
+        self.rows_dirty = true;
 
         let _ = self.events.send(HouseEvent::MaintenanceStarted {
             device_id: device_id.clone(),
@@ -723,6 +779,9 @@ impl Devices {
         let kind2 = kind.to_string();
         let door = self.door.clone();
         tokio::spawn(async move {
+            if let Some(join) = joining {
+                let _ = tokio::task::spawn_blocking(move || join.join()).await;
+            }
             let outcome = tokio::task::spawn_blocking(move || {
                 super::maintenance::run(
                     &port2, class.as_deref(), &kind2, &catalog, &events, &device_id2,
@@ -747,8 +806,10 @@ impl Devices {
         Ok(())
     }
 
-    /// The saga's end: the verdict lands on the roster's record and
-    /// the session respawns — its admission exam is the gate back.
+    /// The saga's end: the verdict lands on the roster's record. The
+    /// saga's task already re-identified the face off-loop — its facts
+    /// ride in, and the session respawns with the truth instead of the
+    /// memory of it. Its admission exam is the gate back.
     async fn maintenance_finish(
         &mut self,
         port: &str,
@@ -769,30 +830,34 @@ impl Devices {
         if let Some(d) = self.devices.get_mut(port) {
             d.streaming.store(false, Ordering::Relaxed);
         }
-        if self.devices.contains_key(port) && !self.paused {
-            // The saga may have changed what the face speaks (adopt).
-            // Re-identify before respawning, so the session opens with
-            // the truth instead of the memory of it.
-            let facts = self.devices[port].facts.clone();
-            let catalog = Arc::clone(&self.catalog);
-            let port2 = port.to_string();
-            let fresh = tokio::task::spawn_blocking(move || {
-                super::watcher::identify_facts(&catalog, &port2, facts.vid, facts.pid).ok()
-            })
-            .await
-            .unwrap_or(None);
-            match fresh {
-                Some(new_facts) => {
-                    println!("[maintenance] {port}: re-identified as {}/{} — respawning",
-                        new_facts.family.as_deref().unwrap_or("?"),
-                        new_facts.variant.as_deref().unwrap_or("?"));
-                    self.devices.get_mut(port).map(|d| d.facts = new_facts.clone());
-                    self.spawn_session(&new_facts);
-                }
-                None => {
+        self.rows_dirty = true;
+        match fresh {
+            Some(new_facts) if self.devices.contains_key(port) && !self.paused => {
+                self.session_respawn(port, new_facts);
+            }
+            Some(_) => {} // gone or paused meanwhile: the respawn waits
+            None => {
+                if self.devices.contains_key(port) {
                     println!("[maintenance] {port}: the port went quiet after the saga — replug to re-admit");
                 }
             }
+        }
+    }
+
+    /// A saga's respawn, re-identified off-loop: the record is updated
+    /// with the truth and the session opens with its admission exam.
+    fn session_respawn(&mut self, port: &str, facts: DeviceFacts) {
+        let Some(d) = self.devices.get_mut(port) else {
+            return; // the device departed while the ladder ran
+        };
+        println!(
+            "[maintenance] {port}: re-identified as {}/{} — respawning",
+            facts.family.as_deref().unwrap_or("?"),
+            facts.variant.as_deref().unwrap_or("?")
+        );
+        d.facts = facts.clone();
+        if !self.paused {
+            self.spawn_session(&facts);
         }
     }
 
@@ -825,6 +890,25 @@ impl Devices {
             })
             .collect()
     }
+
+    /// The read model, whole: rows, the pause flag, the frame cache.
+    fn devices_snapshot(&self) -> DevicesSnapshot {
+        DevicesSnapshot {
+            devices: self.snapshot(),
+            paused: self.paused,
+            frames: self
+                .frames
+                .iter()
+                .map(|(port, (_, png))| FrameFacts { port: port.clone(), png: png.clone() })
+                .collect(),
+        }
+    }
+}
+
+/// The captures folder: `SUZU_CAPTURES_DIR`, or `captures/` beside the
+/// resident. One name, one place.
+fn captures_dir() -> String {
+    std::env::var("SUZU_CAPTURES_DIR").unwrap_or_else(|_| "captures".into())
 }
 
 // ── the session — one thread per device, one master of the port ────
@@ -839,16 +923,33 @@ fn session_thread(
     spec: Option<FrameSpec>,
     zones: Vec<(usize, usize, [u8; 3])>,
     events: Sender<HouseEvent>,
+    jobs: Arc<Jobs>,
     device_id: Option<String>,
     class: Option<String>,
 ) {
-    let mut serial = match open_serial(&port) {
-        Ok(p) => p,
-        Err(e) => {
-            println!("[sessions] {port}: open failed — {e} (device stays idle)");
-            return; // rx dropped → the device is simply silent
+    // One master per port, with grace: a retired session's thread may
+    // still be exiting (a capture takes up to 8 s), so the open
+    // retries briefly before declaring the face unreachable.
+    let mut serial = None;
+    for attempt in 0..12 {
+        if close.load(Ordering::Relaxed) {
+            return; // retired before it ever opened — the port is free
         }
-    };
+        match open_serial(&port) {
+            Ok(p) => {
+                serial = Some(p);
+                break;
+            }
+            Err(e) => {
+                if attempt == 11 {
+                    println!("[sessions] {port}: open failed — {e} (device stays idle)");
+                    return; // rx dropped → the device is simply silent
+                }
+                std::thread::sleep(Duration::from_millis(500));
+            }
+        }
+    }
+    let mut serial = serial.expect("the retry loop either opened or returned");
     println!(
         "[sessions] {port}: consumer translating ({})",
         if suzu { "suzu/1" } else { "ancestor" }
@@ -871,7 +972,7 @@ fn session_thread(
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         session_loop(
             &mut serial, &rx, &close, &streaming, suzu, &port, spec, zones,
-            &events, device_id, class,
+            &events, &jobs, device_id, class,
         );
     }));
     if outcome.is_err() {
@@ -898,6 +999,26 @@ fn write_line_twice(
     })
 }
 
+/// One blink of the frame lane: capture, render, publish. A face that
+/// misses a blink costs nothing but the attempt — the freshness bound
+/// on the shot doors is the honest voice for it.
+fn frame_blink(
+    serial: &mut Box<dyn SerialPort>,
+    port: &str,
+    spec: &FrameSpec,
+    zones: &[(usize, usize, [u8; 3])],
+    events: &Sender<HouseEvent>,
+) {
+    let png = crate::shot::capture_on(serial, spec.size)
+        .and_then(|frame| crate::shot::render_png_bytes(spec, zones, &frame));
+    if let Ok(png) = png {
+        let _ = events.send(HouseEvent::Frame {
+            port: port.to_string(),
+            png: crate::shot::encode_b64(&png),
+        });
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn session_loop(
     serial: &mut Box<dyn SerialPort>,
@@ -909,6 +1030,7 @@ fn session_loop(
     spec: Option<FrameSpec>,
     zones: Vec<(usize, usize, [u8; 3])>,
     events: &Sender<HouseEvent>,
+    jobs: &Jobs,
     device_id: Option<String>,
     class: Option<String>,
 ) {
@@ -920,12 +1042,24 @@ fn session_loop(
     }
     let mut named: Option<String> = None;
     let mut seq: u8 = 0;
+    let mut next_frame = Instant::now() + FRAME_PERIOD;
+    let mut last_keepalive = Instant::now();
 
     loop {
         if close.load(Ordering::Relaxed) {
             break;
         }
-        match rx.recv_timeout(Duration::from_secs(5)) {
+        // Wake for the nearest of: a message, the next blink, the
+        // keepalive. The frame lane is this session's own cadence —
+        // serial by construction, so captures coalesce for free.
+        let now = Instant::now();
+        let till_frame = next_frame.saturating_duration_since(now);
+        let since_keepalive = now.duration_since(last_keepalive);
+        let till_keepalive = KEEPALIVE_PERIOD
+            .checked_sub(since_keepalive)
+            .unwrap_or(Duration::ZERO);
+        let wait = till_frame.min(till_keepalive);
+        match rx.recv_timeout(wait) {
             Ok(SessionMsg::Out(Outbound::Ground(g))) => {
                 if !streaming.load(Ordering::Relaxed) {
                     continue; // the roster has not granted this stream
@@ -961,19 +1095,8 @@ fn session_loop(
                     return;
                 }
             }
-            Ok(SessionMsg::Capture { reply }) => {
-                let png = match (&spec, suzu) {
-                    (Some(spec), true) => {
-                        crate::shot::capture_on(serial, spec.size)
-                            .and_then(|frame| crate::shot::render_png_bytes(spec, &zones, &frame))
-                            .unwrap_or_default()
-                    }
-                    _ => Vec::new(),
-                };
-                let _ = reply.send(png);
-            }
-            Ok(SessionMsg::Record { job, secs, fps }) => {
-                record_job(serial, port, secs, fps, spec.as_ref(), &zones, &job);
+            Ok(SessionMsg::Record { job_id, secs, fps }) => {
+                record_job(serial, port, &job_id, secs, fps, spec.as_ref(), &zones, jobs, events);
             }
             Ok(SessionMsg::Admission) => {
                 if suzu {
@@ -987,50 +1110,66 @@ fn session_loop(
                 }
             }
             Ok(SessionMsg::Close) => break,
-            // Keepalive: a suzu face rests after 10 s of silence, the
-            // ancestor idles to its fireflies — a frame every 5 s
-            // holds either face. Only while the stream flows; an
-            // ungranted face rests honestly.
-            Err(std_mpsc::RecvTimeoutError::Timeout) => {
-                if !streaming.load(Ordering::Relaxed) {
-                    continue;
+            Err(std_mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std_mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+        let now = Instant::now();
+        // The media lane's blink. Only while the stream flows — an
+        // ungranted face rests honestly; recording subsumes it (the
+        // record loop is inside its own message handler, so the two
+        // can never interleave on the port).
+        if now >= next_frame {
+            next_frame = now + FRAME_PERIOD;
+            if suzu && streaming.load(Ordering::Relaxed) {
+                if let Some(spec) = &spec {
+                    frame_blink(serial, port, spec, &zones, events);
                 }
+            }
+        }
+        // Keepalive: only while the stream flows (see FRAME_PERIOD note).
+        if now.duration_since(last_keepalive) >= KEEPALIVE_PERIOD {
+            last_keepalive = now;
+            if streaming.load(Ordering::Relaxed) {
                 let keepalive = if suzu { "K" } else { "R" };
                 let _ = write_line(serial, keepalive);
             }
-            Err(std_mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }
 }
 
 /// The trail camera, on the session's own port: loop the in-band shot,
-/// keep the latest frame served (recording subsumes the preview), and
-/// assemble the GIF into the captures folder when the run ends.
+/// publish every frame taken (recording subsumes the preview — the
+/// frames the GIF takes are the frames the wire carries), and assemble
+/// the GIF into the captures folder when the run ends. The registry is
+/// the record: progress and verdict travel as Job facts.
 fn record_job(
     serial: &mut Box<dyn SerialPort>,
     port: &str,
+    job_id: &str,
     secs: u32,
     fps: u32,
     spec: Option<&FrameSpec>,
     zones: &[(usize, usize, [u8; 3])],
-    job: &Mutex<Job>,
+    jobs: &Jobs,
+    events: &Sender<HouseEvent>,
 ) {
     let Some(spec) = spec else {
-        if let Ok(mut j) = job.lock() {
+        jobs.with(job_id, |j| {
             j.state = "failed".into();
-        }
+            j.label = "the class declares no frame law".into();
+        });
         return;
     };
     let fps = fps.clamp(1, 5);
     let period = Duration::from_millis(1000 / fps as u64);
     let delay_cs = ((1000 / fps as u16) / 10).max(2);
 
-    if let Ok(mut j) = job.lock() {
+    jobs.with(job_id, |j| {
         j.state = "recording".into();
         j.index = 0;
-        j.total = (secs * fps) as u32;
+        j.total = secs * fps;
         j.gif = None;
-    }
+    });
 
     let mut rgba_frames: Vec<Vec<u8>> = Vec::new();
     let (mut vw, mut vh) = (0usize, 0usize);
@@ -1052,10 +1191,14 @@ fn record_job(
                     vw = w * scale;
                     vh = h * scale;
                     rgba_frames.push(scaled);
-                    if let Ok(mut j) = job.lock() {
-                        j.index = rgba_frames.len() as u32;
-                        j.preview = Some(png);
-                    }
+                    let frames = rgba_frames.len() as u32;
+                    let _ = events.send(HouseEvent::Frame {
+                        port: port.to_string(),
+                        png: crate::shot::encode_b64(&png),
+                    });
+                    jobs.with(job_id, |j| {
+                        j.index = frames;
+                    });
                 }
                 Err(_) => {}
             },
@@ -1075,15 +1218,12 @@ fn record_job(
     let mut final_state = "done".to_string();
     let mut final_gif: Option<String> = None;
     if !rgba_frames.is_empty() {
-        let dir = std::env::var("SUZU_CAPTURES_DIR").unwrap_or_else(|_| "captures".into());
+        let dir = captures_dir();
         let _ = std::fs::create_dir_all(&dir);
         let stamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
         let path = format!("{dir}/record-{port}-{stamp}.gif");
         match crate::gif::write_gif_rgba(std::path::Path::new(&path), vw, vh, delay_cs, &rgba_frames) {
-            Ok(()) => {
-                final_gif = Some(path);
-                let _ = path;
-            }
+            Ok(()) => final_gif = Some(path),
             Err(e) => {
                 final_state = "failed".into();
                 println!("[sessions] {port}: gif assembly failed — {e}");
@@ -1092,10 +1232,12 @@ fn record_job(
     } else if quiet {
         final_state = "failed".into();
     }
-    if let Ok(mut j) = job.lock() {
-        j.state = final_state;
-        j.gif = final_gif;
-    }
+    let state = final_state;
+    let gif = final_gif;
+    jobs.with(job_id, |j| {
+        j.state = state;
+        j.gif = gif;
+    });
 }
 
 fn scale_rgba(rgba: &[u8], w: usize, h: usize, scale: usize) -> Vec<u8> {

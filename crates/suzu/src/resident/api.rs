@@ -1,22 +1,26 @@
 //! The resident's loopback read API — the third door into the house
 //! (the CLI and the control chirps were the first two).
 //!
-//! A minimal HTTP/1.1 responder on 127.0.0.1:7899 (S-U-Z-U + 1). The
-//! workbench renders what these endpoints answer and invents nothing:
-//! the fleet table, the moment journal, in-band shots, and the
-//! maintenance sagas all come from the domains that own them. No
-//! serial ever leaves the resident; a workbench that wants a face's
-//! pixels asks for a PNG and gets one.
+//! A minimal HTTP/1.1 responder on 127.0.0.1:7899 (S-U-Z-U + 1).
+//! ADR-0004 is the law here. The door streams: every `/api/events`
+//! connection opens with one `snapshot` fact — the whole house in one
+//! object — and everything after is a delta. Devices and roster ride
+//! the wire as whole-slice facts; the journal is its own lane; a
+//! heartbeat keeps half-open connections honest. Every command door
+//! follows one shape — send the command, await the reply under a hard
+//! timeout, answer honestly on a timeout — because the house never
+//! blocks on a face, and neither does the door. `/api/status` is gone:
+//! there is one truth, and it streams.
 //!
 //! CORS: `*` — the Tauri webview is a foreign origin to this socket,
 //! and it is the only client that matters. The bind is loopback, so
 //! the trust boundary is the machine itself (ADR-0002: local-first,
 //! same machine as the faces).
 
-use super::devices::DevicesCmd;
+use super::devices::{DevicesCmd, DevicesSnapshot};
+use super::events::{HouseEvent, HouseSnapshot, JournalLine, ServiceFacts};
 use super::jobs::Job;
 use super::jobs::Jobs;
-use super::events::HouseEvent;
 use super::moments::MomentsCmd;
 use super::roster::Roster;
 use anyhow::Result;
@@ -29,6 +33,13 @@ use tokio::sync::mpsc;
 
 pub const API_PORT: u16 = 7899;
 
+/// The hard bound on every command door. The actor routes instantly;
+/// five seconds means the house itself is wedged, and the door says so.
+const DOOR_TIMEOUT: Duration = Duration::from_secs(5);
+/// The heartbeat: a comment frame keeps half-open connections honest,
+/// so a killed resident is *down* within seconds, not minutes.
+const PING_PERIOD: Duration = Duration::from_secs(10);
+
 /// The moment journal — the Log page's memory. Bounded, in-memory,
 /// honest: it dies with the process, like the pause flag.
 pub struct Journal {
@@ -36,19 +47,13 @@ pub struct Journal {
     tx: tokio::sync::broadcast::Sender<JournalLine>,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct JournalLine {
-    pub ts: String,
-    pub domain: String,
-    pub text: String,
-}
-
-const JOURNAL_CAP: usize = 600;
-
 impl Journal {
     pub fn new() -> Self {
         let (tx, _) = tokio::sync::broadcast::channel(256);
-        Self { lines: Mutex::new(VecDeque::new()), tx }
+        Self {
+            lines: Mutex::new(VecDeque::new()),
+            tx,
+        }
     }
 
     pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<JournalLine> {
@@ -64,6 +69,7 @@ impl Journal {
         {
             let mut lines = self.lines.lock().expect("journal lock");
             lines.push_back(line.clone());
+            const JOURNAL_CAP: usize = 600;
             while lines.len() > JOURNAL_CAP {
                 lines.pop_front();
             }
@@ -72,13 +78,20 @@ impl Journal {
     }
 
     pub fn tail(&self, limit: usize) -> Vec<JournalLine> {
-        let lines = self.lines.lock().expect("journal lock");
-        lines.iter().rev().take(limit).cloned().collect()
+        self.lines
+            .lock()
+            .expect("journal lock")
+            .iter()
+            .rev()
+            .take(limit)
+            .cloned()
+            .collect()
     }
 }
 
-/// The destinations the About page may reach — the closed vocabulary,
-/// resolved here so no URL ever hardens into the workbench markup.
+/// The destinations the About page may reach. The closed vocabulary: a
+/// URL is only ever opened if it points at the product's own surfaces
+/// — resolved here, never hardened into markup.
 const DESTINATIONS: &[(&str, &str, &str, &str, &str)] = &[
     ("Ghostlight's sibling", "home", "Project page",
         "What suzu is, who it is for, and how it behaves.",
@@ -101,10 +114,16 @@ pub struct Ctx {
     pub journal: Arc<Journal>,
 }
 
-pub async fn listen(ctx: Arc<Ctx>) -> Result<()> {
-    let listener = TcpListener::bind(("127.0.0.1", API_PORT)).await?;
+/// The door is bound by the resident *before* any serial port is
+/// touched (ADR-0004) — a second claimant exits loudly instead of
+/// living doorless.
+pub async fn bind() -> std::io::Result<TcpListener> {
+    TcpListener::bind(("127.0.0.1", API_PORT)).await
+}
+
+pub async fn listen(ctx: Arc<Ctx>, listener: TcpListener) -> Result<()> {
     println!(
-        "[api] listening on http://127.0.0.1:{API_PORT} — the workbench's door (status · log · shots · sagas)"
+        "[api] the door is open on http://127.0.0.1:{API_PORT} — snapshot + stream, one truth"
     );
     loop {
         let Ok((stream, _)) = listener.accept().await else { continue };
@@ -170,16 +189,18 @@ async fn serve_one(mut stream: TcpStream, ctx: Arc<Ctx>) -> Result<()> {
 
     let started = Instant::now();
     let (status, content_type, payload) = route(&ctx, &method, &path, &body).await;
-    let shutting_down = path == "/api/shutdown" && method == "POST";
-    let journaled = method == "POST" && path != "/api/shot";
-    if path != "/api/shot" {
-        // One honest access line per request — shots poll too fast to matter.
-        if journaled {
-            ctx.journal.record("api", &format!("{method} {path} → {status} ({} ms)", started.elapsed().as_millis()));
-        }
+    if method == "POST" {
+        // One honest access line per keeper command.
+        ctx.journal.record(
+            "api",
+            &format!(
+                "{method} {path} → {status} ({} ms)",
+                started.elapsed().as_millis()
+            ),
+        );
     }
     write_response(&mut stream, status, &content_type, payload).await?;
-    if shutting_down {
+    if path == "/api/shutdown" && method == "POST" {
         println!("[api] shutdown requested — the resident rests");
         let _ = std::io::Write::flush(&mut std::io::stdout());
         std::process::exit(0);
@@ -187,47 +208,133 @@ async fn serve_one(mut stream: TcpStream, ctx: Arc<Ctx>) -> Result<()> {
     Ok(())
 }
 
-/// The live wire: a replay of the recent past, then every new fact as
-/// it lands. text/event-stream, one JSON JournalLine per event.
+/// The live wire: one `snapshot` fact — the whole house in one object —
+/// then every delta as it lands, and the journal as its own lane. A
+/// heartbeat keeps the connection's health measurable at both ends.
 async fn events_stream(ctx: Arc<Ctx>, mut stream: TcpStream) -> Result<()> {
-    let head = "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n                cache-control: no-cache\r\naccess-control-allow-origin: *\r\n                connection: keep-alive\r\n\r\n";
+    let head = "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncache-control: no-cache\r\naccess-control-allow-origin: *\r\nconnection: keep-alive\r\n\r\n";
     stream.write_all(head.as_bytes()).await?;
-    // seed with the recent past, then stream the house's facts
-    for line in ctx.journal.tail(30) {
-        let payload = serde_json::to_string(&line).unwrap_or_default();
-        stream.write_all(format!("data: {payload}\n\n").as_bytes()).await?;
-    }
+    // Subscribe before the snapshot is built: a fact that lands during
+    // the build replays as a delta, and replace-whole reducers are
+    // idempotent — a replay costs nothing, a loss would not heal.
+    let mut fact_rx = ctx.events.subscribe();
+    let mut journal_rx = ctx.journal.subscribe();
+
+    let snap = snapshot_fact(&ctx).await;
+    let snap_json =
+        serde_json::to_string(&HouseEvent::Snapshot { snapshot: snap }).unwrap_or_default();
+    stream
+        .write_all(format!("event: snapshot\ndata: {snap_json}\n\n").as_bytes())
+        .await?;
     stream.flush().await?;
-    let mut rx = ctx.events.subscribe();
+
+    let mut ping = tokio::time::interval(PING_PERIOD);
+    ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
-        match rx.recv().await {
-            Ok(ev) => {
-                // the pulse lane is data at 5 Hz, not an announcement
-                if matches!(ev, HouseEvent::Pulse { .. }) {
-                    continue;
+        tokio::select! {
+            _ = ping.tick() => {
+                if stream.write_all(b": ping\n\n").await.is_err() {
+                    break;
                 }
-                let (domain, text) = crate::resident::format_house_event(&ev);
-                let event = serde_json::to_value(&ev).unwrap_or_default();
-                let kind = event
-                    .get("type")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown")
-                    .to_string();
-                let payload = serde_json::json!({
-                    "type": kind,
-                    "at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-                    "domain": domain,
-                    "text": text,
-                    "event": event,
-                });
-                stream.write_all(format!("data: {}\n\n", serde_json::to_string(&payload).unwrap_or_default()).as_bytes()).await?;
                 stream.flush().await?;
             }
-            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-            Err(_) => break,
+            ev = fact_rx.recv() => match ev {
+                Ok(ev) => {
+                    if !is_delta(&ev) {
+                        continue;
+                    }
+                    let json = serde_json::to_string(&ev).unwrap_or_default();
+                    if stream
+                        .write_all(format!("event: fact\ndata: {json}\n\n").as_bytes())
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                    stream.flush().await?;
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(_) => break,
+            },
+            line = journal_rx.recv() => match line {
+                Ok(line) => {
+                    let payload = serde_json::json!({ "type": "journal", "line": line });
+                    let json = serde_json::to_string(&payload).unwrap_or_default();
+                    if stream
+                        .write_all(format!("event: journal\ndata: {json}\n\n").as_bytes())
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                    stream.flush().await?;
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(_) => break,
+            },
         }
     }
     Ok(())
+}
+
+/// The delta vocabulary: the facts a client's store is built from.
+/// Everything else is narrative — the journal lane already carries its
+/// story, in the house's own voice.
+fn is_delta(ev: &HouseEvent) -> bool {
+    matches!(
+        ev,
+        HouseEvent::Devices { .. }
+            | HouseEvent::Roster { .. }
+            | HouseEvent::Job { .. }
+            | HouseEvent::Frame { .. }
+            | HouseEvent::Paused { .. }
+    )
+}
+
+/// The whole house in one object — the fact every connection opens with.
+async fn snapshot_fact(ctx: &Ctx) -> HouseSnapshot {
+    let devs = door(&ctx.devices, |reply| DevicesCmd::Snapshot { reply })
+        .await
+        .unwrap_or_else(|_| DevicesSnapshot {
+            devices: Vec::new(),
+            paused: false,
+            frames: Vec::new(),
+        });
+    let roster = ctx.roster.read().map(|r| r.snapshot()).unwrap_or_default();
+    HouseSnapshot {
+        service: ServiceFacts {
+            name: "suzu".into(),
+            version: env!("CARGO_PKG_VERSION").into(),
+            paused: devs.paused,
+        },
+        devices: devs.devices,
+        roster,
+        jobs: ctx.jobs.all(),
+        journal: ctx.journal.tail(200),
+        frames: devs.frames,
+    }
+}
+
+/// One command door, in the house's one shape (ADR-0004): send the
+/// command, await the reply under a hard timeout, answer honestly on
+/// a timeout. The actor routes instantly, so the timeout firing means
+/// the house itself is wedged — and the door says so instead of hanging.
+async fn door<T, F>(tx: &mpsc::Sender<DevicesCmd>, build: F) -> Result<T, String>
+where
+    F: FnOnce(mpsc::Sender<T>) -> DevicesCmd,
+{
+    let (reply_tx, mut reply_rx) = mpsc::channel(1);
+    tx.send(build(reply_tx))
+        .await
+        .map_err(|_| "the devices domain is not running".to_string())?;
+    match tokio::time::timeout(DOOR_TIMEOUT, reply_rx.recv()).await {
+        Ok(Some(reply)) => Ok(reply),
+        Ok(None) => Err("the devices domain dropped the reply".into()),
+        Err(_) => Err(format!(
+            "the house did not answer within {}s — the wait is bounded, try again",
+            DOOR_TIMEOUT.as_secs()
+        )),
+    }
 }
 
 /// The keeper may name a device by port or by identity — the roster
@@ -247,14 +354,14 @@ fn find_headers_end(buf: &[u8]) -> Option<usize> {
 async fn route(ctx: &Ctx, method: &str, path: &str, body: &str) -> (u16, &'static str, Vec<u8>) {
     let json = |v: serde_json::Value| (200u16, "application/json", serde_json::to_vec(&v).unwrap_or_default());
     match (method, path) {
-        ("GET", "/api/status") => status(ctx).await,
+        // The curl-only debug door: the clients read the wire.
         ("GET", "/api/log") => json(serde_json::json!(ctx.journal.tail(300))),
         ("GET", "/api/destinations") => json(serde_json::json!(
             DESTINATIONS.iter().map(|(group, key, title, blurb, url)| serde_json::json!({
                 "group": group, "key": key, "title": title, "blurb": blurb, "url": url,
             })).collect::<Vec<_>>()
         )),
-        ("GET", p) if p.starts_with("/api/shot/") => shot(ctx, p, "").await,
+        ("GET", p) if p.starts_with("/api/shot/") => shot(ctx, p).await,
         ("GET", p) if p.starts_with("/api/device-image/") => {
             let class = p.trim_start_matches("/api/device-image/");
             device_image(ctx, class)
@@ -270,13 +377,6 @@ async fn route(ctx: &Ctx, method: &str, path: &str, body: &str) -> (u16, &'stati
             let target = p.trim_start_matches("/api/record/");
             match resolve_target(ctx, target) {
                 Some(port) => record_start(ctx, &port, body).await,
-                None => (404, "application/json", br#"{"error":"no such device on the roster"}"#.to_vec()),
-            }
-        }
-        ("GET", p) if p.starts_with("/api/record/") => {
-            let target = p.trim_start_matches("/api/record/");
-            match resolve_target(ctx, target) {
-                Some(port) => record_status(ctx, &port).await,
                 None => (404, "application/json", br#"{"error":"no such device on the roster"}"#.to_vec()),
             }
         }
@@ -328,64 +428,40 @@ fn device_image(ctx: &Ctx, class: &str) -> (u16, &'static str, Vec<u8>) {
     }
 }
 
-async fn status(ctx: &Ctx) -> (u16, &'static str, Vec<u8>) {
-    let (tx, mut rx) = mpsc::channel(1);
-    let _ = ctx.devices.send(DevicesCmd::Snapshot { reply: tx }).await;
-    let rows = rx.recv().await.unwrap_or_default();
-    let individuals = ctx
-        .roster
-        .read()
-        .map(|r| r.snapshot())
-        .unwrap_or_default();
-    let json = serde_json::json!({
-        "resident": { "name": "suzu", "version": env!("CARGO_PKG_VERSION") },
-        "devices": rows,
-        "roster": individuals,
-    });
-    (200, "application/json", serde_json::to_vec(&json).unwrap_or_default())
-}
-
-async fn shot(ctx: &Ctx, path: &str, query: &str) -> (u16, &'static str, Vec<u8>) {
+/// The shot door: the newest frame under the freshness bound — instant,
+/// bounded, honest. A stuck face fails here in no time at all, with
+/// the truth about when it last blinked.
+async fn shot(ctx: &Ctx, path: &str) -> (u16, &'static str, Vec<u8>) {
     let Some(raw) = path.trim_start_matches("/api/shot/").strip_suffix(".png") else {
         return (404, "application/json", br#"{"error":"shots are /api/shot/PORT.png"}"#.to_vec());
     };
     let Some(port) = resolve_target(ctx, raw) else {
         return (404, "application/json", br#"{"error":"no such device on the roster"}"#.to_vec());
     };
-    if false {
-        return (404, "application/json", br#"{"error":"shots are /api/shot/PORT.png"}"#.to_vec());
-    };
-    let (tx, rx) = std::sync::mpsc::sync_channel(1);
-    let _ = ctx
-        .devices
-        .send(DevicesCmd::Capture { port: port.to_string(), reply: tx })
-        .await;
-    // The session answers within 10 s or the shot never happened.
-    let png = tokio::task::spawn_blocking(move || {
-        rx.recv_timeout(Duration::from_secs(11)).unwrap_or_default()
-    })
-    .await
-    .unwrap_or_default();
-    if png.is_empty() {
-        return (409, "application/json", br#"{"error":"no shot - face unreachable or frame law missing"}"#.to_vec());
+    match door(&ctx.devices, |reply| DevicesCmd::LatestFrame { port, reply }).await {
+        Ok(Ok(png)) => (200, "image/png", png),
+        Ok(Err(e)) => (
+            409,
+            "application/json",
+            serde_json::to_vec(&serde_json::json!({ "error": format!("{e:#}") })).unwrap_or_default(),
+        ),
+        Err(e) => (
+            504,
+            "application/json",
+            serde_json::to_vec(&serde_json::json!({ "error": e })).unwrap_or_default(),
+        ),
     }
-    (200, "image/png", png)
 }
 
 async fn capture_save(ctx: &Ctx, port: &str) -> (u16, &'static str, Vec<u8>) {
-    let (tx, mut rx) = mpsc::channel(1);
-    let _ = ctx
-        .devices
-        .send(DevicesCmd::CaptureSave { port: port.to_string(), reply: tx })
-        .await;
-    match rx.recv().await {
-        Some(Ok(path)) => (
+    match door(&ctx.devices, |reply| DevicesCmd::CaptureSave { port: port.to_string(), reply }).await {
+        Ok(Ok(path)) => (
             200,
             "application/json",
             serde_json::to_vec(&serde_json::json!({ "saved": path })).unwrap_or_default(),
         ),
-        Some(Err(e)) => (409, "application/json", serde_json::to_vec(&serde_json::json!({ "error": format!("{e:#}") })).unwrap_or_default()),
-        None => (500, "application/json", br#"{"error":"devices domain is gone"}"#.to_vec()),
+        Ok(Err(e)) => (409, "application/json", serde_json::to_vec(&serde_json::json!({ "error": format!("{e:#}") })).unwrap_or_default()),
+        Err(e) => (504, "application/json", serde_json::to_vec(&serde_json::json!({ "error": e })).unwrap_or_default()),
     }
 }
 
@@ -393,103 +469,100 @@ async fn record_start(ctx: &Ctx, port: &str, body: &str) -> (u16, &'static str, 
     let parsed: serde_json::Value = serde_json::from_str(body).unwrap_or(serde_json::json!({}));
     let secs = parsed.get("secs").and_then(|v| v.as_u64()).unwrap_or(4) as u32;
     let fps = parsed.get("fps").and_then(|v| v.as_u64()).unwrap_or(3) as u32;
-    let job = ctx.jobs.create(Job {
-        id: format!("record-{}-{}", port, chrono::Utc::now().format("%Y%m%d-%H%M%S")),
+    let (secs, fps) = (secs.clamp(1, 60), fps.clamp(1, 5));
+    let job_id = format!("record-{}-{}", port, chrono::Utc::now().format("%Y%m%d-%H%M%S"));
+    ctx.jobs.create(Job {
+        id: job_id.clone(),
         kind: "record".into(),
         target: port.to_string(),
+        device_id: None,
         state: "recording".into(),
+        index: 0,
         total: secs * fps,
+        label: format!("{secs}s at {fps} fps"),
+        gif: None,
         started_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        ..Default::default()
     });
-    let (tx, mut rx) = mpsc::channel::<anyhow::Result<()>>(1);
-    let _ = ctx
-        .devices
-        .send(DevicesCmd::RecordStart { port: port.to_string(), job, secs, fps })
-        .await;
-    match rx.recv().await {
-        Some(Ok(())) => (200, "application/json", br#"{"started":true}"#.to_vec()),
-        Some(Err(e)) => (409, "application/json", serde_json::to_vec(&serde_json::json!({ "error": format!("{e:#}") })).unwrap_or_default()),
-        None => (500, "application/json", br#"{"error":"devices domain is gone"}"#.to_vec()),
+    match door(&ctx.devices, |reply| DevicesCmd::RecordStart {
+        port: port.to_string(),
+        job_id,
+        secs,
+        fps,
+        reply,
+    })
+    .await
+    {
+        Ok(Ok(())) => (200, "application/json", br#"{"started":true,"note":"the job's verdict arrives as a Job fact"}"#.to_vec()),
+        Ok(Err(e)) => (409, "application/json", serde_json::to_vec(&serde_json::json!({ "error": format!("{e:#}") })).unwrap_or_default()),
+        Err(e) => (504, "application/json", serde_json::to_vec(&serde_json::json!({ "error": e })).unwrap_or_default()),
     }
 }
 
-async fn record_status(ctx: &Ctx, port: &str) -> (u16, &'static str, Vec<u8>) {
-    let state = ctx.jobs.latest(port, "record");
-    let json = match state {
-        Some(job) => serde_json::json!({
-            "phase": job.state, "frames": job.index, "gif": job.gif,
-        }),
-        None => serde_json::json!({ "phase": "idle" }),
-    };
-    (200, "application/json", serde_json::to_vec(&json).unwrap_or_default())
-}
-
 async fn admission(ctx: &Ctx, port: &str) -> (u16, &'static str, Vec<u8>) {
-    let (tx, mut rx) = mpsc::channel(1);
-    let _ = ctx
-        .devices
-        .send(DevicesCmd::AdmissionRetry { port: port.to_string(), reply: tx })
-        .await;
-    match rx.recv().await {
-        Some(Ok(())) => (
+    match door(&ctx.devices, |reply| DevicesCmd::AdmissionRetry { port: port.to_string(), reply }).await {
+        Ok(Ok(())) => (
             200,
             "application/json",
             serde_json::to_vec(&serde_json::json!({ "started": true, "note": "the verdict arrives on the log" })).unwrap_or_default(),
         ),
-        Some(Err(e)) => (409, "application/json", serde_json::to_vec(&serde_json::json!({ "error": format!("{e:#}") })).unwrap_or_default()),
-        None => (500, "application/json", br#"{"error":"devices domain is gone"}"#.to_vec()),
+        Ok(Err(e)) => (409, "application/json", serde_json::to_vec(&serde_json::json!({ "error": format!("{e:#}") })).unwrap_or_default()),
+        Err(e) => (504, "application/json", serde_json::to_vec(&serde_json::json!({ "error": e })).unwrap_or_default()),
     }
 }
 
 async fn device_stream_toggle(ctx: &Ctx, port: &str, resume: bool) -> (u16, &'static str, Vec<u8>) {
-    let (tx, mut rx) = mpsc::channel(1);
-    let cmd = if resume {
-        DevicesCmd::ResumeDevice { port: port.to_string(), reply: tx }
-    } else {
-        DevicesCmd::PauseDevice { port: port.to_string(), reply: tx }
+    let asked = |reply| {
+        if resume {
+            DevicesCmd::ResumeDevice { port: port.to_string(), reply }
+        } else {
+            DevicesCmd::PauseDevice { port: port.to_string(), reply }
+        }
     };
-    let _ = ctx.devices.send(cmd).await;
-    match rx.recv().await {
-        Some(Ok(())) => (
+    match door(&ctx.devices, asked).await {
+        Ok(Ok(())) => (
             200,
             "application/json",
             serde_json::to_vec(&serde_json::json!({ "stream": if resume { "on" } else { "off" } })).unwrap_or_default(),
         ),
-        Some(Err(e)) => (409, "application/json", serde_json::to_vec(&serde_json::json!({ "error": format!("{e:#}") })).unwrap_or_default()),
-        None => (500, "application/json", br#"{"error":"devices domain is gone"}"#.to_vec()),
+        Ok(Err(e)) => (409, "application/json", serde_json::to_vec(&serde_json::json!({ "error": format!("{e:#}") })).unwrap_or_default()),
+        Err(e) => (504, "application/json", serde_json::to_vec(&serde_json::json!({ "error": e })).unwrap_or_default()),
     }
 }
 
 async fn maintenance(ctx: &Ctx, port: &str, body: &str) -> (u16, &'static str, Vec<u8>) {
     let parsed: serde_json::Value = serde_json::from_str(body).unwrap_or(serde_json::json!({}));
     let kind = parsed.get("kind").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let (tx, mut rx) = mpsc::channel(1);
-    let _ = ctx
-        .devices
-        .send(DevicesCmd::MaintenanceStart { port: port.to_string(), kind, reply: tx })
-        .await;
-    match rx.recv().await {
-        Some(Ok(())) => (
+    match door(&ctx.devices, |reply| DevicesCmd::MaintenanceStart { port: port.to_string(), kind, reply }).await {
+        Ok(Ok(())) => (
             200,
             "application/json",
             serde_json::to_vec(&serde_json::json!({ "started": true, "note": "the saga's steps arrive on the log" })).unwrap_or_default(),
         ),
-        Some(Err(e)) => (409, "application/json", serde_json::to_vec(&serde_json::json!({ "error": format!("{e:#}") })).unwrap_or_default()),
-        None => (500, "application/json", br#"{"error":"devices domain is gone"}"#.to_vec()),
+        Ok(Err(e)) => (409, "application/json", serde_json::to_vec(&serde_json::json!({ "error": format!("{e:#}") })).unwrap_or_default()),
+        Err(e) => (504, "application/json", serde_json::to_vec(&serde_json::json!({ "error": e })).unwrap_or_default()),
     }
 }
 
 async fn control(ctx: &Ctx, body: &str) -> (u16, &'static str, Vec<u8>) {
     let parsed: serde_json::Value = serde_json::from_str(body).unwrap_or(serde_json::json!({}));
     match parsed.get("verb").and_then(|v| v.as_str()) {
-        Some("pause") => {
-            let _ = ctx.devices.send(DevicesCmd::Pause).await;
-            (200, "application/json", br#"{"paused":true}"#.to_vec())
-        }
-        Some("resume") => {
-            let _ = ctx.devices.send(DevicesCmd::Resume).await;
-            (200, "application/json", br#"{"paused":false}"#.to_vec())
+        Some(verb @ ("pause" | "resume")) => {
+            let resume = verb == "resume";
+            let asked = move |reply| {
+                if resume {
+                    DevicesCmd::Resume { reply }
+                } else {
+                    DevicesCmd::Pause { reply }
+                }
+            };
+            match door(&ctx.devices, asked).await {
+                Ok(()) => (
+                    200,
+                    "application/json",
+                    serde_json::to_vec(&serde_json::json!({ "paused": !resume })).unwrap_or_default(),
+                ),
+                Err(e) => (504, "application/json", serde_json::to_vec(&serde_json::json!({ "error": e })).unwrap_or_default()),
+            }
         }
         _ => (400, "application/json", br#"{"error":"verb is pause | resume"}"#.to_vec()),
     }
@@ -517,6 +590,7 @@ async fn write_response(stream: &mut TcpStream, status: u16, content_type: &str,
         400 => "Bad Request",
         404 => "Not Found",
         409 => "Conflict",
+        504 => "Gateway Timeout",
         500 => "Internal Server Error",
         _ => "OK",
     };

@@ -23,7 +23,7 @@ pub mod sensor;
 pub mod watcher;
 
 use api::Journal;
-use devices::{DeviceRow, Devices, DevicesCmd};
+use devices::{Devices, DevicesCmd, DevicesSnapshot};
 use events::HouseEvent;
 use moments::{Moments, MomentsCmd};
 use roster::{Roster, SagaStep};
@@ -82,16 +82,19 @@ impl House {
         let _ = self.moments_door().send(moment).await;
     }
 
-    /// Cheap snapshot: a copy, taken by the owning domain.
-    pub async fn snapshot_devices(&self) -> anyhow::Result<Vec<DeviceRow>> {
+    /// Cheap snapshot: a copy, taken by the owning domain. The actor
+    /// routes instantly — this is bounded like every other door.
+    pub async fn snapshot_devices(&self) -> anyhow::Result<DevicesSnapshot> {
         let (tx, mut rx) = mpsc::channel(1);
         self.devices_door()
             .send(DevicesCmd::Snapshot { reply: tx })
             .await
             .map_err(|_| anyhow::anyhow!("devices domain is not running"))?;
-        rx.recv()
-            .await
-            .ok_or_else(|| anyhow::anyhow!("devices domain dropped the snapshot"))
+        match tokio::time::timeout(Duration::from_secs(5), rx.recv()).await {
+            Ok(Some(snap)) => Ok(snap),
+            Ok(None) => anyhow::bail!("devices domain dropped the snapshot"),
+            Err(_) => anyhow::bail!("the house did not answer within 5s"),
+        }
     }
 }
 
@@ -244,6 +247,19 @@ pub(crate) fn format_house_event(ev: &HouseEvent) -> (&'static str, String) {
             "roster",
             format!("{device_id} retired — the roster keeps the name, never the stream"),
         ),
+        // ── the wire vocabulary (ADR-0004): data, not news ──────────
+        HouseEvent::Devices { .. } => ("devices", String::new()),
+        HouseEvent::Roster { .. } => ("roster", String::new()),
+        HouseEvent::Frame { .. } => ("media", String::new()),
+        HouseEvent::Snapshot { .. } => ("house", String::new()),
+        HouseEvent::Paused { paused } => say(
+            "devices",
+            if *paused {
+                "stream paused — the faces fall idle".to_string()
+            } else {
+                "stream resumed — the faces redress".to_string()
+            },
+        ),
     }
 }
 //
@@ -330,13 +346,23 @@ fn spawn_moments_supervised(house: Arc<House>, rx: mpsc::Receiver<MomentsCmd>) {
 /// The roster's task: it consumes the house's facts and answers with
 /// the lifecycle's verdicts. StreamAttached / StreamDetached are its
 /// words — the devices domain opens and closes its gates to them.
+/// Its read model rides the wire whole (ADR-0004): after every
+/// mutation, one `Roster` fact replaces every client's slice — the
+/// lifecycle's law lives here, once, never re-derived downstream.
 fn spawn_roster(house: Arc<House>, roster: Arc<RwLock<Roster>>) {
     tokio::spawn(async move {
         let mut bus = house.events.subscribe();
         loop {
             match bus.recv().await {
                 Ok(ev) => {
-                    let derived = process_roster_event(&roster, ev);
+                    let (derived, changed) = process_roster_event(&roster, ev);
+                    if changed {
+                        let individuals = roster
+                            .read()
+                            .map(|r| r.snapshot())
+                            .unwrap_or_default();
+                        let _ = house.events.send(HouseEvent::Roster { individuals });
+                    }
                     if let Some(d) = derived {
                         let _ = house.events.send(d);
                     }
@@ -348,61 +374,74 @@ fn spawn_roster(house: Arc<House>, roster: Arc<RwLock<Roster>>) {
     });
 }
 
+/// Returns the derived verdict event (if any) and whether the roster
+/// mutated — a mutation publishes the whole read model.
 fn process_roster_event(
     roster: &Arc<RwLock<Roster>>,
     ev: HouseEvent,
-) -> Option<HouseEvent> {
-    let mut r = roster.write().ok()?;
+) -> (Option<HouseEvent>, bool) {
+    let Ok(mut r) = roster.write() else {
+        return (None, false);
+    };
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     match ev {
         HouseEvent::DeviceMinded { port, device_id: Some(id), class, .. } => {
-            r.hold(&id, &port, class.as_deref(), &now).ok()?;
-            Some(HouseEvent::IndividualHeld { device_id: id, port, class })
+            let changed = r.hold(&id, &port, class.as_deref(), &now).is_ok();
+            let derived = changed.then(|| HouseEvent::IndividualHeld { device_id: id, port, class });
+            (derived, changed)
         }
         HouseEvent::AdmissionReport { device_id, port, passed, steps } => {
             let record = roster::AdmissionRecord { passed, at: now, steps };
             match r.admission_result(&device_id, record) {
-                Ok(roster::Lifecycle::Live) => {
-                    Some(HouseEvent::StreamAttached { device_id, port })
-                }
-                Ok(_) => Some(HouseEvent::StreamDetached {
-                    device_id,
-                    port,
-                    reason: "admission failed".into(),
-                }),
-                Err(_) => None,
+                Ok(roster::Lifecycle::Live) => (
+                    Some(HouseEvent::StreamAttached { device_id, port }),
+                    true,
+                ),
+                Ok(_) => (
+                    Some(HouseEvent::StreamDetached {
+                        device_id,
+                        port,
+                        reason: "admission failed".into(),
+                    }),
+                    true,
+                ),
+                Err(_) => (None, false),
             }
         }
         HouseEvent::DeviceReleased { port, device_id } => {
             let id = device_id.or_else(|| {
                 r.by_port(&port).map(|i| i.device_id.clone())
-            })?;
+            });
+            let Some(id) = id else { return (None, false) };
             let was_streaming =
                 r.individual(&id).is_some_and(|i| i.lifecycle == roster::Lifecycle::Live);
-            r.departed(&id).ok()?;
-            was_streaming.then(|| HouseEvent::StreamDetached {
+            if r.departed(&id).is_err() {
+                return (None, false);
+            }
+            let derived = was_streaming.then(|| HouseEvent::StreamDetached {
                 device_id: id,
                 port,
                 reason: "departed".into(),
-            })
+            });
+            (derived, true)
         }
         HouseEvent::MaintenanceStarted { device_id, kind, .. } => {
-            r.maintenance_started(&device_id, &kind).ok()?;
-            None
+            let changed = r.maintenance_started(&device_id, &kind).is_ok();
+            (None, changed)
         }
         HouseEvent::MaintenanceStep { device_id, step, index, total, ok, detail } => {
             r.maintenance_step(&device_id, SagaStep { name: step, index, total, ok, detail });
-            None
+            (None, true)
         }
         HouseEvent::MaintenanceCompleted { device_id, ok, .. } => {
-            r.maintenance_completed(&device_id, ok).ok()?;
-            None
+            let changed = r.maintenance_completed(&device_id, ok).is_ok();
+            (None, changed)
         }
         HouseEvent::Retired { device_id } => {
-            r.retire(&device_id).ok()?;
-            None
+            let changed = r.retire(&device_id).is_ok();
+            (None, changed)
         }
-        _ => None,
+        _ => (None, false),
     }
 }
 
@@ -454,6 +493,20 @@ fn spawn_publisher_supervised(house: Arc<House>) {
 }
 
 pub async fn run(catalog: Arc<Catalog>) -> anyhow::Result<()> {
+    // The door first (ADR-0004): the resident binds 7899 before it
+    // touches any serial port, and a second claimant exits loudly with
+    // a reason — never doorless, never a zombie watching ports.
+    let listener = match api::bind().await {
+        Ok(l) => l,
+        Err(e) => {
+            let reason = format!(
+                "cannot claim the door 127.0.0.1:{} ({e}) — another suzu resident already owns the house",
+                api::API_PORT
+            );
+            println!("[api] !! {reason}");
+            anyhow::bail!("{reason}");
+        }
+    };
     let (events, _) = broadcast::channel(256);
     let house = Arc::new(House::new(events.clone()));
     let roster = Arc::new(RwLock::new(Roster::new()));
@@ -488,7 +541,8 @@ pub async fn run(catalog: Arc<Catalog>) -> anyhow::Result<()> {
     // the control chirp: `suzu pause` / `suzu resume` from any shell
     tokio::spawn(crate::control::listen(house.devices_door(), house.moments_door()));
 
-    // the workbench's door: the loopback read API (ADR-0002)
+    // the workbench's door: the loopback read API (ADR-0002), on the
+    // listener claimed before the house was built (ADR-0004)
     tokio::spawn(api::listen(Arc::new(api::Ctx {
         catalog: Arc::clone(&catalog),
         jobs: Arc::clone(&jobs),
@@ -497,7 +551,7 @@ pub async fn run(catalog: Arc<Catalog>) -> anyhow::Result<()> {
         moments: house.moments_door(),
         roster: Arc::clone(&roster),
         journal: Arc::clone(&journal),
-    })));
+    }), listener));
 
     // the visitor door, by hand: `tell <label>`
     let (stdin_tx, mut stdin_rx) = mpsc::channel::<String>(16);
@@ -551,11 +605,13 @@ pub async fn run(catalog: Arc<Catalog>) -> anyhow::Result<()> {
                     "q" | "quit" => break,
                     "" => {}
                     "status" => match house.snapshot_devices().await {
-                        Ok(rows) => {
-                            if rows.is_empty() {
-                                println!("  no minded devices");
-                            }
-                            for r in rows {
+                        Ok(snap) => {
+                            println!(
+                                "  stream {} · {} minded device(s)",
+                                if snap.paused { "paused" } else { "flowing" },
+                                snap.devices.len()
+                            );
+                            for r in snap.devices {
                                 let state = format!("{:?}", r.state);
                                 println!(
                                     "  {} · {} {}/{} v{} · proto {:?} · {}",
