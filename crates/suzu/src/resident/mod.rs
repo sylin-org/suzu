@@ -213,12 +213,11 @@ pub(crate) fn format_house_event(ev: &HouseEvent) -> (&'static str, String) {
             "maintenance",
             format!("{kind} saga owns {device_id} on {port} — the stream is withdrawn"),
         ),
-        HouseEvent::MaintenanceStep { device_id, step, ok, detail } => say(
+        HouseEvent::MaintenanceStep { device_id, step, index, total, ok, detail } => say(
             "maintenance",
             format!(
-                "{device_id} · {step}{} {}",
+                "{device_id} · step {index}/{total} — {step}{} {detail}",
                 if *ok { "" } else { " ✗" },
-                detail
             ),
         ),
         HouseEvent::MaintenanceCompleted { device_id, kind, ok } => say(
@@ -376,8 +375,8 @@ fn process_roster_event(
             r.maintenance_started(&device_id, &kind).ok()?;
             None
         }
-        HouseEvent::MaintenanceStep { device_id, step, ok, detail } => {
-            r.maintenance_step(&device_id, SagaStep { name: step, ok, detail });
+        HouseEvent::MaintenanceStep { device_id, step, index, total, ok, detail } => {
+            r.maintenance_step(&device_id, SagaStep { name: step, index, total, ok, detail });
             None
         }
         HouseEvent::MaintenanceCompleted { device_id, ok, .. } => {

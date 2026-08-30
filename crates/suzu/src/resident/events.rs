@@ -98,6 +98,9 @@ pub enum HouseEvent {
     MaintenanceStep {
         device_id: String,
         step: String,
+        /// 1-based step number and the saga's planned total.
+        index: u32,
+        total: u32,
         ok: bool,
         detail: String,
     },

@@ -51,6 +51,8 @@ pub struct AdmissionRecord {
 /// One step of a maintenance saga's journal.
 #[derive(Debug, Clone, Serialize)]
 pub struct SagaStep {
+    pub index: u32,
+    pub total: u32,
     pub name: String,
     pub ok: bool,
     pub detail: String,
@@ -346,7 +348,7 @@ mod tests {
         pass(&mut r);
         r.maintenance_started("id-1", "install").unwrap();
         assert!(!r.is_streaming("id-1"));
-        r.maintenance_step("id-1", SagaStep { name: "backup".into(), ok: true, detail: "".into() });
+        r.maintenance_step("id-1", SagaStep { index: 1, total: 4, name: "backup".into(), ok: true, detail: "".into() });
         r.maintenance_completed("id-1", true).unwrap();
 
         let ind = r.individual("id-1").unwrap();

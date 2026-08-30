@@ -15,6 +15,7 @@
     el[id.replaceAll("-", "_")] = document.getElementById(id);
   }
 
+  const installing = new Set(); // ports with a saga in flight
   let paused = false;
   let activeView = "status";
   let mediaTimer = null;
@@ -95,13 +96,21 @@
   function deviceCard(row, rosterEntry) {
     // The keeper's formula: a device is LIVE, NEW, or PAUSED - and the
     // buttons are exactly the ones its state offers, nothing else.
-    const lc = row.lifecycle ?? "new";
-    const pill = { live: "LIVE", new: "NEW", paused: "PAUSED" }[lc] ?? escapeHtml(lc.toUpperCase());
-    const pillTone = { live: "good", new: "warn", paused: "info" }[lc] ?? "info";
     const saga = rosterEntry?.maintenance;
-    const sagaLine = saga?.state === "running"
-      ? `<div class="device-saga">${escapeHtml(saga.kind)} - ${escapeHtml(saga.steps.map((x) => x.name).join(" \u2192 ") || "starting")}</div>`
-      : "";
+    const sagaRunning = saga?.state === "running";
+    const isInstalling = installing.has(row.port) || sagaRunning;
+    const lc = isInstalling ? "installing" : (row.lifecycle ?? "new");
+    const pill = isInstalling
+      ? "INSTALLING"
+      : { live: "LIVE", new: "NEW", paused: "PAUSED" }[lc] ?? escapeHtml(lc.toUpperCase());
+    const pillTone = isInstalling ? "warn" : ({ live: "good", new: "warn", paused: "info" }[lc] ?? "info");
+    const lock = isInstalling ? "disabled" : "";
+    const currentStep = [...(saga?.steps ?? [])].pop();
+    const sagaLine = sagaRunning
+      ? `<div class="device-saga">installing \u2014 step ${currentStep ? `${currentStep.index} of ${currentStep.total}: ${escapeHtml(currentStep.name)}` : "starting\u2026"}</div>`
+      : saga?.state === "failed"
+        ? `<div class="device-saga">the last ${escapeHtml(saga?.kind ?? "saga")} failed \u2014 see the log, or try again</div>`
+        : "";
 
     let line = "";
     if (lc === "live") {
@@ -117,12 +126,12 @@
     }
 
     const streamButton = lc === "live"
-      ? `<button class="ghost-button" data-action="pause">Pause</button>`
+      ? `<button class="ghost-button" data-action="pause" ${lock}>Pause</button>`
       : lc === "paused"
-        ? `<button class="ghost-button" data-action="resume">Resume</button>`
-        : `<button class="ghost-button" data-action="install" ${sagaLine ? "disabled" : ""}>Install Firmware</button>`;
-    const reinstall = `<button class="ghost-button" data-action="install" ${sagaLine ? "disabled" : ""}>Reinstall Firmware</button>`;
-    const factory = `<button class="danger-button" data-action="factory" ${sagaLine ? "disabled" : ""}>Factory Reset</button>`;
+        ? `<button class="ghost-button" data-action="resume" ${lock}>Resume</button>`
+        : `<button class="ghost-button" data-action="install" ${lock}>Install Firmware</button>`;
+    const reinstall = `<button class="ghost-button" data-action="install" ${lock}>Reinstall Firmware</button>`;
+    const factory = `<button class="danger-button" data-action="factory" ${lock}>Factory Reset</button>`;
     const tools = lc === "new" ? streamButton + factory : streamButton + reinstall + factory;
 
     const photo = row.class
@@ -184,9 +193,9 @@
         "The face files return to ship state (its identity is kept), the face restarts, and it is tested before it goes live again.",
       );
       if (ok) {
-        button.disabled = true;
+        installing.add(port);
+        pollStatus();
         await postOrToast(`/api/maintenance/${port}`, { kind: "install" });
-        toast(`${port}: installing - follow the steps here`);
       }
     } else if (action === "factory") {
       const ok = await confirmChange(

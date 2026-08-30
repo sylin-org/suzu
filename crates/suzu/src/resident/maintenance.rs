@@ -1,16 +1,19 @@
-//! The maintenance sagas — soft and factory reset, step by step,
-//! journaled as house events (ADR-0003).
+//! The maintenance sagas — install, adopt, soft and factory reset,
+//! step by step, journaled as house events (ADR-0003).
 //!
-//! A saga owns its port exclusively (the session closed before it
-//! began) and follows the class `procedure.yaml`'s declared steps.
+//! Every saga declares its plan up front (a total step count), and
+//! each step is announced the moment it begins — the workbench shows
+//! "step 2 of 5 — Waiting for BOOTSEL" while it runs. A step that
+//! fails is told truthfully; a saga that dies leaves the individual
+//! New, and the admission exam decides everything after.
+//!
 //! Two laws bind every path:
-//! - **Backup precedes every write** — the individual's identity is
-//!   stashed before anything is erased, and restored before the saga
-//!   ends.
+//! - **Backup precedes every write** — identity is stashed before
+//!   anything is erased, and restored before the saga ends.
 //! - **The tool that bricks is the tool that un-bricks** — the
-//!   runtime artifacts are vendored in `firmware/artifacts/`, so a
-//!   factory reset works offline at 2 a.m.; a missing artifact fails
-//!   the saga *before* any erase begins.
+//!   runtime artifacts are vendored in `firmware/artifacts/`, so the
+//!   factory path works offline; a missing artifact fails the saga
+//!   *before* any erase begins.
 
 use crate::catalog::Catalog;
 use anyhow::{anyhow, bail, Result};
@@ -23,57 +26,128 @@ use super::events::HouseEvent;
 const ARTIFACTS: &str = "firmware/artifacts";
 const RP2040_FIRMWARE: &str = "firmware/suzu-d/rp2040-matrix";
 
-/// The saga's spine: run the kind the keeper asked for, step by step,
-/// every step landing on the house bus as it happens.
+/// The saga runner: announces numbered steps as they begin, and tells
+/// the truth when one fails.
+struct Saga<'a> {
+    events: &'a Sender<HouseEvent>,
+    device_id: String,
+    index: u32,
+    total: u32,
+}
+
+impl<'a> Saga<'a> {
+    fn new(events: &'a Sender<HouseEvent>, device_id: &str, total: u32) -> Self {
+        Self { events, device_id: device_id.to_string(), index: 0, total }
+    }
+
+    /// Announce a step, run it, and keep the announcement either way —
+    /// the workbench shows the step while it runs, and the failure if
+    /// it fails.
+    fn step<T, F>(&mut self, label: &str, run: F) -> Result<T>
+    where
+        F: FnOnce() -> Result<T>,
+    {
+        self.index += 1;
+        let _ = self.events.send(HouseEvent::MaintenanceStep {
+            device_id: self.device_id.clone(),
+            step: label.to_string(),
+            index: self.index,
+            total: self.total,
+            ok: true,
+            detail: String::new(),
+        });
+        match run() {
+            Ok(v) => Ok(v),
+            Err(e) => {
+                let _ = self.events.send(HouseEvent::MaintenanceStep {
+                    device_id: self.device_id.clone(),
+                    step: format!("{label} (failed)"),
+                    index: self.index,
+                    total: self.total,
+                    ok: false,
+                    detail: format!("{e:#}"),
+                });
+                Err(e)
+            }
+        }
+    }
+
+    /// The closing announcement: the saga hands the individual to the
+    /// admission exam, which alone decides the stream.
+    fn hand_to_exam(&mut self) {
+        self.index += 1;
+        let _ = self.events.send(HouseEvent::MaintenanceStep {
+            device_id: self.device_id.clone(),
+            step: "Handing to the exam".to_string(),
+            index: self.index,
+            total: self.total,
+            ok: true,
+            detail: String::new(),
+        });
+    }
+}
+
+/// The saga's spine: run the kind the keeper asked for.
 pub fn run(
     port: &str,
     class: Option<&str>,
     kind: &str,
-    _catalog: &Catalog,
+    catalog: &Catalog,
     events: &Sender<HouseEvent>,
     device_id: &str,
 ) -> Result<()> {
-    let outcome = match (class, kind) {
+    let (total, runner): (u32, fn(&mut Saga, &str, &str, &Catalog) -> Result<()>) = match (class, kind)
+    {
         (Some("waveshare-rp2040-matrix"), "install" | "adopt") => {
             // A board with no CircuitPython yet gets the full install:
             // BOOTSEL, the runtime, then the face. One with the drive
             // mounted just needs its files refreshed.
             if circuitpy_drives().is_empty() {
-                rp2040_install_fresh(events, device_id)
+                (5, rp2040_fresh)
             } else {
-                rp2040_soft(events, device_id)
+                (4, rp2040_soft)
             }
         }
-        (Some("waveshare-rp2040-matrix"), "soft") => rp2040_soft(events, device_id),
-        (Some("waveshare-rp2040-matrix"), "factory") => rp2040_factory(events, device_id),
+        (Some("waveshare-rp2040-matrix"), "soft") => (4, rp2040_soft),
+        (Some("waveshare-rp2040-matrix"), "factory") => (6, rp2040_factory),
         (Some(c), kind) if c.contains("esp8266") => match kind {
-            "install" | "soft" => esp8266_soft(port, events, device_id),
-            "adopt" => esp8266_adopt(port, events, device_id),
-            "factory" => esp8266_factory(port, events, device_id),
+            "install" | "adopt" | "soft" => (2, esp8266_adopt),
+            "factory" => (4, esp8266_factory),
             _ => bail!("no saga for kind {kind:?}"),
         },
         (Some(c), _) => bail!("class {c} declares no maintenance procedure yet"),
         (None, _) => bail!("no class manifest — no maintenance procedure"),
     };
+
+    let mut saga = Saga::new(events, device_id, total);
+    let outcome = runner(&mut saga, port, device_id, catalog);
     match &outcome {
-        Ok(()) => step(events, device_id, "admission-gate", true,
-            "session respawns — only a passing admission test reopens the stream".into()),
-        Err(e) => step(events, device_id, "failed", false, format!("{e:#}")),
+        Ok(()) => saga.hand_to_exam(),
+        Err(e) => {
+            let _ = events.send(HouseEvent::MaintenanceStep {
+                device_id: device_id.to_string(),
+                step: "failed".to_string(),
+                index: saga.index + 1,
+                total: saga.total,
+                ok: false,
+                detail: format!("{e:#}"),
+            });
+        }
     }
     outcome
 }
 
-fn step(events: &Sender<HouseEvent>, device_id: &str, name: &str, ok: bool, detail: String) {
+// ── the shared hands ────────────────────────────────────────────────
+
+fn marco(events: &Sender<HouseEvent>, device_id: &str, name: &str, detail: String) {
     let _ = events.send(HouseEvent::MaintenanceStep {
         device_id: device_id.to_string(),
         step: name.to_string(),
-        ok,
+        index: 0,
+        total: 0,
+        ok: true,
         detail,
     });
-}
-
-fn marco(events: &Sender<HouseEvent>, device_id: &str, name: &str, detail: String) {
-    step(events, device_id, name, true, detail);
 }
 
 fn wait_for<F: Fn() -> bool>(secs: u64, what: &str, pred: F) -> Result<()> {
@@ -87,15 +161,16 @@ fn wait_for<F: Fn() -> bool>(secs: u64, what: &str, pred: F) -> Result<()> {
     bail!("waited {secs} s for {what} — it never came")
 }
 
-/// A CircuitPython drive announces itself with boot_out.txt.
-fn find_circuitpy_drive() -> Option<String> {
+/// Every mounted CIRCUITPY drive — more than one means the install
+/// could land on the wrong board, so the saga refuses and says so.
+fn circuitpy_drives() -> Vec<String> {
+    let mut out = Vec::new();
     for letter in 'A'..='Z' {
-        let root = format!("{letter}:\\");
-        if Path::new(&format!("{root}boot_out.txt")).exists() {
-            return Some(format!("{letter}:"));
+        if Path::new(&format!("{letter}:/boot_out.txt")).exists() {
+            out.push(format!("{letter}:"));
         }
     }
-    None
+    out
 }
 
 fn wait_mount(label: &str, secs: u64) -> Result<String> {
@@ -112,6 +187,15 @@ fn wait_circuitpy(secs: u64) -> Result<String> {
     // The drive letter is back; give the FAT a beat before writing.
     std::thread::sleep(Duration::from_millis(800));
     Ok(drive)
+}
+
+fn find_circuitpy_drive() -> Option<String> {
+    for letter in 'A'..='Z' {
+        if Path::new(&format!("{letter}:/boot_out.txt")).exists() {
+            return Some(format!("{letter}:"));
+        }
+    }
+    None
 }
 
 fn copy_uf2(artifact: &str, mount: &str) -> Result<()> {
@@ -139,18 +223,17 @@ fn copy_uf2(artifact: &str, mount: &str) -> Result<()> {
 
 fn backup_drive_identity(drive: &str, device_id: &str) -> Result<()> {
     let stamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
-    let dest = format!("backups/{}-{stamp}", drive.trim_end_matches(':'));
+    let dest = Path::new("backups").join(format!("{}-{stamp}", drive.trim_end_matches(':')));
     std::fs::create_dir_all(&dest)?;
     for name in ["code.py", "suzu.json", "label.txt"] {
         let p = format!("{drive}/{name}");
         if Path::new(&p).exists() {
-            std::fs::copy(&p, format!("{dest}/{name}"))
-                .map_err(|e| anyhow!("backup {name}: {e}"))?;
+            std::fs::copy(&p, dest.join(name)).map_err(|e| anyhow!("backup {name}: {e}"))?;
         }
     }
     // The roster's device_id is the identity of record; note it beside
     // the backup so a wipe can never orphan an individual.
-    std::fs::write(format!("{dest}/identity.txt"), format!("device_id: {device_id}\n"))?;
+    std::fs::write(dest.join("identity.txt"), format!("device_id: {device_id}\n"))?;
     Ok(())
 }
 
@@ -186,6 +269,7 @@ fn write_face_files(drive: &str, device_id: &str) -> Result<()> {
 /// CircuitPython with autoreload disabled does not reload on write —
 /// the face is told, politely, to start over (Ctrl-C ×2, Ctrl-D).
 fn force_reload(port: &str) -> Result<()> {
+    use serialport::SerialPort;
     let mut p = serialport::new(port, 115_200)
         .timeout(Duration::from_millis(300))
         .open()
@@ -219,8 +303,6 @@ fn esptool(port: &str, args: &[&str]) -> Result<String> {
     for exe in ["esptool", "esptool.py"] {
         let mut cmd = std::process::Command::new(exe);
         cmd.arg("--port").arg(port).arg("--chip");
-        // The chip name rides with the class procedure; erase/flash
-        // are the same verbs everywhere.
         let mut all = args.to_vec();
         let chip = all.remove(0);
         cmd.arg(chip);
@@ -236,133 +318,11 @@ fn esptool(port: &str, args: &[&str]) -> Result<String> {
 
 fn push_face_files(port: &str, device_id: &str, fresh: bool) -> Result<String> {
     let mut cmd = std::process::Command::new("python");
-    cmd.args([
-        "scripts/push_firmware.py",
-        port,
-        device_id,
-    ]);
+    cmd.args(["scripts/push_firmware.py", port, device_id]);
     if fresh {
         cmd.arg("--fresh");
     }
     run_tool(cmd, "push_firmware.py")
-}
-
-// ── the sagas ──────────────────────────────────────────────────────
-
-/// Every mounted CIRCUITPY drive — more than one means the install
-/// could land on the wrong board, so the saga refuses and says so.
-fn circuitpy_drives() -> Vec<String> {
-    let mut out = Vec::new();
-    for letter in 'A'..='Z' {
-        if Path::new(&format!("{letter}:/boot_out.txt")).exists() {
-            out.push(format!("{letter}:"));
-        }
-    }
-    out
-}
-
-/// The fresh-board install: BOOTSEL gate, the CircuitPython runtime,
-/// then the face files with the individual's minted identity.
-fn rp2040_install_fresh(events: &Sender<HouseEvent>, device_id: &str) -> Result<()> {
-    marco(events, device_id, "human-gate",
-        "hold BOOTSEL and replug - the saga waits up to 10 minutes for RPI-RP2".into());
-    let mount = wait_mount("RPI-RP2", 600)?;
-
-    copy_uf2("circuitpython-raspberry_pi_pico.uf2", &mount)?;
-    marco(events, device_id, "runtime", "CircuitPython UF2 landed".into());
-    let drive = wait_circuitpy(120)?;
-    marco(events, device_id, "drive", format!("{drive} is up, empty"));
-
-    write_face_files(&drive, device_id)?;
-    marco(events, device_id, "face-files", "code.py + suzu.json verified by read-back".into());
-    Ok(())
-}
-
-fn rp2040_soft(events: &Sender<HouseEvent>, device_id: &str) -> Result<()> {
-    let drives = circuitpy_drives();
-    if drives.len() > 1 {
-        bail!("multiple CIRCUITPY drives mounted ({}) - unplug the other boards so the face lands on the right one", drives.join(", "));
-    }
-    let drive = drives
-        .into_iter()
-        .next()
-        .ok_or_else(|| anyhow!("no CIRCUITPY drive - replug the device, or hold BOOTSEL for the fresh install"))?;
-    marco(events, device_id, "drive", format!("{drive} is up"));
-    backup_drive_identity(&drive, device_id)?;
-    marco(events, device_id, "backup", format!("{drive} identity stashed in backups/"));
-    write_face_files(&drive, device_id)?;
-    marco(events, device_id, "face-files", "code.py + suzu.json verified by read-back".into());
-    force_reload(&rp2040_port()?)?;
-    marco(events, device_id, "reload", "the lake starts over".into());
-    Ok(())
-}
-
-fn rp2040_factory(events: &Sender<HouseEvent>, device_id: &str) -> Result<()> {
-    let drive = find_circuitpy_drive()
-        .ok_or_else(|| anyhow!("no CIRCUITPY drive — replug the device first so identity can be backed up"))?;
-    backup_drive_identity(&drive, device_id)?;
-    marco(events, device_id, "backup", format!("{drive} identity stashed in backups/"));
-
-    marco(events, device_id, "human-gate",
-        "hold BOOTSEL and replug — the saga waits up to 5 minutes for RPI-RP2".into());
-    let mount = wait_mount("RPI-RP2", 300)?;
-
-    copy_uf2("flash_nuke.uf2", &mount)?;
-    marco(events, device_id, "nuke", "flash_nuke.uf2 landed — every flash cell falls to 0xFF".into());
-    std::thread::sleep(Duration::from_millis(2500));
-    // The nuke reboots into its own bootloader when done: RPI-RP2 returns.
-    let mount = wait_mount("RPI-RP2", 60)?;
-
-    copy_uf2("circuitpython-raspberry_pi_pico.uf2", &mount)?;
-    marco(events, device_id, "runtime", "CircuitPython UF2 landed".into());
-    let drive = wait_circuitpy(60)?;
-    marco(events, device_id, "drive-again", format!("{drive} is back, empty"));
-
-    write_face_files(&drive, device_id)?;
-    marco(events, device_id, "face-files", "code.py + suzu.json verified by read-back".into());
-    Ok(())
-}
-
-/// An ancestor walks in: the full install (the proven fresh push that
-/// gives it the suzu face, identity kept), then the exam decides.
-fn esp8266_adopt(port: &str, events: &Sender<HouseEvent>, device_id: &str) -> Result<()> {
-    marco(events, device_id, "adopt", "the fresh install - suzu face, identity kept".into());
-    let out = push_face_files(port, device_id, true)?;
-    marco(events, device_id, "adopt-done", last_line(&out));
-    Ok(())
-}
-
-fn esp8266_soft(port: &str, events: &Sender<HouseEvent>, device_id: &str) -> Result<()> {
-    marco(events, device_id, "push", "the proven push (backup-first inside the script)".into());
-    let out = push_face_files(port, device_id, false)?;
-    marco(events, device_id, "push-done", last_line(&out));
-    Ok(())
-}
-
-fn esp8266_factory(port: &str, events: &Sender<HouseEvent>, device_id: &str) -> Result<()> {
-    marco(events, device_id, "erase", "esptool erase_flash — the ROM bootloader owns the chip".into());
-    let out = esptool(port, &["esp8266", "erase_flash"])?;
-    marco(events, device_id, "erase-done", last_line(&out));
-
-    let bin = Path::new(ARTIFACTS).join("micropython-esp8266-1mib.bin");
-    if !bin.exists() {
-        bail!("artifact {} is missing — vendor it before factory", bin.display());
-    }
-    marco(events, device_id, "runtime", "flashing MicroPython".into());
-    let bin_str = bin.to_string_lossy().into_owned();
-    let args = [
-        "esp8266",
-        "write_flash",
-        "--flash_size=detect",
-        "0",
-        bin_str.as_str(),
-    ];
-    let out = esptool(port, &args)?;
-    marco(events, device_id, "runtime-done", last_line(&out));
-
-    let out = push_face_files(port, device_id, true)?;
-    marco(events, device_id, "push-done", last_line(&out));
-    Ok(())
 }
 
 fn rp2040_port() -> Result<String> {
@@ -383,4 +343,144 @@ fn last_line(text: &str) -> String {
         .find(|l| !l.is_empty())
         .unwrap_or("ok")
         .to_string()
+}
+
+// ── the rp2040 sagas ────────────────────────────────────────────────
+
+/// A factory-fresh board: BOOTSEL gate, the CircuitPython runtime,
+/// then the face files with the individual's minted identity.
+fn rp2040_fresh(
+    saga: &mut Saga,
+    _port: &str,
+    device_id: &str,
+    _catalog: &Catalog,
+) -> Result<()> {
+    saga.step("Preparing the board", || {
+        if !circuitpy_drives().is_empty() {
+            bail!("a CIRCUITPY drive is already mounted — this board is not fresh; use Reinstall");
+        }
+        Ok(())
+    })?;
+    saga.step("Waiting for BOOTSEL", || {
+        wait_mount("RPI-RP2", 600).map(|_| ())
+    })?;
+    saga.step("Flashing CircuitPython", || {
+        let mount = wait_mount("RPI-RP2", 60)?;
+        copy_uf2("circuitpython-raspberry_pi_pico.uf2", &mount)?;
+        wait_circuitpy(120).map(|_| ())
+    })?;
+    saga.step("Writing the face", || {
+        let drive = find_circuitpy_drive()
+            .ok_or_else(|| anyhow!("the drive vanished before the face could be written"))?;
+        write_face_files(&drive, device_id)
+    })?;
+    Ok(())
+}
+
+/// The face files return to ship state; the runtime is untouched.
+fn rp2040_soft(
+    saga: &mut Saga,
+    _port: &str,
+    device_id: &str,
+    _catalog: &Catalog,
+) -> Result<()> {
+    let drives = circuitpy_drives();
+    if drives.len() > 1 {
+        bail!("multiple CIRCUITPY drives mounted ({}) — unplug the other boards so the face lands on the right one", drives.join(", "));
+    }
+    let drive = drives
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow!("no CIRCUITPY drive — replug the device"))?;
+    saga.step("Checking the drive", || {
+        if Path::new(&format!("{drive}/boot_out.txt")).exists() {
+            Ok(())
+        } else {
+            bail!("{drive} does not look like a CircuitPython board");
+        }
+    })?;
+    saga.step("Backing up identity", || {
+        backup_drive_identity(&drive, device_id)
+    })?;
+    saga.step("Writing the face", || {
+        write_face_files(&drive, device_id)
+    })?;
+    saga.step("Nudging the face", || force_reload(&rp2040_port()?))?;
+    Ok(())
+}
+
+/// The nuke: BOOTSEL, every flash cell to 0xFF, the runtime rebuilt,
+/// the face rewritten — identity backed up first, restored after.
+fn rp2040_factory(
+    saga: &mut Saga,
+    _port: &str,
+    device_id: &str,
+    _catalog: &Catalog,
+) -> Result<()> {
+    let drive = find_circuitpy_drive()
+        .ok_or_else(|| anyhow!("no CIRCUITPY drive — replug the device first so identity can be backed up"))?;
+    saga.step("Backing up identity", || {
+        backup_drive_identity(&drive, device_id)
+    })?;
+    saga.step("Waiting for BOOTSEL", || {
+        println!("[maintenance] hold BOOTSEL and replug — waiting up to 10 minutes for RPI-RP2");
+        wait_mount("RPI-RP2", 600).map(|_| ())
+    })?;
+    saga.step("Erasing the flash", || {
+        let mount = wait_mount("RPI-RP2", 60)?;
+        copy_uf2("flash_nuke.uf2", &mount)?;
+        std::thread::sleep(Duration::from_millis(2500));
+        wait_mount("RPI-RP2", 60).map(|_| ()) // the nuke reboots into its bootloader
+    })?;
+    saga.step("Flashing CircuitPython", || {
+        let mount = wait_mount("RPI-RP2", 60)?;
+        copy_uf2("circuitpython-raspberry_pi_pico.uf2", &mount)?;
+        wait_circuitpy(120).map(|_| ())
+    })?;
+    saga.step("Writing the face", || {
+        let drive = find_circuitpy_drive()
+            .ok_or_else(|| anyhow!("the drive vanished before the face could be written"))?;
+        write_face_files(&drive, device_id)
+    })?;
+    Ok(())
+}
+
+// ── the esp8266 sagas ───────────────────────────────────────────────
+
+/// An ancestor walks in: the full install (the proven fresh push that
+/// gives it the suzu face, identity kept), then the exam decides.
+fn esp8266_adopt(
+    saga: &mut Saga,
+    port: &str,
+    device_id: &str,
+    _catalog: &Catalog,
+) -> Result<()> {
+    saga.step("Installing the suzu face", || {
+        push_face_files(port, device_id, true).map(|out| last_line(&out))
+    })?;
+    Ok(())
+}
+
+fn esp8266_factory(
+    saga: &mut Saga,
+    port: &str,
+    device_id: &str,
+    _catalog: &Catalog,
+) -> Result<()> {
+    saga.step("Erasing the flash", || {
+        esptool(port, &["esp8266", "erase_flash"]).map(|_| ())
+    })?;
+    let bin = Path::new(ARTIFACTS).join("micropython-esp8266-1mib.bin");
+    if !bin.exists() {
+        bail!("artifact {} is missing — vendor it before factory", bin.display());
+    }
+    let bin_str = bin.to_string_lossy().into_owned();
+    let args = ["esp8266", "write_flash", "--flash_size=detect", "0", bin_str.as_str()];
+    saga.step("Flashing MicroPython", || {
+        esptool(port, &args).map(|_| ())
+    })?;
+    saga.step("Installing the suzu face", || {
+        push_face_files(port, device_id, true).map(|out| last_line(&out))
+    })?;
+    Ok(())
 }
