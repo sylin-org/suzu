@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Suzu</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="lampband">
+      <div class="lamp" id="lamp">
+        <span class="lamp-halo" aria-hidden="true"></span>
+        <span class="lamp-core" aria-hidden="true"></span>
+      </div>
+
+      <div class="state">
+        <span class="state-word" id="state-word">Starting</span>
+        <span class="state-facts" id="state-facts"></span>
+      </div>
+
+      <nav class="tabs" aria-label="Suzu">
+        <button class="tab active" type="button" data-view="status" aria-current="page">Status</button>
+        <button class="tab" type="button" data-view="log">Log</button>
+        <button class="tab" type="button" data-view="media">Media</button>
+        <button class="tab" type="button" data-view="about">About</button>
+      </nav>
+
+      <button class="wheel" type="button" id="wheel" data-intent="pause" disabled>
+        <svg viewBox="0 0 24 24" id="wheel-icon" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>
+        <span id="wheel-label">Pause</span>
+      </button>
+    </header>
+
+    <main id="main-content" tabindex="-1">
+
+      <!-- ── Status: the fleet, its lifecycle, its ceremonies ─────── -->
+      <section class="view active" id="view-status" data-page="status" aria-label="Status">
+        <div style="padding: 26px 40px;">
+          <div class="page-heading">
+            <div>
+              <span class="kicker">The roster</span>
+              <h1>Who is on the bench</h1>
+              <p>Every individual the Resident knows, and the lifecycle it granted them.
+                 Maintenance is a ceremony: backup first, tests last.</p>
+            </div>
+            <span id="status-count" class="queue-meta"></span>
+          </div>
+          <div id="device-list" class="device-list" aria-live="polite"></div>
+        </div>
+      </section>
+
+      <!-- ── Log: what was asked, and what it became ──────────────── -->
+      <section class="view" id="view-log" data-page="log" aria-label="Log">
+        <div style="padding: 26px 40px;">
+          <div class="page-heading">
+            <div>
+              <span class="kicker">The journal</span>
+              <h1>What the house heard</h1>
+              <p>Every fact the Resident published, newest first. It lives in memory —
+                 it dies with the process, like the pause.</p>
+            </div>
+            <span id="log-count" class="queue-meta"></span>
+          </div>
+          <div id="log-stream" class="status-stream" aria-live="polite"></div>
+        </div>
+      </section>
+
+      <!-- ── Media: the trail camera ───────────────────────────────── -->
+      <section class="view" id="view-media" data-page="media" aria-label="Media">
+        <div style="padding: 26px 40px;">
+          <div class="page-heading">
+            <div>
+              <span class="kicker">The trail camera</span>
+              <h1>Watch the faces</h1>
+              <p>Live in-band shots while you are here — each glance costs the face
+                 one blink. Recording subsumes the preview: the panes show the very
+                 frames the GIF is taking.</p>
+            </div>
+          </div>
+          <p class="action-note" id="media-note" hidden></p>
+          <div id="media-grid" class="media-grid"></div>
+        </div>
+      </section>
+
+      <!-- ── About: the published card ──────────────────────────────── -->
+      <section class="view" id="view-about" data-page="about" aria-label="About">
+        <div class="about">
+          <div class="tcg" id="suzu-card" role="img" aria-label="Suzu, the bell"
+               style="--argb: 240, 180, 41">
+            <span class="card-art">
+              <span class="mascot-halo" aria-hidden="true"></span>
+              <img class="mascot-echo px" src="suzu.png" alt="" aria-hidden="true" width="300" height="300">
+              <img class="px mascot" src="suzu.png" alt="Suzu mascot: a small golden bell with a gentle face" width="200" height="200">
+            </span>
+            <span class="card-divider"></span>
+            <span class="card-disc"><span class="ver" id="card-version">0.1</span></span>
+            <span class="card-notch"></span>
+            <span class="card-pane">
+              <span class="card-title"><span class="name">suzu</span><span class="role">&middot; the bell</span></span>
+              <span class="card-body">
+                <span class="orbs">
+                  <span class="orb" title="Faces" style="color:#f0b429"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v3"></path><path d="M5 9a7 7 0 0 1 14 0c0 5-2.5 6-2.5 9h-9C7.5 15 5 14 5 9Z"></path><path d="M10 21h4"></path></svg></span>
+                  <span class="orb" title="Trust" style="color:#5eead4"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.4-3 7.6-7 9-4-1.4-7-4.6-7-9V6z"></path><path d="M9.4 12l1.9 1.9L15 10"></path></svg></span>
+                </span>
+                <span class="card-rules">Gives the machines you own physical faces — nine
+                  rings, honest idle, and light that means what it says.</span>
+              </span>
+              <span class="card-foot"><span class="flavor">&ldquo;The garden keeps breathing.&rdquo;</span></span>
+            </span>
+            <span class="holo" aria-hidden="true"></span>
+            <span class="holo2" aria-hidden="true"></span>
+          </div>
+
+          <div class="about-copy">
+            <h1>Suzu</h1>
+            <p class="about-lede">A resident for the machines you own. It rings the nine
+              moments onto physical faces, keeps a truthful roster, and stops where you
+              tell it to.</p>
+
+            <dl class="about-facts" id="about-facts"></dl>
+
+            <p class="about-note">Suzu never phones home. No telemetry, no update ping.
+              Everything on this page was assembled on this device from work this device did.</p>
+
+            <div class="about-links" id="about-links"></div>
+          </div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+  <div class="dialog-backdrop" id="confirm-dialog" hidden>
+    <section class="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+      <span class="kicker">Confirm local change</span>
+      <h2 id="confirm-title">—</h2>
+      <p id="confirm-detail">—</p>
+      <div class="dialog-actions">
+        <button class="ghost-button" type="button" data-confirm="cancel">Cancel</button>
+        <button class="danger-button" type="button" data-confirm="proceed">Proceed</button>
+      </div>
+    </section>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

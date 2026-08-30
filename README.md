@@ -99,6 +99,7 @@ The whole vocabulary:
 | `suzu say <ring> [text]` | Send a moment by hand; `suzu say allclear` heals a latched alert |
 | `suzu show <tag> <text>` | Send a display string for the face |
 | `suzu pause` / `suzu resume` | Hold and release the Resident, one datagram each |
+
 | `suzu firmware <port>` | Migrate a harvested device to `suzu/1` in place, `device_id` preserved |
 | `suzu restore <port>` | Un-migrate from the per-device backup. Refuses without one |
 
@@ -191,6 +192,10 @@ tools, plus a previewer that runs the face against a fake framebuffer.
 - `suzu/1` faces on two boards: the RP2040 matrix ("the lake") and the
   ESP8266 dual-zone OLED (`portrait-numerals`, live since 2026-08-28).
 - In-band screenshot and GIF recording, phosphor-correct per class manifest.
+- A Tauri workbench over the same loopback API (ADR-0002): the roster's
+  lifecycle, the moment journal, live trail-camera panes, and the published
+  card — the family system, suzu's gold. `cargo run -p suzu-workbench`
+  (it lives in the tray; `serve` stays the single writer).
 - Adoption with receipts: backup-first install, read-back verification, and a
   preserved `device_id` across both install paths.
 
