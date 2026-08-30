@@ -55,15 +55,16 @@ stream is the whole truth; the client has one store.**
   slice facts (devices, roster) replaced wholesale by the client,
   because a patched partial copy is how drift starts. `/api/status`
   is deleted: there is one door, and it streams.
-- **Media is a lane, not a poll.** The house captures each live,
-  decodable face on its own calm cadence and publishes frames as
-  facts on the wire. Client cadence cannot flood the wire because the
-  client commands nothing: at most one capture in flight per face,
-  a house-enforced minimum interval, and concurrent readers share the
-  cached result. A recording subsumes the preview — the frames the
-  GIF is taking are the frames the wire carries. An explicit shot
-  door serves the newest frame under a freshness bound and fails
-  honestly when a face stops blinking.
+- **Media is a lane, not a poll.** *Amended 2026-08-30 — the lane is
+  watched, not ambient; see the amendment below.* The house captures
+  each live, decodable face on its own calm cadence and publishes
+  frames as facts on the wire. Client cadence cannot flood the wire
+  because the client commands nothing: at most one capture in flight
+  per face, a house-enforced minimum interval, and concurrent readers
+  share the cached result. A recording subsumes the preview — the
+  frames the GIF is taking are the frames the wire carries. An
+  explicit shot door serves the newest frame under a freshness bound
+  and fails honestly when a face stops blinking.
 - **The window keeps one store.** All client state lives in one
   in-memory store — service, stream health, devices, roster, jobs,
   journal, frames — mutated only by typed `ingest` reducers, one per
@@ -85,14 +86,12 @@ seeded by one snapshot. Killing the resident and restarting it
 rehydrates the roster and jobs without a page reload, because the
 truth is re-poured, not reconciled.
 
-**Negative / accepted costs.** The house captures faces that nobody
-is watching — one in-band blink per face per couple of seconds,
-accepted: the faces are built for the wire's honest rate, and the
-trail camera's old cadence was ten times faster. Whole-slice facts
-are larger than thin deltas; on a loopback wire with a handful of
-faces, the bytes are noise. The journal deduplicates on
-`ts + domain + text`, so two genuinely identical lines in the same
-second render as one — accepted, they are indistinguishable anyway.
+**Negative / accepted costs.** Whole-slice facts are larger than thin
+deltas; on a loopback wire with a handful of faces, the bytes are
+noise. The journal deduplicates on `ts + domain + text`, so two
+genuinely identical lines in the same second render as one —
+accepted, they are indistinguishable anyway. *(Amended: the always-on
+capture cost is superseded by the watched lane below.)*
 
 **Rejected.** Client-side polling with a lock file to make it safe
 (the poll is the bug; the lock is a second master by another name).
@@ -102,6 +101,31 @@ A framework or a build step for the window (the store is two hundred
 honest lines; the family standard is hand-rolled). Publishing frames
 through per-client request/response (N windows would mean N capture
 cadences — the house owns the cadence, the clients read the store).
+
+## Amendment — the watched lane (2026-08-30)
+
+The keeper asked the obvious economy question: why blink when nobody
+looks? The always-on lane is amended into a **watched lane**:
+
+- The window asserts `watch_media` through one action door
+  (`POST /api/ui`) when Media is entered, and disasserts after a
+  10-second debounce on leaving — tab switches, and the window
+  hiding to the tray. The house gates its per-face blink on the flag
+  and nothing else; repeats are free, and a snapshot that says
+  *unwatched* to a window sitting on Media is re-asserted by that
+  window, so a resident restart self-heals.
+- The flag cannot outlive its client. A window that quits while
+  watching can send no "off", so the house ties the lane to its own
+  wire: when the last `/api/events` client disconnects, the lane
+  rests regardless of the flag. Dead clients hold nothing.
+- A recording is work, not a glance: its frames publish while it
+  runs, watched or not — the GIF's frames are the preview.
+
+**What it costs:** Media's first paint after an absence waits one
+blink (≤ the cadence) for frames to warm; debugging the wire by hand
+now starts with a `watch_media`. **What it buys:** the house blinks
+only for someone's eyes, which was always the honest shape — ADR-0002
+called the faces candles, not strobes.
 
 ## References
 
