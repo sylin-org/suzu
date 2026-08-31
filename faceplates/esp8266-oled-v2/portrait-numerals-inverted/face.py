@@ -165,7 +165,7 @@ def descriptor():
     except (OSError, ValueError):
         pass
     d["proto"] = "suzu/1"
-    d["version"] = "1.0.0"
+    d["version"] = "2.0.0"             # the faceplate.yaml version: the currency gate reads it
     d["faceplate"] = "portrait-numerals-inverted" if INVERT else "portrait-numerals"
     d["coverage"] = {
         "grounds": ["report"],
