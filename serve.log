@@ -2408,3 +2408,12 @@ control: `suzu pause` / `suzu resume` stop and restart the stream to devices.
 [maintenance] 01a059f0-ee24-7889-abe1-d8b458010389 · step 1/2 — OK main.py (12 bytes verified) 
 [maintenance] 01a059f0-ee24-7889-abe1-d8b458010389 · step 1/2 — raw REPL confirmed (attempt 1) 
 [sensor] ground: stone-leaded-sparkle · cpu 5% · gpu 2% · mem 45% · disk 59% · up 10444s
+[maintenance] 01a059f0-ee24-7889-abe1-d8b458010389 · step 1/2 — OK face.py (22854 bytes verified) 
+[maintenance] 01a059f0-ee24-7889-abe1-d8b458010389 · step 1/2 — pushed 3 files — soft reboot into the face 
+[maintenance] 01a059f0-ee24-7889-abe1-d8b458010389 · step 1/2 — rebooted — the face should answer its HELLO on the bus 
+[maintenance] 01a059f0-ee24-7889-abe1-d8b458010389 · step 2/2 — Handing to the exam 
+[maintenance] COM14: re-identified as firefly/tdisplay — respawning
+[maintenance] soft saga done for 01a059f0-ee24-7889-abe1-d8b458010389 — admission decides the stream
+[sessions] COM14: consumer translating (suzu/1)
+[roster] admission PASSED for 01a059f0-ee24-7889-abe1-d8b458010389 on COM14 — handshake, currency, ack-law, label-roundtrip, display-truth
+[roster] stream attached — 01a059f0-ee24-7889-abe1-d8b458010389 on COM14
