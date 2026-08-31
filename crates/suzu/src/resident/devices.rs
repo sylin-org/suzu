@@ -192,26 +192,6 @@ impl Device {
     }
 }
 
-/// What a device's session mailbox accepts. `Ground` carries the full
-/// published object as a cheap `Arc` copy — the session does the
-/// translation on its own side of the port.
-pub enum SessionMsg {
-    Out(Outbound),
-    /// The trail camera: exclusive on the session until done. The
-    /// registry is the record — progress and verdict travel as Job
-    /// facts, and the frames the GIF takes ride the frame lane.
-    Record { job_id: String, secs: u32, fps: u32 },
-    /// Re-run the admission exam (roster decides what it means).
-    Admission,
-    Close,
-}
-
-pub enum Outbound {
-    Ground(Arc<MachineReport>),
-    Pulse { axis: String, value: u8 },
-    Ring { signal: String, words: Vec<String>, urgency: u8 },
-}
-
 /// The devices read model plus the service facts the door needs — one
 /// round trip for the snapshot fact (ADR-0004).
 #[derive(Debug, Clone, Serialize)]
@@ -354,9 +334,6 @@ pub fn parse_say(sentence: &str, ports: &[String]) -> SayParse {
 pub enum DevicesCmd {
     Mind(DeviceFacts),
     Gone { port: String },
-    /// The publisher's outbound pipeline: one call, every live consumer.
-    Publish(Arc<MachineReport>),
-    Pulse { axis: String, value: u8 },
     /// The read model, taken by the owning domain. Answers at once —
     /// the loop routes, it never waits.
     Snapshot { reply: mpsc::Sender<DevicesSnapshot> },
@@ -374,9 +351,6 @@ pub enum DevicesCmd {
     /// released) its watch on the media lane. The reply is optional —
     /// the wire's own release on last-client-departure needs no ack.
     WatchMedia { on: bool, reply: Option<mpsc::Sender<WatchReport>> },
-    /// A moment bound for faces: the band shows the label briefly;
-    /// the signal names an icon when the face has one.
-    Ring { signal: String, label: String, urgency: u8 },
     /// The trail camera, on the owning session. Acks whether the
     /// session took the job; the verdict travels as Job facts.
     RecordStart { port: String, job_id: String, secs: u32, fps: u32, reply: mpsc::Sender<anyhow::Result<()>> },
@@ -430,7 +404,6 @@ pub struct Devices {
     frames: BTreeMap<String, (Instant, String)>,
     /// port → (kind, faceplate) while a saga runs (ADR-0005).
     in_maintenance: BTreeMap<String, (String, Option<String>)>,
-    pulse_announced: bool,
     paused: bool,
     /// The watched lane's echo (ADR-0004 amendment): the gate's flag,
     /// read by the session threads at wire speed.
@@ -466,7 +439,6 @@ impl Devices {
             jobs,
             frames: BTreeMap::new(),
             in_maintenance: BTreeMap::new(),
-            pulse_announced: false,
             paused: false,
             media_watched: Arc::new(AtomicBool::new(false)),
             rows_dirty: false,
@@ -481,12 +453,6 @@ impl Devices {
                     match cmd {
                         DevicesCmd::Mind(facts) => self.mind(facts),
                         DevicesCmd::Gone { port } => self.gone(&port),
-                        DevicesCmd::Publish(ground) => {
-                            self.substrate.set_ground(ground);
-                        }
-                        DevicesCmd::Pulse { axis, value } => {
-                            self.substrate.set_pulse(axis, value);
-                        }
                         DevicesCmd::Snapshot { reply } => {
                             let snap = self.devices_snapshot();
                             let _ = reply.send(snap).await;
@@ -512,9 +478,6 @@ impl Devices {
                             if let Some(reply) = reply {
                                 let _ = reply.send(report).await;
                             }
-                        }
-                        DevicesCmd::Ring { signal, label, urgency } => {
-                            if !self.paused { self.ring(&signal, &label, urgency) }
                         }
                         DevicesCmd::RecordStart { port, job_id, secs, fps, reply } => {
                             let res = self.record_start(&port, &job_id, secs, fps);
@@ -565,6 +528,15 @@ impl Devices {
                         Ok(HouseEvent::Frame { port, png }) => {
                             self.frames.insert(port, (Instant::now(), png));
                         }
+                        // A broadcast ring (ADR-0006): one utterance,
+                        // every live face's mailslot. Targeted says
+                        // ride the Say command; the moments budget
+                        // rides the bus — both take the stage.
+                        Ok(HouseEvent::Ring { signal, label, urgency }) => {
+                            if !self.paused {
+                                self.ring(&signal, &label, urgency);
+                            }
+                        }
                         Ok(_) => {}
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
                         Err(_) => break,
@@ -581,12 +553,6 @@ impl Devices {
         }
     }
 
-    /// Classes with a known consumer translation. Others are minded but
-    /// stay silent until their dialect is codified.
-    fn supports_consumer(class: Option<&str>) -> bool {
-        class == Some("esp8266-oled-v2-class")
-    }
-
     fn frame_law_of(&self, facts: &DeviceFacts) -> (Option<FrameSpec>, crate::catalog::DisplayZones) {
         let class_id = facts
             .device_id
@@ -599,7 +565,7 @@ impl Devices {
             .unwrap_or_default();
         (spec, zones)
     }
-    fn spawn_session(&mut self, facts: &DeviceFacts) {
+    fn spawn_session(&mut self, facts: &DeviceFacts, identity_store: Option<String>) {
         // It is a suzu face or it is not on the stream: boards that do
         // not speak suzu/1 stay minded and New - the remedy is install,
         // the same ceremony every face walks. No compat dialect exists.
@@ -637,7 +603,7 @@ impl Devices {
                 session_thread(
                     port, thread_slot, substrate.clone(), close2, streaming2,
                     suzu, spec, zones, events, jobs, media_watched, voice,
-                    device_id, class,
+                    device_id, class, identity_store,
                 )
             })
             .ok();
@@ -730,7 +696,7 @@ impl Devices {
         println!("[devices] stream resumed — re-opening {} session(s)", ports.len());
         for port in ports {
             let facts = self.devices[&port].facts.clone();
-            self.spawn_session(&facts);
+            self.spawn_session(&facts, None);
             let _ = self.events.send(HouseEvent::DeviceMinded {
                 port,
                 device_id: facts.device_id.clone(),
@@ -745,10 +711,12 @@ impl Devices {
     fn mind(&mut self, mut facts: DeviceFacts) {
         let state = DeviceState::Accepted;
         // Adoption begins at first sight: a recognized class with no
-        // identity yet is minted one on the spot. It is written to the
-        // device when firmware is installed, and survives everything
-        // after (ADR-0003: identity is the name, not the silicon).
-        if facts.class.is_some() && facts.device_id.is_none() {
+        // identity yet is minted one on the spot — and the deed is
+        // written to the face by its own session (below), so it
+        // survives every restart after (ADR-0003: identity is the
+        // name, not the silicon).
+        let minted = facts.class.is_some() && facts.device_id.is_none();
+        if minted {
             facts.device_id = Some(crate::prepare::mint_v7());
             println!(
                 "[devices] {} minted identity {}",
@@ -788,7 +756,8 @@ impl Devices {
         self.rows_dirty = true;
         // A paused house stays silent: the session spawns on resume.
         if !self.paused {
-            self.spawn_session(&facts);
+            let identity_store = if minted { facts.device_id.clone() } else { None };
+            self.spawn_session(&facts, identity_store);
         }
     }
 
@@ -1160,7 +1129,7 @@ impl Devices {
         );
         d.facts = facts.clone();
         if !self.paused {
-            self.spawn_session(&facts);
+            self.spawn_session(&facts, None);
         }
     }
 
@@ -1234,6 +1203,7 @@ fn session_thread(
     voice: RingVoice,
     device_id: Option<String>,
     class: Option<String>,
+    identity_store: Option<String>,
 ) {
     // One master per port, with grace: a retired session's thread may
     // still be exiting (a capture takes up to 8 s), so the open
@@ -1273,6 +1243,16 @@ fn session_thread(
             passed: report.passed,
             steps: report.steps,
         });
+    }
+
+    // The deed (ADR-0003, amended): a freshly minted identity is
+    // written to the face the moment its session opens, so the next
+    // boot answers with the name it was given — no ghost per restart.
+    // Identity precedes trust: a face that failed its exam keeps the
+    // name it will pass the retry under.
+    if let Some(id) = identity_store {
+        let _ = write_line(&mut serial, &format!("J,{{\"device_id\":\"{id}\"}}"));
+        std::thread::sleep(Duration::from_millis(300));
     }
 
     // A session that panics releases the port with a name on the way
@@ -1420,10 +1400,10 @@ fn session_loop(
             }
         }
         if streaming.load(Ordering::Relaxed) {
-            if let Some(g) = substrate.ground_since(&mut sent_ground_gen) {
-                if !deliver_ground(serial, port, &g, &mut named) {
-                    return;
-                }
+            if let Some(g) = substrate.ground_since(&mut sent_ground_gen)
+                && !deliver_ground(serial, port, &g, &mut named)
+            {
+                return;
             }
             if let Some((axis, value)) = substrate.pulse_since(&mut sent_pulse_gen) {
                 let frame = format!("A,{axis},{value}");
@@ -1585,46 +1565,6 @@ fn translate_suzu(g: &MachineReport, named: &mut Option<String>) -> Vec<String> 
     }
     frames.push(format!("G,report,{},{},{}", g.cpu, g.mem, g.gpu.unwrap_or(255)));
     frames
-}
-
-/// The consumer translation: the published object → the surface this
-/// device's limitations accept (OLED v2 dashboard vocabulary).
-fn translate(g: &MachineReport) -> Vec<String> {
-    vec![
-        format!("S,{}", g.name),
-        format!("H,{}", health_for(g)),
-        format!(
-            "D,{},{},{},{},0,1,0,{}",
-            g.cpu,
-            g.mem,
-            g.disk,
-            fmt_uptime(g.uptime_s),
-            0
-        ),
-    ]
-}
-
-fn health_for(g: &MachineReport) -> &'static str {
-    let worst = g.cpu.max(g.mem).max(g.disk);
-    if worst > 95 {
-        "wilting"
-    } else if worst > 85 {
-        "withering"
-    } else {
-        "thriving"
-    }
-}
-
-fn fmt_uptime(secs: u64) -> String {
-    if secs >= 86_400 {
-        format!("{}d {}h", secs / 86_400, (secs % 86_400) / 3600)
-    } else if secs >= 3_600 {
-        format!("{}h {}m", secs / 3600, (secs % 3600) / 60)
-    } else if secs >= 60 {
-        format!("{}m", secs / 60)
-    } else {
-        "<1m".to_string()
-    }
 }
 
 fn open_serial(port: &str) -> anyhow::Result<Box<dyn SerialPort>> {

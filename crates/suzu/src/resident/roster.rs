@@ -244,7 +244,10 @@ impl Roster {
         Ok(ind.lifecycle)
     }
 
-    /// The routing question the transports ask per fan-out.
+    /// The routing question the transports once asked per fan-out.
+    /// (The substrate replaced the fan-out; the tests keep the
+    /// question — it is still the lifecycle's sharpest verdict.)
+    #[cfg(test)]
     pub fn is_streaming(&self, device_id: &str) -> bool {
         self.individuals
             .get(device_id)

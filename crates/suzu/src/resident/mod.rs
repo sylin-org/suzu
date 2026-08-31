@@ -454,12 +454,15 @@ fn process_roster_event(
     }
 }
 
-fn spawn_sensor_supervised(house: Arc<House>) {
+fn spawn_sensor_supervised(house: Arc<House>, substrate: Arc<Substrate>) {
     tokio::spawn(async move {
         let mut backoff = 1u64;
         loop {
             let house2 = Arc::clone(&house);
-            let handle = tokio::spawn(async move { Sensor::new(house2.events.clone()).run().await });
+            let substrate2 = Arc::clone(&substrate);
+            let handle = tokio::spawn(async move {
+                Sensor::new(house2.events.clone(), substrate2).run().await
+            });
             let reason = match handle.await {
                 Ok(()) => "sensor loop ended".to_string(),
                 Err(e) => format!("panic: {e}"),
@@ -518,7 +521,7 @@ pub async fn run(catalog: Arc<Catalog>) -> anyhow::Result<()> {
     let substrate: Arc<Substrate> = Arc::default();
     spawn_devices_supervised(Arc::clone(&house), devices_rx, Arc::clone(&roster), Arc::clone(&catalog), Arc::clone(&jobs), Arc::clone(&substrate));
     spawn_moments_supervised(Arc::clone(&house), moments_rx);
-    spawn_sensor_supervised(Arc::clone(&house));
+    spawn_sensor_supervised(Arc::clone(&house), Arc::clone(&substrate));
     spawn_roster(Arc::clone(&house), Arc::clone(&roster));
 
     // the control chirp: `suzu pause` / `suzu resume` from any shell

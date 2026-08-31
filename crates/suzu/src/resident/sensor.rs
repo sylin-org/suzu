@@ -3,6 +3,7 @@
 
 use super::events::HouseEvent;
 use serde::Serialize;
+use std::sync::Arc;
 use std::time::Duration;
 use sysinfo::System;
 use tokio::sync::broadcast::Sender;
@@ -23,13 +24,18 @@ const GROUND_EVERY: u64 = 10; // one ground publish per ~2 s
 
 pub struct Sensor {
     events: Sender<HouseEvent>,
+    /// The machine's freshest state lands here as it is captured
+    /// (ADR-0006): the sessions pull ground and pulses from the
+    /// substrate on their own tick — the bus carries the news, the
+    /// cell carries the truth.
+    substrate: Arc<super::devices::Substrate>,
     sys: System,
     disks: sysinfo::Disks,
     last: Option<MachineReport>,
 }
 
 impl Sensor {
-    pub fn new(events: Sender<HouseEvent>) -> Self {
+    pub fn new(events: Sender<HouseEvent>, substrate: Arc<super::devices::Substrate>) -> Self {
         let mut sys = System::new();
         sys.refresh_cpu_usage();
         sys.refresh_memory();
@@ -39,6 +45,7 @@ impl Sensor {
         sys.refresh_cpu_usage();
         Self {
             events,
+            substrate,
             sys,
             disks,
             last: None,
@@ -96,6 +103,7 @@ impl Sensor {
                 axis: "audio.level",
                 value: audio,
             });
+            self.substrate.set_pulse("audio.level".into(), audio);
 
             // ── slow lane: the ground, on drift ──
             if ticks.is_multiple_of(GROUND_EVERY) {
@@ -130,13 +138,14 @@ impl Sensor {
                 if changed {
                     self.last = Some(report.clone());
                     let _ = self.events.send(HouseEvent::GroundChanged {
-                        name: report.name,
+                        name: report.name.clone(),
                         uptime_s: report.uptime_s,
                         cpu: report.cpu,
                         mem: report.mem,
                         disk: report.disk,
                         gpu: report.gpu,
                     });
+                    self.substrate.set_ground(Arc::new(report));
                 }
             }
             tokio::time::sleep(FAST_TICK).await;
