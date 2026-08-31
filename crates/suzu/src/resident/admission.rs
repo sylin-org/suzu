@@ -203,17 +203,30 @@ fn display_truth(
             }
             Ok(format!("completion ripple landed ({blue} blue px)"))
         }
-        // A known ground pattern lights the cyan field far beyond what
-        // three idle fireflies can light.
+        // A known ground pattern, witnessed twice: the panel must ack
+        // the draw (a face that errors on G is a face that cannot be
+        // fed), and the three big digits must light the cyan field
+        // beyond anything the resting face lights on its own — the
+        // dash glyphs, labels and band of an unfed face cleared the
+        // old 150-px bar on the night the ring forgot how to speak.
         Some("esp8266-oled-v2-class") => {
             crate::shot::dribble_line(serial, "G,report,88,77,66")?;
+            match read_line_matching(serial, HANDSHAKE_SECS, |l| {
+                l == "OK" || l.starts_with("OK,") || l.starts_with("ERR")
+            }) {
+                Some(l) if l.starts_with("ERR") => {
+                    anyhow::bail!("the face refused the ground frame: {l}")
+                }
+                Some(_) => {}
+                None => anyhow::bail!("G drew no ack — a face that cannot answer cannot be fed"),
+            }
             std::thread::sleep(Duration::from_millis(400));
             let (_w, _h, rgba) = view_of(serial, spec, zones)?;
             let field = rgba.chunks_exact(4).filter(|p| p[2] > 150).count();
-            if field < 150 {
+            if field < 1500 {
                 anyhow::bail!("only {field} lit field px for a three-digit ground — the panel did not draw");
             }
-            Ok(format!("ground pattern drew itself ({field} lit field px)"))
+            Ok(format!("ground pattern acked and drew itself ({field} lit field px)"))
         }
         _ => Ok("no display-truth procedure for this class — skipped".into()),
     }

@@ -55,12 +55,15 @@ procedures:
 
   # The exam a face takes before the stream may flow to it (ADR-0003).
   # display-truth draws a known ground pattern (G,report,88,77,66) and
-  # asserts the decoded shot lights the cyan field beyond anything
-  # three idle fireflies could light. The label round-trip is skipped:
-  # this face's descriptor declares no label key.
+  # asserts two witnesses: the face acks the draw (an ERR is a face
+  # that cannot be fed), and the decoded shot lights the cyan field
+  # beyond the resting face's own glyphs — the dash face cleared the
+  # old 150-px bar on the night the ring forgot how to speak. The
+  # label round-trip is skipped: this face's descriptor declares no
+  # label key.
   admission_test:
     display_truth: ground-pattern
-    assert: "at least 150 lit pixels in the cyan field of the decoded shot"
+    assert: "the ground frame acks OK and ≥1500 lit pixels in the cyan field of the decoded shot"
 
 artifacts:
   - file: micropython-esp8266-1mib.bin
