@@ -1909,3 +1909,14 @@ control: `suzu pause` / `suzu resume` stop and restart the stream to devices.
 [sessions] COM12: consumer translating (suzu/1)
 [roster] admission PASSED for 01a0557d-8206-7017-81fb-2dc0ffa1dc32 on COM12 — handshake, currency, ack-law, label-roundtrip, display-truth
 [roster] stream attached — 01a0557d-8206-7017-81fb-2dc0ffa1dc32 on COM12
+[watcher] gone COM12
+[devices] released COM12 (Some("01a0557d-8206-7017-81fb-2dc0ffa1dc32")) — the roster remembers them
+[moments] splash: departure 01a0557d-8206-7017-81fb-2dc0ffa1dc32
+[roster] stream detached — 01a0557d-8206-7017-81fb-2dc0ffa1dc32 on COM12 (departed)
+[sessions] COM12: write failed twice — disposing
+[sessions] COM12: released — fireflies when idle
+[watcher] sensed COM14
+[watcher] identified COM14 → tdisplay-esp32-ch9102 · firefly/tdisplay v1.0.0
+[devices] minding COM14 as Some("tdisplay-esp32-ch9102") (Some("019d8d82-fd23-72a0-b1f5-57ca24156fed")) — state Accepted
+[roster] held 019d8d82-fd23-72a0-b1f5-57ca24156fed on COM14 (tdisplay-esp32-ch9102) — admission decides the stream
+[moments] splash: discovery 019d8d82-fd23-72a0-b1f5-57ca24156fed
