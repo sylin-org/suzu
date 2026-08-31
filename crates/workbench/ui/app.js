@@ -393,11 +393,17 @@
     } else if (action === "identify") {
       button.disabled = true;
       // the utterance is the request: identify device COM24
-      const r = await call("GET", `/api/device/identify/${port}`);
-      const d = r.json();
-      if (d.message) toast(d.message);
-      else if (!r.ok) toast(`identify failed (${r.status})`);
-      // the next devices fact re-renders the card and the button
+      try {
+        const r = await call("GET", `/api/device/identify/${port}`);
+        const d = r.json();
+        if (d.message) toast(d.message);
+        else if (!r.ok) toast(`identify failed (${r.status})`);
+      } finally {
+        // Identify changes no row — no devices fact will follow to
+        // re-render the card, so the ask itself must hand the
+        // button back.
+        button.disabled = false;
+      }
     } else if (action === "faceplate") {
       const row = Store.state.devices.get(port);
       await fetchFaceplates(row?.class);
