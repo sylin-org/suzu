@@ -121,8 +121,32 @@ impl Watcher {
                 .await
                 .unwrap_or_else(|e| Err(format!("join: {e}")));
 
+                // A silent descriptor from a board the catalog knows by
+                // vid/pid is a face mid-boot, not an ancestor verdict —
+                // one settled re-probe before believing the silence.
+                let identified = match identified {
+                    Ok(facts)
+                        if facts.proto.is_none()
+                            && facts.class.is_some()
+                            && !facts.legacy =>
+                    {
+                        tokio::time::sleep(Duration::from_millis(2500)).await;
+                        let catalog = self.catalog.clone();
+                        let name2 = p.port_name.clone();
+                        tokio::task::spawn_blocking(move || {
+                            identify_facts(&catalog, &name2, vid, pid)
+                        })
+                        .await
+                        .unwrap_or_else(|e| Err(format!("join: {e}")))
+                    }
+                    other => other,
+                };
+
                 // Report-before-minding: an unreachable port is a fact
-                // for the house, never a device to mind.
+                // for the house, never a device to mind. A class the
+                // catalog knows runs suzu - a silent descriptor means
+                // the face was mid-boot, not that it is an ancestor;
+                // one settled re-probe before believing the silence.
                 let facts = match identified {
                     Ok(facts) => {
                         failed.remove(&p.port_name);

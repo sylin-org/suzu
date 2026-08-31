@@ -1,0 +1,13 @@
+catalog: 4 class signature(s) from hardware/classes
+suzu resident is up — domains: watcher · devices · moments · sensor · publisher
+plug a device and watch the house talk. `tell <label>` rings the bell · `status` · `q` quits.
+control: `suzu pause` / `suzu resume` stop and restart the stream to devices.
+[api] the door is open on http://127.0.0.1:7899 — snapshot + stream, one truth
+[control] listening on 127.0.0.1:7898 — `suzu pause` / `suzu resume`
+[watcher] sensed COM12
+[sensor] ground: stone-leaded-sparkle · cpu 6% · gpu 3% · mem 70% · disk 59% · up 152724s
+[watcher] identified COM12 → esp8266-oled-v2-class · ?/?
+[devices] COM12 minted identity 01a05541-3938-78eb-aa0d-a6454d18531a
+[devices] minding COM12 as Some("esp8266-oled-v2-class") (Some("01a05541-3938-78eb-aa0d-a6454d18531a")) — state Accepted
+[moments] splash: discovery 01a05541-3938-78eb-aa0d-a6454d18531a
+[roster] held 01a05541-3938-78eb-aa0d-a6454d18531a on COM12 (esp8266-oled-v2-class) — admission decides the stream

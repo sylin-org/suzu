@@ -26,7 +26,7 @@ use serialport::SerialPort;
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc as std_mpsc, Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::{broadcast::Sender, mpsc};
@@ -44,11 +44,96 @@ const MAX_FRAME_AGE: Duration = Duration::from_secs(5);
 /// The session mailbox is bounded: a session that cannot keep up is a
 /// stuck session, and a full mailbox disposes it loudly (law: every
 /// channel has capacity, every overload a journal line).
-const SESSION_MAILBOX: usize = 64;
 /// The session's keepalive beat: a suzu face rests after 10 s of
 /// silence, the ancestor idles to its fireflies — a frame every 5 s
 /// holds either face.
 const KEEPALIVE_PERIOD: Duration = Duration::from_secs(5);
+
+/// The substrate (ADR-0006): the machine's freshest state, shared.
+/// The sensor's facts land here as they land; sessions pull on their
+/// own tick and send whatever is newer than the last they sent. The
+/// substrate is never full and never delivered - it is only true.
+#[derive(Default)]
+pub struct Substrate {
+    ground: Mutex<Option<(u64, Arc<MachineReport>)>>,
+    pulse: Mutex<Option<(u64, String, u8)>>,
+    next_gen: std::sync::atomic::AtomicU64,
+}
+
+impl Substrate {
+    pub fn set_ground(&self, g: Arc<MachineReport>) {
+        let ggen = self.next_gen.fetch_add(1, Ordering::Relaxed) + 1;
+        *self.ground.lock().expect("substrate lock") = Some((ggen, g));
+    }
+
+    pub fn set_pulse(&self, axis: String, value: u8) {
+        let ggen = self.next_gen.fetch_add(1, Ordering::Relaxed) + 1;
+        *self.pulse.lock().expect("substrate lock") = Some((ggen, axis, value));
+    }
+
+    /// The newest ground published after `sent` - stamps `sent` on the way out.
+    pub fn ground_since(&self, sent: &mut u64) -> Option<Arc<MachineReport>> {
+        let cell = self.ground.lock().expect("substrate lock");
+        let (ggen, g) = cell.as_ref()?;
+        if *ggen > *sent {
+            *sent = *ggen;
+            Some(Arc::clone(g))
+        } else {
+            None
+        }
+    }
+
+    /// The newest pulse published after `sent` - stamps `sent` on the way out.
+    pub fn pulse_since(&self, sent: &mut u64) -> Option<(String, u8)> {
+        let cell = self.pulse.lock().expect("substrate lock");
+        let (ggen, axis, value) = cell.as_ref()?;
+        if *ggen > *sent {
+            *sent = *ggen;
+            Some((axis.clone(), *value))
+        } else {
+            None
+        }
+    }
+}
+
+/// An ask: high-priority, sticky until the session picks it. A new ask
+/// replaces the one waiting - the newest wins.
+#[derive(Debug)]
+pub enum Ask {
+    Ring { signal: String, words: Vec<String>, urgency: u8 },
+    Record { job_id: String, secs: u32, fps: u32 },
+    Admission,
+}
+
+/// The face's pickup slot (ADR-0006): slap an ask and leave - quick,
+/// never blocks, never full. The newest ask replaces whatever sat
+/// there; the session picks it on its tick. The substrate is not
+/// posted here at all: it is state the session pulls (see Substrate).
+#[derive(Debug, Default)]
+pub struct Mailslot {
+    ask: Mutex<Option<Ask>>,
+    wake: Condvar,
+}
+
+impl Mailslot {
+    pub fn slap(&self, ask: Ask) {
+        *self.ask.lock().expect("mailslot lock") = Some(ask);
+        self.wake.notify_one();
+    }
+
+    pub fn pick(&self) -> Option<Ask> {
+        self.ask.lock().expect("mailslot lock").take()
+    }
+
+    /// The tick's nap: ends early when a new ask is slapped.
+    pub fn nap(&self, timeout: Duration) {
+        let guard = self.ask.lock().expect("mailslot lock");
+        if guard.is_some() {
+            return;
+        }
+        let _ = self.wake.wait_timeout(guard, timeout);
+    }
+}
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub enum DeviceState {
@@ -82,7 +167,7 @@ pub struct Device {
     /// The session mailbox — this device's consumer. Bounded: a full
     /// mailbox is a stuck session, not a queue to grow forever.
     #[serde(skip)]
-    pub outbound: Option<std_mpsc::SyncSender<SessionMsg>>,
+    pub mailslot: Option<Arc<Mailslot>>,
     /// The roster's gate, mirrored here for the session thread to read
     /// at wire speed. The roster is the truth; this is the echo.
     #[serde(skip)]
@@ -346,6 +431,9 @@ pub struct Devices {
     /// The watched lane's echo (ADR-0004 amendment): the gate's flag,
     /// read by the session threads at wire speed.
     media_watched: Arc<AtomicBool>,
+    /// The machine's freshest state (ground + pulses) - sessions pull
+    /// it on their tick (ADR-0006).
+    substrate: Arc<Substrate>,
     rows_dirty: bool,
 }
 
@@ -361,12 +449,14 @@ impl Devices {
         catalog: Arc<Catalog>,
         roster: Arc<std::sync::RwLock<Roster>>,
         jobs: Arc<Jobs>,
+        substrate: Arc<Substrate>,
     ) -> Self {
         Self {
             events,
             door,
             roster,
             catalog,
+            substrate,
             devices: BTreeMap::new(),
             sessions: BTreeMap::new(),
             jobs,
@@ -388,10 +478,10 @@ impl Devices {
                         DevicesCmd::Mind(facts) => self.mind(facts),
                         DevicesCmd::Gone { port } => self.gone(&port),
                         DevicesCmd::Publish(ground) => {
-                            if !self.paused { self.publish(&ground) }
+                            self.substrate.set_ground(ground);
                         }
                         DevicesCmd::Pulse { axis, value } => {
-                            if !self.paused { self.pulse(&axis, value) }
+                            self.substrate.set_pulse(axis, value);
                         }
                         DevicesCmd::Snapshot { reply } => {
                             let snap = self.devices_snapshot();
@@ -505,30 +595,17 @@ impl Devices {
             .unwrap_or_default();
         (spec, zones)
     }
-
-    /// One session thread per live device, owning its port and
-    /// translating ground → device-shaped data. The session opens with
-    /// the admission exam; the roster's verdict opens the stream gate.
     fn spawn_session(&mut self, facts: &DeviceFacts) {
+        // It is a suzu face or it is not on the stream: boards that do
+        // not speak suzu/1 stay minded and New - the remedy is install,
+        // the same ceremony every face walks. No compat dialect exists.
         let suzu = facts.proto.as_deref() == Some("suzu/1");
-        if !suzu && !Self::supports_consumer(facts.class.as_deref()) {
-            return; // minded, but no consumer translation yet — silent
+        if !suzu {
+            self.rows_dirty = true;
+            return;
         }
-        // One master per port: an older session (homecoming without a
-        // gone, resume after resume) is closed and left to exit; the
-        // new session's open retries until the port is free. The loop
-        // never joins a thread.
-        let joining = self.close_session(&facts.port);
-        if let Some(join) = joining {
-            let port = facts.port.clone();
-            std::thread::Builder::new()
-                .name(format!("reaper:{port}"))
-                .spawn(move || {
-                    let _ = join.join();
-                })
-                .ok();
-        }
-        let (tx, rx) = std_mpsc::sync_channel::<SessionMsg>(SESSION_MAILBOX);
+        let slot = Arc::new(Mailslot::default());
+        let thread_slot = Arc::clone(&slot);
         let (spec, zones) = self.frame_law_of(facts);
         let blinks = suzu && spec.is_some();
         // The dialect this face declared (absent or unknown: heard whole)
@@ -545,6 +622,7 @@ impl Devices {
         let events = self.events.clone();
         let jobs = Arc::clone(&self.jobs);
         let media_watched = Arc::clone(&self.media_watched);
+        let substrate = Arc::clone(&self.substrate);
         let device_id = facts.device_id.clone();
         let class = facts.class.clone();
         let streaming2 = Arc::clone(&streaming);
@@ -553,33 +631,27 @@ impl Devices {
             .name(format!("session:{port}"))
             .spawn(move || {
                 session_thread(
-                    port, rx, close2, streaming2, suzu, spec, zones, events, jobs,
-                    media_watched, voice, device_id, class,
+                    port, thread_slot, substrate.clone(), close2, streaming2,
+                    suzu, spec, zones, events, jobs, media_watched, voice,
+                    device_id, class,
                 )
             })
             .ok();
         self.sessions
             .insert(facts.port.clone(), SessionHandle { close, join });
         if let Some(device) = self.devices.get_mut(&facts.port) {
-            device.outbound = Some(tx);
+            device.mailslot = Some(Arc::clone(&slot));
             device.streaming = streaming;
             device.blinks = blinks;
         }
         self.rows_dirty = true;
     }
 
-    /// Close a session and hand back its thread, if it has one. The
-    /// caller joins only when it must (a saga needs the port to
-    /// itself); everyone else lets the thread exit on its own — the
-    /// close flag and the Close message wake it within seconds.
     fn close_session(&mut self, port: &str) -> Option<std::thread::JoinHandle<()>> {
         let mut handle = self.sessions.remove(port)?;
         handle.close.store(true, Ordering::Relaxed);
-        if let Some(outbound) = self.devices.get_mut(port) {
-            if let Some(out) = outbound.outbound.take() {
-                let _ = out.send(SessionMsg::Close);
-            }
-            outbound.streaming.store(false, Ordering::Relaxed);
+        if let Some(device) = self.devices.get_mut(port) {
+            device.streaming.store(false, Ordering::Relaxed);
         }
         self.frames.remove(port);
         handle.join.take()
@@ -590,12 +662,12 @@ impl Devices {
     fn ring(&mut self, signal: &str, label: &str, urgency: u8) {
         let words: Vec<String> = label.split_whitespace().map(|s| s.to_string()).collect();
         for device in self.devices.values_mut() {
-            if let Some(outbound) = &device.outbound {
-                let _ = outbound.try_send(SessionMsg::Out(Outbound::Ring {
+            if let Some(slot) = &device.mailslot {
+                slot.slap(Ask::Ring {
                     signal: signal.to_string(),
                     words: words.clone(),
                     urgency,
-                }));
+                });
             }
         }
     }
@@ -630,7 +702,7 @@ impl Devices {
         for port in &ports {
             self.close_session(port);
             if let Some(device) = self.devices.get_mut(port) {
-                device.outbound = None;
+                device.mailslot = None;
             }
         }
         self.rows_dirty = true;
@@ -703,7 +775,7 @@ impl Devices {
                 facts: facts.clone(),
                 state,
                 minded_at: now(),
-                outbound: None,
+                mailslot: None,
                 streaming: Arc::new(AtomicBool::new(false)),
                 last_fed: Arc::new(Mutex::new(None)),
                 blinks: false,
@@ -719,7 +791,7 @@ impl Devices {
     fn gone(&mut self, port: &str) {
         if let Some(mut device) = self.devices.remove(port) {
             self.close_session(port);
-            device.outbound = None;
+            device.mailslot = None;
             self.rows_dirty = true;
             let _ = self.events.send(HouseEvent::DeviceReleased {
                 port: port.to_string(),
@@ -739,69 +811,6 @@ impl Devices {
                     let _ = door.send(DevicesCmd::Mind(facts)).await;
                 }
             });
-        }
-    }
-
-    /// The streaming gate: the roster's verdict, checked per fan-out.
-    /// A free function of its inputs — the fan-out borrows `devices`
-    /// mutably while asking the roster, and the two never meet.
-    fn may_stream(roster: &std::sync::RwLock<Roster>, device: &Device) -> bool {
-        device.streaming.load(Ordering::Relaxed)
-            && device
-                .device_id()
-                .is_some_and(|id| roster.read().map(|r| r.is_streaming(id)).unwrap_or(false))
-    }
-
-    /// Fan-out: every live consumer takes the full published object as
-    /// a cheap copy and translates on its own side. A consumer whose
-    /// mailbox is gone or full (its thread died or stalled) is
-    /// disposed here — the port is released and the watcher's next
-    /// cycle can re-mind it.
-    fn publish(&mut self, ground: &Arc<MachineReport>) {
-        let mut dead: Vec<String> = Vec::new();
-        for device in self.devices.values_mut() {
-            let Some(outbound) = &device.outbound else { continue };
-            if !Self::may_stream(&self.roster, device) {
-                continue; // the roster has not granted this stream
-            }
-            if let Err(e) = outbound.try_send(SessionMsg::Out(Outbound::Ground(Arc::clone(ground)))) {
-                if matches!(e, std_mpsc::TrySendError::Disconnected(_)) {
-                    dead.push(device.facts.port.clone());
-                }
-            } else if let Ok(mut t) = device.last_fed.lock() {
-                *t = Some(Instant::now());
-            }
-        }
-        for port in dead {
-            println!("[devices] {port}: consumer died — disposing");
-            self.gone(&port);
-        }
-        self.rows_dirty = true;
-    }
-
-    /// The lane forwards to every live session; ancestors drop it at
-    /// the session boundary, suzu faces that declared the extra hear it.
-    fn pulse(&mut self, axis: &str, value: u8) {
-        let mut consumers = 0;
-        let mut dead: Vec<String> = Vec::new();
-        for device in self.devices.values_mut() {
-            let Some(outbound) = &device.outbound else { continue };
-            if !Self::may_stream(&self.roster, device) {
-                continue;
-            }
-            consumers += 1;
-            if let Err(e) = outbound.try_send(SessionMsg::Out(Outbound::Pulse { axis: axis.to_string(), value }))
-                && matches!(e, std_mpsc::TrySendError::Disconnected(_)) {
-                    dead.push(device.facts.port.clone());
-                }
-        }
-        for port in dead {
-            println!("[devices] {port}: consumer died — disposing");
-            self.gone(&port);
-        }
-        if !self.pulse_announced {
-            self.pulse_announced = true;
-            println!("[devices] pulse lane alive: {axis}={value} across {consumers} consumer(s)");
         }
     }
 
@@ -842,7 +851,7 @@ impl Devices {
     fn record_start(&mut self, port: &str, job_id: &str, secs: u32, fps: u32) -> anyhow::Result<()> {
         let secs = secs.clamp(1, 60);
         let fps = fps.clamp(1, 5);
-        if let Err(e) = self.send_to_session(port, SessionMsg::Record { job_id: job_id.to_string(), secs, fps }) {
+        if let Err(e) = self.send_to_session(port, Ask::Record { job_id: job_id.to_string(), secs, fps }) {
             self.jobs.with(job_id, |j: &mut Job| {
                 j.state = "failed".into();
                 j.label = format!("{e:#}");
@@ -853,7 +862,7 @@ impl Devices {
     }
 
     fn admission_retry(&self, port: &str) -> anyhow::Result<()> {
-        self.send_to_session(port, SessionMsg::Admission)
+        self.send_to_session(port, Ask::Admission)
     }
 
     /// A targeted say: one face takes the stage, undisturbed. No
@@ -867,18 +876,19 @@ impl Devices {
         if !device.streaming.load(Ordering::Relaxed) {
             anyhow::bail!("{port}: is not on the stream — only a live face hears its name");
         }
-        self.send_to_session(
-            port,
-            SessionMsg::Out(Outbound::Ring {
-                signal: signal.to_string(),
-                words: text
-                    .unwrap_or("")
-                    .split_whitespace()
-                    .map(|s| s.to_string())
-                    .collect(),
-                urgency: urgency_for(signal),
-            }),
-        )
+        let Some(slot) = &device.mailslot else {
+            anyhow::bail!("{port}: no live session");
+        };
+        slot.slap(Ask::Ring {
+            signal: signal.to_string(),
+            words: text
+                .unwrap_or("")
+                .split_whitespace()
+                .map(|s| s.to_string())
+                .collect(),
+            urgency: urgency_for(signal),
+        });
+        Ok(())
     }
 
     /// Per-device pause: withdraw the subscription but keep the
@@ -959,23 +969,17 @@ impl Devices {
         Ok(())
     }
 
-    fn send_to_session(&self, port: &str, msg: SessionMsg) -> anyhow::Result<()> {
+    fn send_to_session(&self, port: &str, ask: Ask) -> anyhow::Result<()> {
         let device = self
             .devices
             .get(port)
             .ok_or_else(|| anyhow::anyhow!("{port}: no minded device"))?;
-        let outbound = device
-            .outbound
+        let slot = device
+            .mailslot
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("{port}: no live session — is the stream paused?"))?;
-        outbound.try_send(msg).map_err(|e| match e {
-            std_mpsc::TrySendError::Full(_) => {
-                anyhow::anyhow!("{port}: the session mailbox is full — the face is stuck")
-            }
-            std_mpsc::TrySendError::Disconnected(_) => {
-                anyhow::anyhow!("{port}: session died mid-request")
-            }
-        })
+        slot.slap(ask);
+        Ok(())
     }
 
     /// Hand the individual to a maintenance saga. The session closes
@@ -1049,7 +1053,7 @@ impl Devices {
         // task, never on this loop.
         let joining = self.close_session(port);
         if let Some(d) = self.devices.get_mut(port) {
-            d.outbound = None;
+            d.mailslot = None;
         }
         self.in_maintenance
             .insert(port.to_string(), (kind.to_string(), faceplate.clone()));
@@ -1213,7 +1217,8 @@ fn captures_dir() -> String {
 #[allow(clippy::too_many_arguments)]
 fn session_thread(
     port: String,
-    rx: std_mpsc::Receiver<SessionMsg>,
+    slot: Arc<Mailslot>,
+    substrate: Arc<Substrate>,
     close: Arc<AtomicBool>,
     streaming: Arc<AtomicBool>,
     suzu: bool,
@@ -1270,8 +1275,9 @@ fn session_thread(
     // out — never a silent thread death holding hardware hostage.
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         session_loop(
-            &mut serial, &rx, &close, &streaming, suzu, &port, spec, zones,
-            &events, &jobs, &media_watched, voice, device_id, class,
+            &mut serial, &slot, &substrate, &close, &streaming, suzu, &port,
+            spec, zones, &events, &jobs, &media_watched, voice, device_id,
+            class,
         );
     }));
     if outcome.is_err() {
@@ -1302,15 +1308,10 @@ fn write_line_twice(
 fn deliver_ground(
     serial: &mut Box<dyn SerialPort>,
     port: &str,
-    suzu: bool,
     g: &Arc<MachineReport>,
     named: &mut Option<String>,
 ) -> bool {
-    let frames = if suzu {
-        translate_suzu(g, named)
-    } else {
-        translate(g)
-    };
+    let frames = translate_suzu(g, named);
     for frame in frames {
         if write_line_twice(serial, port, &frame).is_err() {
             return false;
@@ -1342,7 +1343,8 @@ fn frame_blink(
 #[allow(clippy::too_many_arguments)]
 fn session_loop(
     serial: &mut Box<dyn SerialPort>,
-    rx: &std_mpsc::Receiver<SessionMsg>,
+    slot: &Mailslot,
+    substrate: &Substrate,
     close: &Arc<AtomicBool>,
     streaming: &Arc<AtomicBool>,
     suzu: bool,
@@ -1356,14 +1358,10 @@ fn session_loop(
     device_id: Option<String>,
     class: Option<String>,
 ) {
-    // The ancestor firmware enters its dashboard on first data; a suzu
-    // face needs no greeting — its context rides the first ground.
-    if !suzu {
-        let _ = write_line(serial, "H,thriving");
-        let _ = write_line(serial, "G,0,1,0,0");
-    }
     let mut named: Option<String> = None;
     let mut seq: u8 = 0;
+    let mut sent_ground_gen: u64 = 0;
+    let mut sent_pulse_gen: u64 = 0;
     let mut next_frame = Instant::now() + FRAME_PERIOD;
     let mut last_keepalive = Instant::now();
 
@@ -1371,93 +1369,66 @@ fn session_loop(
         if close.load(Ordering::Relaxed) {
             break;
         }
-        // Wake for the nearest of: a message, the next blink, the
-        // keepalive. The frame lane is this session's own cadence —
-        // serial by construction, so captures coalesce for free.
-        let now = Instant::now();
-        let till_frame = next_frame.saturating_duration_since(now);
-        let since_keepalive = now.duration_since(last_keepalive);
-        let till_keepalive = KEEPALIVE_PERIOD
-            .checked_sub(since_keepalive)
-            .unwrap_or(Duration::ZERO);
-        let wait = till_frame.min(till_keepalive);
-        match rx.recv_timeout(wait) {
-            Ok(SessionMsg::Out(Outbound::Ground(g))) => {
-                if !streaming.load(Ordering::Relaxed) {
-                    continue; // the roster has not granted this stream
+        // The tick (~5 Hz): the ask is picked first - it outranks the
+        // substrate; then the freshest state goes to the wire while
+        // the roster allows. The substrate is never delivered when the
+        // roster has not granted this stream.
+        while let Some(ask) = slot.pick() {
+            match ask {
+                Ask::Ring { signal, words, urgency } => {
+                    if !suzu || !streaming.load(Ordering::Relaxed) {
+                        continue;
+                    }
+                    // The instance degrades the say to the face's
+                    // declared dialect (ADR-0006): bare verbs where
+                    // qualifiers are not spoken, no words where there
+                    // is no text channel. The face owns the moment -
+                    // it ignores the substrate while the splash plays
+                    // and picks the next frame after.
+                    seq = seq.wrapping_add(1);
+                    let sig = if voice.qualifiers {
+                        signal.clone()
+                    } else {
+                        signal.split('.').next().unwrap_or(&signal).to_string()
+                    };
+                    let spoken = if voice.text { words } else { Vec::new() };
+                    let mut frame =
+                        format!("R,{sig},{urgency},0,1,{seq},{}", spoken.join(","));
+                    frame = with_checksum(&frame);
+                    if write_line_twice(serial, port, &frame).is_err() {
+                        return;
+                    }
                 }
-                if !deliver_ground(serial, port, suzu, &g, &mut named) {
+                Ask::Record { job_id, secs, fps } => {
+                    record_job(serial, port, &job_id, secs, fps, spec.as_ref(), &zones, jobs, events);
+                }
+                Ask::Admission => {
+                    if suzu {
+                        let report = admission::run(serial, class.as_deref(), spec.as_ref(), &zones);
+                        let _ = events.send(HouseEvent::AdmissionReport {
+                            device_id: device_id.clone().unwrap_or_default(),
+                            port: port.to_string(),
+                            passed: report.passed,
+                            steps: report.steps,
+                        });
+                    }
+                }
+            }
+        }
+        if streaming.load(Ordering::Relaxed) {
+            if let Some(g) = substrate.ground_since(&mut sent_ground_gen) {
+                if !deliver_ground(serial, port, &g, &mut named) {
                     return;
                 }
             }
-            Ok(SessionMsg::Out(Outbound::Pulse { axis, value })) => {
-                if !suzu || !streaming.load(Ordering::Relaxed) {
-                    continue;
-                }
+            if let Some((axis, value)) = substrate.pulse_since(&mut sent_pulse_gen) {
                 let frame = format!("A,{axis},{value}");
                 if write_line_twice(serial, port, &frame).is_err() {
                     return;
                 }
             }
-            Ok(SessionMsg::Out(Outbound::Ring { signal, words, urgency })) => {
-                if !suzu || !streaming.load(Ordering::Relaxed) {
-                    continue;
-                }
-                // The instance degrades the say to the face's declared
-                // dialect (ADR-0006): bare verbs where qualifiers are
-                // not spoken, no words where there is no text channel.
-                // A new say replaces the one showing; the newest ring wins.
-                seq = seq.wrapping_add(1);
-                let sig = if voice.qualifiers {
-                    signal.clone()
-                } else {
-                    signal
-                        .split('.')
-                        .next()
-                        .unwrap_or(&signal)
-                        .to_string()
-                };
-                let spoken = if voice.text { words } else { Vec::new() };
-                let mut frame =
-                    format!("R,{sig},{urgency},0,1,{seq},{}", spoken.join(","));
-                frame = with_checksum(&frame);
-                if write_line_twice(serial, port, &frame).is_err() {
-                    return;
-                }
-            }
-            Ok(SessionMsg::Record { job_id, secs, fps }) => {
-                record_job(serial, port, &job_id, secs, fps, spec.as_ref(), &zones, jobs, events);
-            }
-            Ok(SessionMsg::Admission) => {
-                if suzu {
-                    let report = admission::run(serial, class.as_deref(), spec.as_ref(), &zones);
-                    let _ = events.send(HouseEvent::AdmissionReport {
-                        device_id: device_id.clone().unwrap_or_default(),
-                        port: port.to_string(),
-                        passed: report.passed,
-                        steps: report.steps,
-                    });
-                }
-            }
-            Ok(SessionMsg::Close) => break,
-            Err(std_mpsc::RecvTimeoutError::Timeout) => {}
-            Err(std_mpsc::RecvTimeoutError::Disconnected) => break,
         }
         let now = Instant::now();
-        // The media lane's blink, only for someone's eyes: the watch
-        // flag (ADR-0004 amendment) rides beside the roster's stream
-        // gate, and never interrupts a stage. A recording is work, not
-        // a glance — its frames publish from inside its own handler.
-        if now >= next_frame {
-            next_frame = now + FRAME_PERIOD;
-            if suzu
-                && streaming.load(Ordering::Relaxed)
-                && media_watched.load(Ordering::Relaxed)
-                && let Some(spec) = &spec
-            {
-                frame_blink(serial, port, spec, &zones, events);
-            }
-        }
         // Keepalive: only while the stream flows (see FRAME_PERIOD note).
         if now.duration_since(last_keepalive) >= KEEPALIVE_PERIOD {
             last_keepalive = now;

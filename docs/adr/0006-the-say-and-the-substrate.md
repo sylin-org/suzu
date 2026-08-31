@@ -40,13 +40,12 @@ faceplate's own decision.**
   from the house to the instance carries signal, urgency and words —
   never pixels. The **faceplate's declaration states what its face
   can speak**: qualified signals or bare verbs, a text channel or
-  none, whether it can announce DONE at all. The *instanced device*
-  degrades accordingly: a 5×5 matrix that speaks bare verbs receives
-  `R,WARN` — the qualifier and the message dropped, less bytes, less
-  noise, and the face never sees a frame it cannot use. What
-  `WARN` *looks like* — splash, composed screen, band and blink —
-  is the faceplate's own decision. Unknown signals degrade to the
-  face's default presentation.
+  none. The *instanced device* degrades accordingly: a 5×5 matrix
+  that speaks bare verbs receives `R,WARN` — the qualifier and the
+  message dropped, less bytes, less noise, and the face never sees a
+  frame it cannot use. What `WARN` *looks like* — splash, composed
+  screen, band and blink — is the faceplate's own decision. Unknown
+  signals degrade to the face's default presentation.
 - **Targeted and broadcast are one verb.** `suzu say` is a sentence
   in a small grammar — port, signal, text, in that order, each
   optional after the first. The house resolves a target against its

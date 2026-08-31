@@ -17,13 +17,12 @@ pub mod gpu;
 pub mod jobs;
 pub mod maintenance;
 pub mod moments;
-pub mod publisher;
 pub mod roster;
 pub mod sensor;
 pub mod watcher;
 
 use api::Journal;
-use devices::{Devices, DevicesCmd, DevicesSnapshot};
+use devices::{Devices, DevicesCmd, DevicesSnapshot, Substrate};
 use events::HouseEvent;
 use moments::{Moments, MomentsCmd};
 use roster::{Roster, SagaStep};
@@ -281,6 +280,7 @@ fn spawn_devices_supervised(
     roster: Arc<RwLock<Roster>>,
     catalog: Arc<Catalog>,
     jobs: Arc<Jobs>,
+    substrate: Arc<Substrate>,
 ) {
     tokio::spawn(async move {
         let mut rx = Some(rx);
@@ -293,10 +293,11 @@ fn spawn_devices_supervised(
             let roster2 = Arc::clone(&roster);
             let catalog2 = Arc::clone(&catalog);
             let jobs2 = Arc::clone(&jobs);
+            let substrate2 = Arc::clone(&substrate);
             let bus = house2.events.subscribe();
             let door = house2.devices_door();
             let handle = tokio::spawn(async move {
-                Devices::new(house2.events.clone(), door, catalog2, roster2, jobs2)
+                Devices::new(house2.events.clone(), door, catalog2, roster2, jobs2, substrate2)
                     .run(current, bus)
                     .await
             });
@@ -474,32 +475,6 @@ fn spawn_sensor_supervised(house: Arc<House>) {
     });
 }
 
-fn spawn_publisher_supervised(house: Arc<House>) {
-    tokio::spawn(async move {
-        let mut backoff = 1u64;
-        loop {
-            let house2a = Arc::clone(&house);
-            let house2b = Arc::clone(&house);
-            let handle = tokio::spawn(async move {
-                publisher::Publisher::new(house2a, house2b.events.subscribe())
-                    .run()
-                    .await
-            });
-            let reason = match handle.await {
-                Ok(()) => "publisher loop ended".to_string(),
-                Err(e) => format!("panic: {e}"),
-            };
-            let _ = house.events.send(HouseEvent::Degraded {
-                domain: "publisher",
-                reason: reason.clone(),
-            });
-            line("publisher", &format!("!! degraded: {reason} — restarting in {backoff}s"));
-            tokio::time::sleep(Duration::from_secs(backoff)).await;
-            backoff = (backoff * 2).min(30);
-        }
-    });
-}
-
 pub async fn run(catalog: Arc<Catalog>) -> anyhow::Result<()> {
     // The door first (ADR-0004): the resident binds 7899 before it
     // touches any serial port, and a second claimant exits loudly with
@@ -540,10 +515,10 @@ pub async fn run(catalog: Arc<Catalog>) -> anyhow::Result<()> {
         tokio::spawn(watcher.run());
     }
     let jobs = Arc::new(jobs::Jobs::new(house.events.clone()));
-    spawn_devices_supervised(Arc::clone(&house), devices_rx, Arc::clone(&roster), Arc::clone(&catalog), Arc::clone(&jobs));
+    let substrate: Arc<Substrate> = Arc::default();
+    spawn_devices_supervised(Arc::clone(&house), devices_rx, Arc::clone(&roster), Arc::clone(&catalog), Arc::clone(&jobs), Arc::clone(&substrate));
     spawn_moments_supervised(Arc::clone(&house), moments_rx);
     spawn_sensor_supervised(Arc::clone(&house));
-    spawn_publisher_supervised(Arc::clone(&house));
     spawn_roster(Arc::clone(&house), Arc::clone(&roster));
 
     // the control chirp: `suzu pause` / `suzu resume` from any shell
