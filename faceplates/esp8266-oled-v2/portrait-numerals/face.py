@@ -34,13 +34,13 @@ label = "suzu"
 ring_label = None          # a moment's text, shown in the band briefly
 ring_icon = None           # its icon's index, when the signal has one
 ring_verb = None           # the objective: alert latches, the rest bloom
+ring_until = None          # when the splash ends (ticks_ms); None = none
 latch = False              # True while an alert is up
 ring_seq = "0"             # the stage's ring: DONE carries it, so a
                            # dropped animation can never answer for
                            # the one that replaced it
 band_lit = True            # the band's blink phase during a latched alert
 last_blink = 0
-ring_verb = None           # the ring objective: alert latches, others bloom
 values = {"cpu": 255, "mem": 255, "gpu": 255}
 pulse_target = 0
 pulse_lit = 0
@@ -365,7 +365,8 @@ def cmd(line):
     if not line:
         return
     if "*" in line:                   # `*hh` xor checksum, if present
-        body, _, hexsum = line.rpartition("*")
+        i = line.rfind("*")           # (rfind: no rpartition on this port)
+        body, hexsum = line[:i], line[i + 1:]
         if len(hexsum) == 2:
             x = 0
             for c in body:
@@ -440,7 +441,7 @@ def cmd(line):
             qual = signal.split(".", 1)[1] if "." in signal else ""
             keys = ICON_KEYS.split()
             ring_icon = keys.index(qual) if qual in keys else -1
-            ring_label = " ".join(p[6:])[:30] or None
+            ring_label = " ".join(p[5:])[:30] or None
             if verb == "alert":
                 latch = True                    # alert latches until allclear
                 ring_until = None
