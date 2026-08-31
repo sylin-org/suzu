@@ -48,6 +48,10 @@ const MAX_FRAME_AGE: Duration = Duration::from_secs(5);
 /// silence, the ancestor idles to its fireflies — a frame every 5 s
 /// holds either face.
 const KEEPALIVE_PERIOD: Duration = Duration::from_secs(5);
+/// The session tick (~5 Hz): the mailslot is picked, the substrate
+/// pulled, then the loop naps — ending early the moment a new ask is
+/// slapped, so a say never waits for the beat.
+const TICK_PERIOD: Duration = Duration::from_millis(200);
 
 /// The substrate (ADR-0006): the machine's freshest state, shared.
 /// The sensor's facts land here as they land; sessions pull on their
@@ -1429,6 +1433,20 @@ fn session_loop(
             }
         }
         let now = Instant::now();
+        // The media lane's blink, only for someone's eyes: the watch
+        // flag (ADR-0004 amendment) rides beside the roster's stream
+        // gate. A recording is work, not a glance — its frames publish
+        // from inside its own handler.
+        if now >= next_frame {
+            next_frame = now + FRAME_PERIOD;
+            if suzu
+                && streaming.load(Ordering::Relaxed)
+                && media_watched.load(Ordering::Relaxed)
+                && let Some(spec) = &spec
+            {
+                frame_blink(serial, port, spec, &zones, events);
+            }
+        }
         // Keepalive: only while the stream flows (see FRAME_PERIOD note).
         if now.duration_since(last_keepalive) >= KEEPALIVE_PERIOD {
             last_keepalive = now;
@@ -1437,6 +1455,9 @@ fn session_loop(
                 let _ = write_line(serial, keepalive);
             }
         }
+        // The tick's nap: the substrate is pulled, not pushed, so the
+        // beat paces here — awake the instant a new ask is slapped.
+        slot.nap(TICK_PERIOD);
     }
 }
 
