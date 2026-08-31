@@ -137,7 +137,7 @@ pub fn run(
     device_id: &str,
     faceplate: Option<&str>,
 ) -> Result<()> {
-    type SagaRunner = fn(&mut Saga, &str, &str, &Catalog, Option<&str>) -> Result<()>;
+    type SagaRunner = fn(&mut Saga, &str, &str, &str, &Catalog, Option<&str>) -> Result<()>;
     let (total, runner): (u32, SagaRunner) = match (class, kind)
     {
         (Some("waveshare-rp2040-matrix"), "install" | "adopt") => {
@@ -158,17 +158,31 @@ pub fn run(
             "factory" => (4, esp8266_factory),
             _ => bail!("no saga for kind {kind:?}"),
         },
+        (Some(c), kind) if c.contains("tdisplay") => match kind {
+            // The T-Display already runs MicroPython: adoption is a
+            // file push (backup, Aurora, exam) — never the bootloader.
+            "install" | "adopt" | "soft" => (2, tdisplay_adopt),
+            _ => bail!("tdisplay declares no {kind:?} saga — adopt is the door"),
+        },
         (Some(c), _) => bail!("class {c} declares no maintenance procedure yet"),
         (None, _) => bail!("no class manifest — no maintenance procedure"),
     };
 
     let mut saga = Saga::new(events, device_id, total);
-    let outcome = runner(&mut saga, port, device_id, catalog, faceplate);
-    match &outcome {
+    match runner(
+        &mut saga,
+        port,
+        class.as_deref().unwrap_or(""),
+        device_id,
+        catalog,
+        faceplate,
+    ) {
         Ok(()) => saga.hand_to_exam(),
-        Err(e) => saga.close("failed", false, format!("{e:#}")),
+        Err(e) => {
+            saga.close("failed", false, format!("{e:#}"));
+        }
     }
-    outcome
+    Ok(())
 }
 
 fn wait_for<F: Fn() -> bool>(secs: u64, what: &str, pred: F) -> Result<()> {
@@ -446,6 +460,7 @@ fn last_line(text: &str) -> String {
 fn rp2040_fresh(
     saga: &mut Saga,
     _port: &str,
+    _class: &str,
     device_id: &str,
     _catalog: &Catalog,
     _faceplate: Option<&str>,
@@ -476,6 +491,7 @@ fn rp2040_fresh(
 fn rp2040_soft(
     saga: &mut Saga,
     _port: &str,
+    _class: &str,
     device_id: &str,
     _catalog: &Catalog,
     _faceplate: Option<&str>,
@@ -510,6 +526,7 @@ fn rp2040_soft(
 fn rp2040_factory(
     saga: &mut Saga,
     _port: &str,
+    _class: &str,
     device_id: &str,
     _catalog: &Catalog,
     _faceplate: Option<&str>,
@@ -542,17 +559,42 @@ fn rp2040_factory(
     Ok(())
 }
 
+// ── the tdisplay sagas ──────────────────────────────────────────────
+
+/// The T-Display already runs MicroPython (firefly, or a previous
+/// Aurora): adoption is the file push — backup, the Aurora bundle,
+/// the dress tuple into suzu.json — then the exam decides.
+fn tdisplay_adopt(
+    saga: &mut Saga,
+    port: &str,
+    class: &str,
+    device_id: &str,
+    catalog: &Catalog,
+    faceplate: Option<&str>,
+) -> Result<()> {
+    let dress = faceplate.unwrap_or_else(|| default_dress(catalog, class));
+    let mut cmd = std::process::Command::new("python");
+    cmd.args(["scripts/push_tdisplay.py", port, device_id]);
+    if !dress.is_empty() {
+        cmd.args(["--faceplate", dress]);
+    }
+    saga.step(&format!("Adopting the T-Display face ({dress})"), |voice| {
+        run_tool(voice, cmd, "push_tdisplay.py")
+    })?;
+    Ok(())
+}
+
 // ── the esp8266 sagas ───────────────────────────────────────────────
 
 /// The dress a bare saga installs when the keeper named none: the
 /// class's first declaration. (Callers that know the face's current
 /// dress pass it; this is the last resort, not the default path.)
-fn default_dress(catalog: &Catalog) -> &str {
+fn default_dress<'a>(catalog: &'a Catalog, class: &str) -> &'a str {
     catalog
-        .faceplates_for_class("esp8266-oled")
+        .faceplates_for_class(class)
         .first()
         .map(|f| f.id.as_str())
-        .unwrap_or("numerals")
+        .unwrap_or("")
 }
 
 /// An unknown board walks in: the full install (the proven fresh push that
@@ -560,11 +602,12 @@ fn default_dress(catalog: &Catalog) -> &str {
 fn esp8266_adopt(
     saga: &mut Saga,
     port: &str,
+    class: &str,
     device_id: &str,
     catalog: &Catalog,
     faceplate: Option<&str>,
 ) -> Result<()> {
-    let dress = faceplate.unwrap_or(default_dress(catalog));
+    let dress = faceplate.unwrap_or_else(|| default_dress(catalog, class));
     saga.step(&format!("Installing the suzu face ({dress})"), |voice| {
         push_face_files(voice, port, device_id, true, Some(dress)).map(|out| last_line(&out))
     })?;
@@ -574,6 +617,7 @@ fn esp8266_adopt(
 fn esp8266_factory(
     saga: &mut Saga,
     port: &str,
+    class: &str,
     device_id: &str,
     catalog: &Catalog,
     faceplate: Option<&str>,
@@ -590,7 +634,7 @@ fn esp8266_factory(
     saga.step("Flashing MicroPython", |voice| {
         esptool(voice, port, &args).map(|_| ())
     })?;
-    let dress = faceplate.unwrap_or(default_dress(catalog));
+    let dress = faceplate.unwrap_or_else(|| default_dress(catalog, class));
     saga.step(&format!("Installing the suzu face ({dress})"), |voice| {
         push_face_files(voice, port, device_id, true, Some(dress)).map(|out| last_line(&out))
     })?;

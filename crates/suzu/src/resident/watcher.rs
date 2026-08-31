@@ -103,6 +103,16 @@ impl Watcher {
                 if seen.contains(&p.port_name) {
                     continue;
                 }
+                // A port under a maintenance saga belongs to the saga:
+                // a probe's DTR/RTS toggle would hard-reset the board
+                // mid-push. Skip until the hold lifts.
+                if super::devices::held_ports()
+                    .lock()
+                    .unwrap()
+                    .contains(&p.port_name)
+                {
+                    continue;
+                }
                 seen.insert(p.port_name.clone());
                 // `insert` answers false on retries: the first attempt
                 // announces itself, later retries stay quiet.

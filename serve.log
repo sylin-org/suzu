@@ -1920,3 +1920,291 @@ control: `suzu pause` / `suzu resume` stop and restart the stream to devices.
 [devices] minding COM14 as Some("tdisplay-esp32-ch9102") (Some("019d8d82-fd23-72a0-b1f5-57ca24156fed")) — state Accepted
 [roster] held 019d8d82-fd23-72a0-b1f5-57ca24156fed on COM14 (tdisplay-esp32-ch9102) — admission decides the stream
 [moments] splash: discovery 019d8d82-fd23-72a0-b1f5-57ca24156fed
+catalog: 4 class signature(s) from hardware/classes
+suzu resident is up — domains: watcher · devices · moments · sensor · roster
+plug a device and watch the house talk. `tell <label>` rings the bell · `status` · `q` quits.
+control: `suzu pause` / `suzu resume` stop and restart the stream to devices.
+[api] the door is open on http://127.0.0.1:7899 — snapshot + stream, one truth
+[control] listening on 127.0.0.1:7898 — `suzu pause` / `suzu resume`
+[watcher] sensed COM14
+[sensor] ground: stone-leaded-sparkle · cpu 9% · gpu 1% · mem 46% · disk 59% · up 2300s
+[watcher] identified COM14 → tdisplay-esp32-ch9102 · firefly/tdisplay v1.0.0
+[devices] minding COM14 as Some("tdisplay-esp32-ch9102") (Some("019d8d82-fd23-72a0-b1f5-57ca24156fed")) — state Accepted
+[roster] held 019d8d82-fd23-72a0-b1f5-57ca24156fed on COM14 (tdisplay-esp32-ch9102) — admission decides the stream
+[moments] splash: discovery 019d8d82-fd23-72a0-b1f5-57ca24156fed
+[roster] stream detached — 019d8d82-fd23-72a0-b1f5-57ca24156fed on COM14 (maintenance:adopt)
+[maintenance] adopt saga owns 019d8d82-fd23-72a0-b1f5-57ca24156fed on COM14 — the stream is withdrawn
+[maintenance] 019d8d82-fd23-72a0-b1f5-57ca24156fed · step 1/2 — Adopting the T-Display face () 
+[maintenance] 019d8d82-fd23-72a0-b1f5-57ca24156fed · step 1/2 — faceplate 'aurora' is not declared — check the manifests under hardware/classes/tdisplay-esp32-ch9102/faceplates/ 
+[maintenance] 019d8d82-fd23-72a0-b1f5-57ca24156fed · step 1/2 — Adopting the T-Display face () (failed) ✗ push_tdisplay.py failed: faceplate 'aurora' is not declared — check the manifests under hardware/classes/tdisplay-esp32-ch9102/faceplates/
+[maintenance] 019d8d82-fd23-72a0-b1f5-57ca24156fed · step 2/2 — failed ✗ push_tdisplay.py failed: faceplate 'aurora' is not declared — check the manifests under hardware/classes/tdisplay-esp32-ch9102/faceplates/
+[maintenance] adopt saga done for 019d8d82-fd23-72a0-b1f5-57ca24156fed — admission decides the stream
+[maintenance] COM14: re-identified as firefly/tdisplay — respawning
+[api] shutdown requested — the resident rests
+catalog: 4 class signature(s) from hardware/classes
+suzu resident is up — domains: watcher · devices · moments · sensor · roster
+plug a device and watch the house talk. `tell <label>` rings the bell · `status` · `q` quits.
+[api] the door is open on http://127.0.0.1:7899 — snapshot + stream, one truth
+control: `suzu pause` / `suzu resume` stop and restart the stream to devices.
+[control] listening on 127.0.0.1:7898 — `suzu pause` / `suzu resume`
+[watcher] sensed COM14
+[sensor] ground: stone-leaded-sparkle · cpu 6% · gpu 1% · mem 45% · disk 59% · up 2451s
+[watcher] identified COM14 → tdisplay-esp32-ch9102 · firefly/tdisplay v1.0.0
+[devices] minding COM14 as Some("tdisplay-esp32-ch9102") (Some("019d8d82-fd23-72a0-b1f5-57ca24156fed")) — state Accepted
+[moments] splash: discovery 019d8d82-fd23-72a0-b1f5-57ca24156fed
+[roster] held 019d8d82-fd23-72a0-b1f5-57ca24156fed on COM14 (tdisplay-esp32-ch9102) — admission decides the stream
+[api] shutdown requested — the resident rests
+catalog: 4 class signature(s) from hardware/classes
+suzu resident is up — domains: watcher · devices · moments · sensor · roster
+plug a device and watch the house talk. `tell <label>` rings the bell · `status` · `q` quits.
+control: `suzu pause` / `suzu resume` stop and restart the stream to devices.
+[api] the door is open on http://127.0.0.1:7899 — snapshot + stream, one truth
+[control] listening on 127.0.0.1:7898 — `suzu pause` / `suzu resume`
+[watcher] sensed COM14
+[sensor] ground: stone-leaded-sparkle · cpu 12% · gpu 1% · mem 46% · disk 59% · up 2618s
+[watcher] identified COM14 → tdisplay-esp32-ch9102 · firefly/tdisplay v1.0.0
+[devices] minding COM14 as Some("tdisplay-esp32-ch9102") (Some("019d8d82-fd23-72a0-b1f5-57ca24156fed")) — state Accepted
+[moments] splash: discovery 019d8d82-fd23-72a0-b1f5-57ca24156fed
+[roster] held 019d8d82-fd23-72a0-b1f5-57ca24156fed on COM14 (tdisplay-esp32-ch9102) — admission decides the stream
+[roster] stream detached — 019d8d82-fd23-72a0-b1f5-57ca24156fed on COM14 (maintenance:adopt)
+[maintenance] adopt saga owns 019d8d82-fd23-72a0-b1f5-57ca24156fed on COM14 — the stream is withdrawn
+[maintenance] 019d8d82-fd23-72a0-b1f5-57ca24156fed · step 1/2 — Adopting the T-Display face (aurora) 
+[maintenance] 019d8d82-fd23-72a0-b1f5-57ca24156fed · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 019d8d82-fd23-72a0-b1f5-57ca24156fed · step 1/2 — device files: ['boot.py', 'diorama.py', 'main.py', 'zen-garden.json'] 
+[maintenance] 019d8d82-fd23-72a0-b1f5-57ca24156fed · step 1/2 — backed up boot.py (631 bytes) 
+[maintenance] 019d8d82-fd23-72a0-b1f5-57ca24156fed · step 1/2 — backed up diorama.py (29725 bytes) 
+[maintenance] 019d8d82-fd23-72a0-b1f5-57ca24156fed · step 1/2 — backed up main.py (10332 bytes) 
+[maintenance] 019d8d82-fd23-72a0-b1f5-57ca24156fed · step 1/2 — Traceback (most recent call last): 
+[maintenance] 019d8d82-fd23-72a0-b1f5-57ca24156fed · step 1/2 — FileNotFoundError: [Errno 2] No such file or directory: 'hardware\\classes\\tdisplay-esp32-ch9102\\faceplates\\aurora\\main.py' 
+[maintenance] 019d8d82-fd23-72a0-b1f5-57ca24156fed · step 1/2 — Adopting the T-Display face (aurora) (failed) ✗ push_tdisplay.py failed: FileNotFoundError: [Errno 2] No such file or directory: 'hardware\\classes\\tdisplay-esp32-ch9102\\faceplates\\aurora\\main.py'
+[maintenance] 019d8d82-fd23-72a0-b1f5-57ca24156fed · step 2/2 — failed ✗ push_tdisplay.py failed: FileNotFoundError: [Errno 2] No such file or directory: 'hardware\\classes\\tdisplay-esp32-ch9102\\faceplates\\aurora\\main.py'
+[maintenance] adopt saga done for 019d8d82-fd23-72a0-b1f5-57ca24156fed — admission decides the stream
+[maintenance] COM14: re-identified as firefly/tdisplay — respawning
+[sensor] ground: stone-leaded-sparkle · cpu 9% · gpu 1% · mem 46% · disk 59% · up 2782s
+[sensor] ground: stone-leaded-sparkle · cpu 9% · gpu 1% · mem 45% · disk 59% · up 2827s
+[sensor] ground: stone-leaded-sparkle · cpu 7% · gpu 1% · mem 46% · disk 59% · up 2862s
+[roster] stream detached — 019d8d82-fd23-72a0-b1f5-57ca24156fed on COM14 (maintenance:adopt)
+[maintenance] adopt saga owns 019d8d82-fd23-72a0-b1f5-57ca24156fed on COM14 — the stream is withdrawn
+[maintenance] 019d8d82-fd23-72a0-b1f5-57ca24156fed · step 1/2 — Adopting the T-Display face (aurora) 
+[maintenance] 019d8d82-fd23-72a0-b1f5-57ca24156fed · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 019d8d82-fd23-72a0-b1f5-57ca24156fed · step 1/2 — device files: ['boot.py', 'diorama.py', 'main.py', 'zen-garden.json'] 
+[maintenance] 019d8d82-fd23-72a0-b1f5-57ca24156fed · step 1/2 — backed up boot.py (631 bytes) 
+[maintenance] 019d8d82-fd23-72a0-b1f5-57ca24156fed · step 1/2 — backed up diorama.py (29725 bytes) 
+[maintenance] 019d8d82-fd23-72a0-b1f5-57ca24156fed · step 1/2 — backed up main.py (10332 bytes) 
+[maintenance] 019d8d82-fd23-72a0-b1f5-57ca24156fed · step 1/2 — backed up zen-garden.json (230 bytes) 
+[maintenance] 019d8d82-fd23-72a0-b1f5-57ca24156fed · step 1/2 — identity preserved: 019d8d82-fd23-72a0-b1f5-57ca24156fed 
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 46% · disk 59% · up 3030s
+[maintenance] 019d8d82-fd23-72a0-b1f5-57ca24156fed · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 019d8d82-fd23-72a0-b1f5-57ca24156fed · step 1/2 — OK suzu.json (236 bytes verified) 
+[maintenance] 019d8d82-fd23-72a0-b1f5-57ca24156fed · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 019d8d82-fd23-72a0-b1f5-57ca24156fed · step 1/2 — OK main.py (12 bytes verified) 
+[maintenance] 019d8d82-fd23-72a0-b1f5-57ca24156fed · step 1/2 — raw REPL confirmed (attempt 1) 
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 45% · disk 59% · up 3075s
+[maintenance] 019d8d82-fd23-72a0-b1f5-57ca24156fed · step 1/2 — Traceback (most recent call last): 
+[maintenance] 019d8d82-fd23-72a0-b1f5-57ca24156fed · step 1/2 — serial.serialutil.SerialException: ClearCommError failed (OSError(9, 'The handle is invalid.', None, 6)) 
+[maintenance] 019d8d82-fd23-72a0-b1f5-57ca24156fed · step 1/2 — Adopting the T-Display face (aurora) (failed) ✗ push_tdisplay.py failed: serial.serialutil.SerialException: ClearCommError failed (OSError(9, 'The handle is invalid.', None, 6))
+[maintenance] 019d8d82-fd23-72a0-b1f5-57ca24156fed · step 2/2 — failed ✗ push_tdisplay.py failed: serial.serialutil.SerialException: ClearCommError failed (OSError(9, 'The handle is invalid.', None, 6))
+[maintenance] COM14: re-identified as ?/? — respawning
+[maintenance] adopt saga done for 019d8d82-fd23-72a0-b1f5-57ca24156fed — admission decides the stream
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 46% · disk 59% · up 3180s
+[sensor] ground: stone-leaded-sparkle · cpu 8% · gpu 0% · mem 46% · disk 59% · up 3287s
+[api] shutdown requested — the resident rests
+catalog: 4 class signature(s) from hardware/classes
+suzu resident is up — domains: watcher · devices · moments · sensor · roster
+plug a device and watch the house talk. `tell <label>` rings the bell · `status` · `q` quits.
+control: `suzu pause` / `suzu resume` stop and restart the stream to devices.
+[api] the door is open on http://127.0.0.1:7899 — snapshot + stream, one truth
+[control] listening on 127.0.0.1:7898 — `suzu pause` / `suzu resume`
+[watcher] sensed COM14
+[sensor] ground: stone-leaded-sparkle · cpu 8% · gpu 2% · mem 47% · disk 59% · up 3594s
+[watcher] identified COM14 → tdisplay-esp32-ch9102 · ?/?
+[devices] COM14 minted identity 01a0598c-bf77-786f-854c-13ee154faa09
+[devices] minding COM14 as Some("tdisplay-esp32-ch9102") (Some("01a0598c-bf77-786f-854c-13ee154faa09")) — state Accepted
+[moments] splash: discovery 01a0598c-bf77-786f-854c-13ee154faa09
+[roster] held 01a0598c-bf77-786f-854c-13ee154faa09 on COM14 (tdisplay-esp32-ch9102) — admission decides the stream
+[roster] stream detached — 01a0598c-bf77-786f-854c-13ee154faa09 on COM14 (maintenance:adopt)
+[maintenance] adopt saga owns 01a0598c-bf77-786f-854c-13ee154faa09 on COM14 — the stream is withdrawn
+[maintenance] 01a0598c-bf77-786f-854c-13ee154faa09 · step 1/2 — Adopting the T-Display face (aurora) 
+[maintenance] 01a0598c-bf77-786f-854c-13ee154faa09 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0598c-bf77-786f-854c-13ee154faa09 · step 1/2 — device files: ['boot.py', 'diorama.py', 'face.py', 'main.py', 'suzu.json', 'zen-garden.json'] 
+[maintenance] 01a0598c-bf77-786f-854c-13ee154faa09 · step 1/2 — backed up boot.py (631 bytes) 
+[maintenance] 01a0598c-bf77-786f-854c-13ee154faa09 · step 1/2 — backed up diorama.py (29725 bytes) 
+[maintenance] 01a0598c-bf77-786f-854c-13ee154faa09 · step 1/2 — backed up face.py (22662 bytes) 
+[maintenance] 01a0598c-bf77-786f-854c-13ee154faa09 · step 1/2 — backed up main.py (12 bytes) 
+[maintenance] 01a0598c-bf77-786f-854c-13ee154faa09 · step 1/2 — backed up suzu.json (236 bytes) 
+[maintenance] 01a0598c-bf77-786f-854c-13ee154faa09 · step 1/2 — backed up zen-garden.json (230 bytes) 
+[maintenance] 01a0598c-bf77-786f-854c-13ee154faa09 · step 1/2 — identity preserved: 01a0598c-bf77-786f-854c-13ee154faa09 
+[maintenance] 01a0598c-bf77-786f-854c-13ee154faa09 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0598c-bf77-786f-854c-13ee154faa09 · step 1/2 — OK suzu.json (236 bytes verified) 
+[maintenance] 01a0598c-bf77-786f-854c-13ee154faa09 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0598c-bf77-786f-854c-13ee154faa09 · step 1/2 — OK main.py (12 bytes verified) 
+[maintenance] 01a0598c-bf77-786f-854c-13ee154faa09 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0598c-bf77-786f-854c-13ee154faa09 · step 1/2 — OK face.py (22662 bytes verified) 
+[maintenance] 01a0598c-bf77-786f-854c-13ee154faa09 · step 1/2 — serial.serialutil.SerialException: ClearCommError failed (OSError(9, 'The handle is invalid.', None, 6)) 
+[maintenance] 01a0598c-bf77-786f-854c-13ee154faa09 · step 1/2 — Adopting the T-Display face (aurora) (failed) ✗ push_tdisplay.py failed: serial.serialutil.SerialException: ClearCommError failed (OSError(9, 'The handle is invalid.', None, 6))
+[maintenance] 01a0598c-bf77-786f-854c-13ee154faa09 · step 2/2 — failed ✗ push_tdisplay.py failed: serial.serialutil.SerialException: ClearCommError failed (OSError(9, 'The handle is invalid.', None, 6))
+[maintenance] adopt saga done for 01a0598c-bf77-786f-854c-13ee154faa09 — admission decides the stream
+[maintenance] COM14: re-identified as ?/? — respawning
+[api] shutdown requested — the resident rests
+catalog: 4 class signature(s) from hardware/classes
+suzu resident is up — domains: watcher · devices · moments · sensor · roster
+plug a device and watch the house talk. `tell <label>` rings the bell · `status` · `q` quits.
+control: `suzu pause` / `suzu resume` stop and restart the stream to devices.
+[api] the door is open on http://127.0.0.1:7899 — snapshot + stream, one truth
+[control] listening on 127.0.0.1:7898 — `suzu pause` / `suzu resume`
+[watcher] sensed COM14
+[sensor] ground: stone-leaded-sparkle · cpu 7% · gpu 2% · mem 46% · disk 59% · up 3785s
+[watcher] identified COM14 → tdisplay-esp32-ch9102 · ?/?
+[devices] COM14 minted identity 01a0598f-ace8-70b0-87c5-b912e360729d
+[devices] minding COM14 as Some("tdisplay-esp32-ch9102") (Some("01a0598f-ace8-70b0-87c5-b912e360729d")) — state Accepted
+[roster] held 01a0598f-ace8-70b0-87c5-b912e360729d on COM14 (tdisplay-esp32-ch9102) — admission decides the stream
+[moments] splash: discovery 01a0598f-ace8-70b0-87c5-b912e360729d
+[roster] stream detached — 01a0598f-ace8-70b0-87c5-b912e360729d on COM14 (maintenance:adopt)
+[maintenance] adopt saga owns 01a0598f-ace8-70b0-87c5-b912e360729d on COM14 — the stream is withdrawn
+[maintenance] 01a0598f-ace8-70b0-87c5-b912e360729d · step 1/2 — Adopting the T-Display face (aurora) 
+[maintenance] 01a0598f-ace8-70b0-87c5-b912e360729d · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0598f-ace8-70b0-87c5-b912e360729d · step 1/2 — device files: ['boot.py', 'diorama.py', 'face.py', 'main.py', 'suzu.json', 'zen-garden.json'] 
+[maintenance] 01a0598f-ace8-70b0-87c5-b912e360729d · step 1/2 — backed up boot.py (631 bytes) 
+[maintenance] 01a0598f-ace8-70b0-87c5-b912e360729d · step 1/2 — backed up diorama.py (29725 bytes) 
+[maintenance] 01a0598f-ace8-70b0-87c5-b912e360729d · step 1/2 — backed up face.py (22662 bytes) 
+[maintenance] 01a0598f-ace8-70b0-87c5-b912e360729d · step 1/2 — backed up main.py (12 bytes) 
+[maintenance] 01a0598f-ace8-70b0-87c5-b912e360729d · step 1/2 — backed up suzu.json (236 bytes) 
+[maintenance] 01a0598f-ace8-70b0-87c5-b912e360729d · step 1/2 — backed up zen-garden.json (230 bytes) 
+[maintenance] 01a0598f-ace8-70b0-87c5-b912e360729d · step 1/2 — identity preserved: 01a0598f-ace8-70b0-87c5-b912e360729d 
+[maintenance] 01a0598f-ace8-70b0-87c5-b912e360729d · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0598f-ace8-70b0-87c5-b912e360729d · step 1/2 — OK suzu.json (236 bytes verified) 
+[maintenance] 01a0598f-ace8-70b0-87c5-b912e360729d · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0598f-ace8-70b0-87c5-b912e360729d · step 1/2 — OK main.py (12 bytes verified) 
+[maintenance] 01a0598f-ace8-70b0-87c5-b912e360729d · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0598f-ace8-70b0-87c5-b912e360729d · step 1/2 — OK face.py (22662 bytes verified) 
+[maintenance] 01a0598f-ace8-70b0-87c5-b912e360729d · step 1/2 — serial.serialutil.SerialException: ClearCommError failed (OSError(9, 'The handle is invalid.', None, 6)) 
+[maintenance] 01a0598f-ace8-70b0-87c5-b912e360729d · step 1/2 — Adopting the T-Display face (aurora) (failed) ✗ push_tdisplay.py failed: serial.serialutil.SerialException: ClearCommError failed (OSError(9, 'The handle is invalid.', None, 6))
+[maintenance] 01a0598f-ace8-70b0-87c5-b912e360729d · step 2/2 — failed ✗ push_tdisplay.py failed: serial.serialutil.SerialException: ClearCommError failed (OSError(9, 'The handle is invalid.', None, 6))
+[maintenance] adopt saga done for 01a0598f-ace8-70b0-87c5-b912e360729d — admission decides the stream
+[maintenance] COM14: re-identified as ?/? — respawning
+[api] shutdown requested — the resident rests
+catalog: 4 class signature(s) from hardware/classes
+[api] the door is open on http://127.0.0.1:7899 — snapshot + stream, one truth
+suzu resident is up — domains: watcher · devices · moments · sensor · roster
+plug a device and watch the house talk. `tell <label>` rings the bell · `status` · `q` quits.
+control: `suzu pause` / `suzu resume` stop and restart the stream to devices.
+[control] listening on 127.0.0.1:7898 — `suzu pause` / `suzu resume`
+[watcher] sensed COM14
+[sensor] ground: stone-leaded-sparkle · cpu 70% · gpu 88% · mem 58% · disk 59% · up 4185s
+[watcher] identified COM14 → tdisplay-esp32-ch9102 · ?/?
+[devices] COM14 minted identity 01a05995-c4e5-78ae-bc63-69242c354891
+[devices] minding COM14 as Some("tdisplay-esp32-ch9102") (Some("01a05995-c4e5-78ae-bc63-69242c354891")) — state Accepted
+[moments] splash: discovery 01a05995-c4e5-78ae-bc63-69242c354891
+[roster] held 01a05995-c4e5-78ae-bc63-69242c354891 on COM14 (tdisplay-esp32-ch9102) — admission decides the stream
+[api] shutdown requested — the resident rests
+catalog: 4 class signature(s) from hardware/classes
+suzu resident is up — domains: watcher · devices · moments · sensor · roster
+plug a device and watch the house talk. `tell <label>` rings the bell · `status` · `q` quits.
+control: `suzu pause` / `suzu resume` stop and restart the stream to devices.
+[api] the door is open on http://127.0.0.1:7899 — snapshot + stream, one truth
+[control] listening on 127.0.0.1:7898 — `suzu pause` / `suzu resume`
+[watcher] sensed COM14
+[sensor] ground: stone-leaded-sparkle · cpu 67% · gpu 89% · mem 59% · disk 59% · up 4432s
+[watcher] identified COM14 → tdisplay-esp32-ch9102 · ?/?
+[devices] COM14 minted identity 01a05999-8b00-74df-aa06-426af5697a32
+[devices] minding COM14 as Some("tdisplay-esp32-ch9102") (Some("01a05999-8b00-74df-aa06-426af5697a32")) — state Accepted
+[roster] held 01a05999-8b00-74df-aa06-426af5697a32 on COM14 (tdisplay-esp32-ch9102) — admission decides the stream
+[moments] splash: discovery 01a05999-8b00-74df-aa06-426af5697a32
+[api] shutdown requested — the resident rests
+catalog: 4 class signature(s) from hardware/classes
+suzu resident is up — domains: watcher · devices · moments · sensor · roster
+plug a device and watch the house talk. `tell <label>` rings the bell · `status` · `q` quits.
+control: `suzu pause` / `suzu resume` stop and restart the stream to devices.
+[api] the door is open on http://127.0.0.1:7899 — snapshot + stream, one truth
+[control] listening on 127.0.0.1:7898 — `suzu pause` / `suzu resume`
+[watcher] sensed COM14
+[sensor] ground: stone-leaded-sparkle · cpu 66% · gpu 90% · mem 58% · disk 59% · up 4738s
+[watcher] identified COM14 → tdisplay-esp32-ch9102 · ?/?
+[devices] COM14 minted identity 01a0599e-3389-7cc3-9b2f-1596231549a1
+[devices] minding COM14 as Some("tdisplay-esp32-ch9102") (Some("01a0599e-3389-7cc3-9b2f-1596231549a1")) — state Accepted
+[moments] splash: discovery 01a0599e-3389-7cc3-9b2f-1596231549a1
+[roster] held 01a0599e-3389-7cc3-9b2f-1596231549a1 on COM14 (tdisplay-esp32-ch9102) — admission decides the stream
+[api] shutdown requested — the resident rests
+catalog: 4 class signature(s) from hardware/classes
+suzu resident is up — domains: watcher · devices · moments · sensor · roster
+plug a device and watch the house talk. `tell <label>` rings the bell · `status` · `q` quits.
+control: `suzu pause` / `suzu resume` stop and restart the stream to devices.
+[api] the door is open on http://127.0.0.1:7899 — snapshot + stream, one truth
+[control] listening on 127.0.0.1:7898 — `suzu pause` / `suzu resume`
+[watcher] sensed COM14
+[sensor] ground: stone-leaded-sparkle · cpu 62% · gpu 100% · mem 60% · disk 59% · up 5202s
+[watcher] identified COM14 → tdisplay-esp32-ch9102 · ?/?
+[devices] COM14 minted identity 01a059a5-488b-7044-943d-352af39d2ab3
+[devices] minding COM14 as Some("tdisplay-esp32-ch9102") (Some("01a059a5-488b-7044-943d-352af39d2ab3")) — state Accepted
+[moments] splash: discovery 01a059a5-488b-7044-943d-352af39d2ab3
+[roster] held 01a059a5-488b-7044-943d-352af39d2ab3 on COM14 (tdisplay-esp32-ch9102) — admission decides the stream
+[api] shutdown requested — the resident rests
+catalog: 4 class signature(s) from hardware/classes
+suzu resident is up — domains: watcher · devices · moments · sensor · roster
+plug a device and watch the house talk. `tell <label>` rings the bell · `status` · `q` quits.
+control: `suzu pause` / `suzu resume` stop and restart the stream to devices.
+[api] the door is open on http://127.0.0.1:7899 — snapshot + stream, one truth
+[control] listening on 127.0.0.1:7898 — `suzu pause` / `suzu resume`
+[watcher] sensed COM14
+[sensor] ground: stone-leaded-sparkle · cpu 58% · gpu 93% · mem 60% · disk 59% · up 5934s
+[watcher] identified COM14 → tdisplay-esp32-ch9102 · ?/?
+[devices] COM14 minted identity 01a059b0-76cb-7090-9e76-66e38bbc7821
+[devices] minding COM14 as Some("tdisplay-esp32-ch9102") (Some("01a059b0-76cb-7090-9e76-66e38bbc7821")) — state Accepted
+[moments] splash: discovery 01a059b0-76cb-7090-9e76-66e38bbc7821
+[roster] held 01a059b0-76cb-7090-9e76-66e38bbc7821 on COM14 (tdisplay-esp32-ch9102) — admission decides the stream
+[roster] stream detached — 01a059b0-76cb-7090-9e76-66e38bbc7821 on COM14 (maintenance:adopt)
+[maintenance] adopt saga owns 01a059b0-76cb-7090-9e76-66e38bbc7821 on COM14 — the stream is withdrawn
+[maintenance] 01a059b0-76cb-7090-9e76-66e38bbc7821 · step 1/2 — Adopting the T-Display face (aurora) 
+[maintenance] 01a059b0-76cb-7090-9e76-66e38bbc7821 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a059b0-76cb-7090-9e76-66e38bbc7821 · step 1/2 — device files: ['boot.py', 'diorama.py', 'face.py', 'main.py', 'suzu.json', 'zen-garden.json'] 
+[maintenance] 01a059b0-76cb-7090-9e76-66e38bbc7821 · step 1/2 — backed up boot.py (631 bytes) 
+[maintenance] 01a059b0-76cb-7090-9e76-66e38bbc7821 · step 1/2 — backed up diorama.py (29725 bytes) 
+[maintenance] 01a059b0-76cb-7090-9e76-66e38bbc7821 · step 1/2 — backed up face.py (22751 bytes) 
+[maintenance] 01a059b0-76cb-7090-9e76-66e38bbc7821 · step 1/2 — backed up main.py (12 bytes) 
+[maintenance] 01a059b0-76cb-7090-9e76-66e38bbc7821 · step 1/2 — backed up suzu.json (236 bytes) 
+[maintenance] 01a059b0-76cb-7090-9e76-66e38bbc7821 · step 1/2 — backed up zen-garden.json (230 bytes) 
+[maintenance] 01a059b0-76cb-7090-9e76-66e38bbc7821 · step 1/2 — identity preserved: 01a059b0-76cb-7090-9e76-66e38bbc7821 
+[maintenance] 01a059b0-76cb-7090-9e76-66e38bbc7821 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a059b0-76cb-7090-9e76-66e38bbc7821 · step 1/2 — OK suzu.json (236 bytes verified) 
+[maintenance] 01a059b0-76cb-7090-9e76-66e38bbc7821 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a059b0-76cb-7090-9e76-66e38bbc7821 · step 1/2 — OK main.py (12 bytes verified) 
+[maintenance] 01a059b0-76cb-7090-9e76-66e38bbc7821 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a059b0-76cb-7090-9e76-66e38bbc7821 · step 1/2 — OK face.py (22751 bytes verified) 
+[maintenance] 01a059b0-76cb-7090-9e76-66e38bbc7821 · step 1/2 — rebooted — the face should answer its HELLO on the bus 
+[maintenance] 01a059b0-76cb-7090-9e76-66e38bbc7821 · step 2/2 — Handing to the exam 
+[maintenance] adopt saga done for 01a059b0-76cb-7090-9e76-66e38bbc7821 — admission decides the stream
+[maintenance] COM14: re-identified as ?/? — respawning
+[api] shutdown requested — the resident rests
+catalog: 4 class signature(s) from hardware/classes
+suzu resident is up — domains: watcher · devices · moments · sensor · roster
+plug a device and watch the house talk. `tell <label>` rings the bell · `status` · `q` quits.
+control: `suzu pause` / `suzu resume` stop and restart the stream to devices.
+[api] the door is open on http://127.0.0.1:7899 — snapshot + stream, one truth
+[control] listening on 127.0.0.1:7898 — `suzu pause` / `suzu resume`
+[watcher] sensed COM14
+[sensor] ground: stone-leaded-sparkle · cpu 46% · gpu 93% · mem 60% · disk 59% · up 6355s
+[watcher] identified COM14 → tdisplay-esp32-ch9102 · ?/?
+[devices] COM14 minted identity 01a059b6-e1fe-70d1-8d85-06f1537b9b83
+[devices] minding COM14 as Some("tdisplay-esp32-ch9102") (Some("01a059b6-e1fe-70d1-8d85-06f1537b9b83")) — state Accepted
+[roster] held 01a059b6-e1fe-70d1-8d85-06f1537b9b83 on COM14 (tdisplay-esp32-ch9102) — admission decides the stream
+[moments] splash: discovery 01a059b6-e1fe-70d1-8d85-06f1537b9b83
+[roster] stream detached — 01a059b6-e1fe-70d1-8d85-06f1537b9b83 on COM14 (maintenance:adopt)
+[maintenance] adopt saga owns 01a059b6-e1fe-70d1-8d85-06f1537b9b83 on COM14 — the stream is withdrawn
+[maintenance] 01a059b6-e1fe-70d1-8d85-06f1537b9b83 · step 1/2 — Adopting the T-Display face (aurora) 
+[maintenance] 01a059b6-e1fe-70d1-8d85-06f1537b9b83 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a059b6-e1fe-70d1-8d85-06f1537b9b83 · step 1/2 — device files: ['boot.py', 'diorama.py', 'face.py', 'main.py', 'suzu.json', 'zen-garden.json'] 
+[maintenance] 01a059b6-e1fe-70d1-8d85-06f1537b9b83 · step 1/2 — backed up boot.py (631 bytes) 
+[maintenance] 01a059b6-e1fe-70d1-8d85-06f1537b9b83 · step 1/2 — backed up diorama.py (29725 bytes) 
+[maintenance] 01a059b6-e1fe-70d1-8d85-06f1537b9b83 · step 1/2 — backed up face.py (22751 bytes) 
+[maintenance] 01a059b6-e1fe-70d1-8d85-06f1537b9b83 · step 1/2 — backed up main.py (12 bytes) 
+[maintenance] 01a059b6-e1fe-70d1-8d85-06f1537b9b83 · step 1/2 — backed up suzu.json (236 bytes) 
+[maintenance] 01a059b6-e1fe-70d1-8d85-06f1537b9b83 · step 1/2 — backed up zen-garden.json (230 bytes) 
+[maintenance] 01a059b6-e1fe-70d1-8d85-06f1537b9b83 · step 1/2 — identity preserved: 01a059b6-e1fe-70d1-8d85-06f1537b9b83 
+[maintenance] 01a059b6-e1fe-70d1-8d85-06f1537b9b83 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a059b6-e1fe-70d1-8d85-06f1537b9b83 · step 1/2 — OK suzu.json (236 bytes verified) 
+[maintenance] 01a059b6-e1fe-70d1-8d85-06f1537b9b83 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a059b6-e1fe-70d1-8d85-06f1537b9b83 · step 1/2 — OK main.py (12 bytes verified) 
+[maintenance] 01a059b6-e1fe-70d1-8d85-06f1537b9b83 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a059b6-e1fe-70d1-8d85-06f1537b9b83 · step 1/2 — OK face.py (22751 bytes verified) 
+[maintenance] 01a059b6-e1fe-70d1-8d85-06f1537b9b83 · step 1/2 — rebooted — the face should answer its HELLO on the bus 
+[maintenance] 01a059b6-e1fe-70d1-8d85-06f1537b9b83 · step 2/2 — Handing to the exam 

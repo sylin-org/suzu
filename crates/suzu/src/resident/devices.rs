@@ -391,6 +391,17 @@ pub enum DevicesCmd {
     },
 }
 
+/// Ports a maintenance saga currently owns. The watcher consults
+/// this before touching a port: a probe's DTR/RTS toggle mid-saga is
+/// a hard reset under the push — two masters on one port, the oldest
+/// disease on the bench (ADR-0002).
+pub(crate) fn held_ports() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
+    use std::sync::OnceLock;
+    static HELD: OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+        OnceLock::new();
+    HELD.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
+}
+
 pub struct Devices {
     events: Sender<HouseEvent>,
     door: mpsc::Sender<DevicesCmd>,
@@ -1094,7 +1105,7 @@ impl Devices {
             Some(f) => Some(f),
             None => {
                 // the dress the face reports, resolved to its install id
-                let current = self.devices.get(port).and_then(|d| {
+                self.devices.get(port).and_then(|d| {
                     self.catalog
                         .dress(
                             d.facts.class.as_deref().unwrap_or_default(),
@@ -1102,8 +1113,7 @@ impl Devices {
                             d.facts.mount.as_deref(),
                         )
                         .map(|info| info.id.clone())
-                });
-                current
+                })
             }
         };
 
@@ -1122,6 +1132,7 @@ impl Devices {
         }
         self.in_maintenance
             .insert(port.to_string(), (kind.to_string(), faceplate.clone()));
+        held_ports().lock().unwrap().insert(port.to_string());
         self.rows_dirty = true;
 
         let _ = self.events.send(HouseEvent::MaintenanceStarted {
@@ -1157,9 +1168,26 @@ impl Devices {
             if let Err(e) = &outcome {
                 println!("[maintenance] {port3}: failed — {e:#}");
             }
+            // The face needs seconds to boot and compile its source
+            // after the push; the identity probe retries, bounded —
+            // a face that answers suzu/1 rides home with its facts.
             let port4 = port3.clone();
             let fresh = tokio::task::spawn_blocking(move || {
-                super::watcher::identify_facts(&catalog_fresh, &port4, vid, pid).ok()
+                let mut out = None;
+                for attempt in 0..6 {
+                    match super::watcher::identify_facts(&catalog_fresh, &port4, vid, pid) {
+                        Ok(facts) if facts.proto.as_deref() == Some("suzu/1") => {
+                            out = Some(facts);
+                            break;
+                        }
+                        other => {
+                            out = other.ok();
+                        }
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(2500));
+                    let _ = attempt;
+                }
+                out
             })
             .await
             .unwrap_or(None);
@@ -1191,6 +1219,7 @@ impl Devices {
             ok,
         });
         self.in_maintenance.remove(port);
+        held_ports().lock().unwrap().remove(port);
         if let Some(d) = self.devices.get_mut(port) {
             d.streaming.store(false, Ordering::Relaxed);
         }
