@@ -1,4 +1,4 @@
-name: portrait-numerals
+name: numerals
 class: esp8266-oled-v2-class
 display_name: BIG!
 blurb: Easy to read from a distance
@@ -28,10 +28,10 @@ rings:
 # source (tools/build_faceplates.py) — regenerate, never hand-edit.
 variants:
   - mount: usb-down
-    id: portrait-numerals
+    id: numerals
     blurb: hangs upwards — the connector sits at the bottom
   - mount: usb-up
-    id: portrait-numerals-inverted
+    id: numerals-up
     blurb: hangs downwards — the connector sits at the top
 
 # The tool installs what the faceplate declares — files are pushed

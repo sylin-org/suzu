@@ -29,6 +29,7 @@ BAND_U = 48               # the yellow band starts here (16 px wide)
 # composition: band strip at the panel's other edge, numerals after.
 NUM_U = 0                 # the numeral column's left edge
 BAND_X = BAND_U           # the strip's left edge (16 px wide)
+DRESS_ID = "slate-up"            # the variant's wire id; the build sets it per mount
 TEXT_FLIP = True         # left-aligned mounts rotate the text area 180°
                           # — the words would stand on their head otherwise
 if INVERT:
@@ -179,7 +180,7 @@ def descriptor():
         pass
     d["proto"] = "suzu/1"
     d["version"] = "1.0.0"             # the faceplate.yaml version: the currency gate reads it
-    d["faceplate"] = "portrait-slate-inverted" if INVERT else "portrait-slate"
+    d["faceplate"] = DRESS_ID
     d["coverage"] = {
         "grounds": ["report"],
         "slots": {"report": ["cpu", "mem", "gpu"]},

@@ -255,7 +255,7 @@ def resolve_dress_dir(faceplate):
     declare their hangs in the manifest; single-type faceplates bundle
     at their own root. The flat legacy layout still resolves."""
     import yaml
-    root = pathlib.Path("faceplates/esp8266-oled-v2")
+    root = pathlib.Path("hardware/classes/esp8266-oled-v2/faceplates")
     for mf in sorted(root.glob("*/faceplate.yaml")):
         face = yaml.safe_load(mf.read_text(encoding="utf-8")) or {}
         for v in face.get("variants") or []:
@@ -277,7 +277,7 @@ def main():
     # main.py / face.mpy / art bins, and its id goes into suzu.json.
     # Variant-type faceplates bundle one directory per hang beside
     # their manifest; the id resolves through the manifest's variants.
-    faceplate = "portrait-numerals"
+    faceplate = "numerals"
     if "--faceplate" in sys.argv:
         faceplate = sys.argv[sys.argv.index("--faceplate") + 1]
     dress_dir = resolve_dress_dir(faceplate)

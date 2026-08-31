@@ -103,7 +103,7 @@ pub fn run(
     class: Option<&str>,
     spec: Option<&FrameSpec>,
     zones: &[(usize, usize, [u8; 3])],
-    currency: Option<(&str, &str)>,
+    currency: Option<(&str, Option<&str>)>,
 ) -> Report {
     let mut report = Report { passed: true, steps: Vec::new() };
     let fail = |r: &mut Report, name: &str, detail: String| {
@@ -130,6 +130,14 @@ pub fn run(
     // face in an outdated dress need not prove its pixels to be told
     // the remedy. ──
     if let Some((worn, declared)) = currency {
+        let Some(declared) = declared else {
+            fail(
+                &mut report,
+                "currency",
+                format!("dress {worn} is not declared for this class — update the faceplate to join the stream"),
+            );
+            return report;
+        };
         match parse_version(declared) {
             None => report.step(
                 "currency",

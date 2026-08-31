@@ -15,12 +15,13 @@ math_cos = math.cos             # the stage's circle, one lookup each
 math_sin = math.sin
 
 W, H = 64, 128            # portrait: u 0..63 across, v 0..127 down
-INVERT = False            # the -inverted build flips this (tools/build_faceplates.py):
+INVERT = True            # the -inverted build flips this (tools/build_faceplates.py):
                           # the composition mirrors along its long axis, so the
                           # board hung connector-up reads exactly as this reads
                           # connector-down. Same art, same words, other hang.
 BAND_U = 48               # the yellow band starts here (16 px wide)
-TEXT_FLIP = False         # left-aligned mounts rotate the text area 180°
+DRESS_ID = "numerals-up"            # the variant's wire id; the build sets it per mount
+TEXT_FLIP = True         # left-aligned mounts rotate the text area 180°
                           # — the words would stand on their head otherwise
 # The glass's painted yellow strip is fixed to the glass: it does not
 # move when the board is hung the other way. The 180° remap alone
@@ -178,7 +179,7 @@ def descriptor():
         pass
     d["proto"] = "suzu/1"
     d["version"] = "2.0.0"             # the faceplate.yaml version: the currency gate reads it
-    d["faceplate"] = "portrait-numerals-inverted" if INVERT else "portrait-numerals"
+    d["faceplate"] = DRESS_ID
     d["coverage"] = {
         "grounds": ["report"],
         "slots": {"report": ["cpu", "mem", "gpu"]},

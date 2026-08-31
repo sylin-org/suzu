@@ -598,13 +598,26 @@ impl Devices {
         // The currency question (ADR-0005): what the face's descriptor
         // says it wears, vs what the declaration ships. None when the
         // declaration states no version — then the gate stays open.
-        let currency = facts
-            .faceplate
-            .as_deref()
-            .zip(facts.class.as_deref())
-            .and_then(|(fp, class)| self.catalog.faceplate(class, fp))
-            .and_then(|f| f.version.clone())
-            .map(|declared| (facts.version.clone().unwrap_or_default(), declared));
+        // The currency question (ADR-0005): what the face's descriptor
+        // says it wears, vs what the declaration ships. A dress the
+        // class does not declare is held like a stale one — the
+        // remedy is the same. None only when the declaration states
+        // no version, or the class declares no faceplates at all.
+        let currency = match (&facts.faceplate, &facts.class) {
+            (Some(fp), Some(class)) => {
+                let declared = self.catalog.faceplate(class, fp);
+                if declared.is_none()
+                    && !self.catalog.faceplates_for_class(class).is_empty()
+                {
+                    Some((fp.clone(), None)) // worn, undeclared
+                } else {
+                    declared
+                        .and_then(|f| f.version.clone())
+                        .map(|v| (facts.version.clone().unwrap_or_default(), Some(v)))
+                }
+            }
+            _ => None,
+        };
         let streaming2 = Arc::clone(&streaming);
         let close2 = Arc::clone(&close);
         let join = std::thread::Builder::new()
@@ -1025,6 +1038,25 @@ impl Devices {
         let vid = device.facts.vid;
         let pid = device.facts.pid;
 
+        // A bare ask (Update Dress) keeps the dress the face wears
+        // when that dress is still declared; anything else falls to
+        // the saga's own default — never a hardcoded friend.
+        let faceplate = match faceplate {
+            Some(f) => Some(f),
+            None => {
+                let current = self
+                    .devices
+                    .get(port)
+                    .and_then(|d| d.facts.faceplate.clone());
+                match (&current, &class) {
+                    (Some(fp), Some(c)) if self.catalog.faceplate(c, fp).is_some() => {
+                        Some(fp.clone())
+                    }
+                    _ => None,
+                }
+            }
+        };
+
         // Detach the stream for the whole saga, then the port itself.
         let _ = self.events.send(HouseEvent::StreamDetached {
             device_id: device_id.clone(),
@@ -1214,7 +1246,7 @@ fn session_thread(
     device_id: Option<String>,
     class: Option<String>,
     identity_store: Option<String>,
-    currency: Option<(String, String)>,
+    currency: Option<(String, Option<String>)>,
 ) {
     // One master per port, with grace: a retired session's thread may
     // still be exiting (a capture takes up to 8 s), so the open
@@ -1246,14 +1278,16 @@ fn session_thread(
 
     // The admission exam runs before anything flows. Its verdict goes
     // to the roster; the roster's StreamAttached opens the gate.
-    let currency_refs = currency.as_ref().map(|(w, c)| (w.as_str(), c.as_str()));
+    let exam_currency = currency
+        .as_ref()
+        .map(|(w, c)| (w.as_str(), c.as_deref()));
     if suzu {
         let report = admission::run(
             &mut serial,
             class.as_deref(),
             spec.as_ref(),
             &zones,
-            currency_refs,
+            exam_currency,
         );
         let _ = events.send(HouseEvent::AdmissionReport {
             device_id: device_id.clone().unwrap_or_default(),
@@ -1279,7 +1313,7 @@ fn session_thread(
         session_loop(
             &mut serial, &slot, &substrate, &close, &streaming, suzu, &port,
             spec, zones, &events, &jobs, &media_watched, voice, device_id,
-            class, currency_refs,
+            class, currency.clone(),
         );
     }));
     if outcome.is_err() {
@@ -1359,7 +1393,7 @@ fn session_loop(
     voice: RingVoice,
     device_id: Option<String>,
     class: Option<String>,
-    currency: Option<(&str, &str)>,
+    currency: Option<(String, Option<String>)>,
 ) {
     let mut named: Option<String> = None;
     let mut seq: u8 = 0;
@@ -1407,12 +1441,15 @@ fn session_loop(
                 }
                 Ask::Admission => {
                     if suzu {
+                        let cur = currency
+                            .as_ref()
+                            .map(|(w, c)| (w.as_str(), c.as_deref()));
                         let report = admission::run(
                             serial,
                             class.as_deref(),
                             spec.as_ref(),
                             &zones,
-                            currency,
+                            cur,
                         );
                         let _ = events.send(HouseEvent::AdmissionReport {
                             device_id: device_id.clone().unwrap_or_default(),

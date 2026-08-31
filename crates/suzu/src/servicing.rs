@@ -9,7 +9,7 @@ use std::thread;
 use std::time::Duration;
 
 const FACEPLATE_MAIN: &str =
-    include_str!("../../../faceplates/esp8266-oled-v2/portrait-numerals/down-mount/main.py");
+    include_str!("../../../hardware/classes/esp8266-oled-v2/faceplates/numerals/down-mount/main.py");
 
 fn backup_dir(device_id: &str) -> PathBuf {
     PathBuf::from("backups").join(device_id)

@@ -544,16 +544,27 @@ fn rp2040_factory(
 
 // ── the esp8266 sagas ───────────────────────────────────────────────
 
+/// The dress a bare saga installs when the keeper named none: the
+/// class's first declaration. (Callers that know the face's current
+/// dress pass it; this is the last resort, not the default path.)
+fn default_dress(catalog: &Catalog) -> &str {
+    catalog
+        .faceplates_for_class("esp8266-oled-v2-class")
+        .first()
+        .map(|f| f.id.as_str())
+        .unwrap_or("numerals")
+}
+
 /// An ancestor walks in: the full install (the proven fresh push that
 /// gives it the suzu face, identity kept), then the exam decides.
 fn esp8266_adopt(
     saga: &mut Saga,
     port: &str,
     device_id: &str,
-    _catalog: &Catalog,
+    catalog: &Catalog,
     faceplate: Option<&str>,
 ) -> Result<()> {
-    let dress = faceplate.unwrap_or("portrait-numerals");
+    let dress = faceplate.unwrap_or(default_dress(catalog));
     saga.step(&format!("Installing the suzu face ({dress})"), |voice| {
         push_face_files(voice, port, device_id, true, Some(dress)).map(|out| last_line(&out))
     })?;
@@ -564,7 +575,7 @@ fn esp8266_factory(
     saga: &mut Saga,
     port: &str,
     device_id: &str,
-    _catalog: &Catalog,
+    catalog: &Catalog,
     faceplate: Option<&str>,
 ) -> Result<()> {
     saga.step("Erasing the flash", |voice| {
@@ -579,7 +590,7 @@ fn esp8266_factory(
     saga.step("Flashing MicroPython", |voice| {
         esptool(voice, port, &args).map(|_| ())
     })?;
-    let dress = faceplate.unwrap_or("portrait-numerals");
+    let dress = faceplate.unwrap_or(default_dress(catalog));
     saga.step(&format!("Installing the suzu face ({dress})"), |voice| {
         push_face_files(voice, port, device_id, true, Some(dress)).map(|out| last_line(&out))
     })?;

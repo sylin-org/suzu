@@ -21,7 +21,7 @@ import time
 PORT = sys.argv[1] if len(sys.argv) > 1 else "COM24"
 DEVICE_ID = sys.argv[2] if len(sys.argv) > 2 else "019d9460-4561-7196-a17d-ff53458fb039"
 BASE = "firmware/suzu-d/esp8266-oled-v2/"
-FACEPLATE = "faceplates/esp8266-oled-v2/portrait-numerals/main.py"
+FACEPLATE = "hardware/classes/esp8266-oled-v2/faceplates/numerals/down-mount/main.py"
 
 p = serial.Serial(PORT, 115200, timeout=0.1)
 
@@ -190,7 +190,7 @@ payload = [
     ("icons.py", open(BASE + "icons.py", "rb").read()),
     ("profont_10.py", open(BASE + "profont_10.py", "rb").read()),
     ("suzu.json", json.dumps(suzu).encode()),
-    ("main.py", open("faceplates/esp8266-oled-v2/portrait-numerals/main.py", "rb").read()),
+    ("main.py", open("hardware/classes/esp8266-oled-v2/faceplates/numerals/down-mount/main.py", "rb").read()),
 ]
 
 for name, data in payload:

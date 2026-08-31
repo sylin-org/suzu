@@ -22,7 +22,8 @@ from pathlib import Path
 import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
-FACEPLATES = ROOT / "faceplates"
+# A class owns its dresses: hardware/classes/<class>/faceplates/<face>/
+FACEPLATES = ROOT / "hardware" / "classes"
 
 CANVAS_FLIP = {"usb-up", "usb-right"}
 TEXT_FLIP = {"usb-up", "usb-left"}
@@ -47,8 +48,10 @@ def build_variant(face_dir, faceplate_name, variant):
         text = text.replace("INVERT = False", "INVERT = True", 1)
     if mount in TEXT_FLIP:
         text = text.replace("TEXT_FLIP = False", "TEXT_FLIP = True", 1)
-    text = re.sub(r'(d\["faceplate"\] = ")[^"]*(")',
-                  rf"\g<1>{variant['id']}\g<2>", text, count=1)
+    # the variant's wire id rides one constant — the descriptor reports
+    # it whichever way the canvas turned
+    text = re.sub(r'(DRESS_ID = ")[^"]*(")',
+                  r'\g<1>' + variant["id"] + r'\g<2>', text, count=1)
     vdir.mkdir(parents=True, exist_ok=True)
     (vdir / "face.py").write_text(text, encoding="utf-8")
 
@@ -81,9 +84,10 @@ def main():
     wanted = set(sys.argv[1:])
     ok = True
     for class_dir in sorted(FACEPLATES.iterdir()):
-        if not class_dir.is_dir():
+        fp_root = class_dir / "faceplates"
+        if not class_dir.is_dir() or not fp_root.is_dir():
             continue
-        for face_dir in sorted(class_dir.iterdir()):
+        for face_dir in sorted(fp_root.iterdir()):
             mf = face_dir / "faceplate.yaml"
             if not mf.exists():
                 continue

@@ -1,4 +1,4 @@
-name: portrait-slate
+name: slate
 class: esp8266-oled-v2-class
 display_name: Slate
 blurb: A console readout — block digits, honest gauges, an embossed name
@@ -29,16 +29,16 @@ rings:
 # source (tools/build_faceplates.py) — regenerate, never hand-edit.
 variants:
   - mount: usb-down
-    id: portrait-slate
+    id: slate
     blurb: hangs upwards — the connector sits at the bottom
   - mount: usb-up
-    id: portrait-slate-inverted
+    id: slate-up
     blurb: hangs downwards — the connector sits at the top
   - mount: usb-left
-    id: portrait-slate-left
+    id: slate-left
     blurb: landscape — the connector at the left; the words turn to read upright
   - mount: usb-right
-    id: portrait-slate-right
+    id: slate-right
     blurb: landscape — the connector at the right; the words turn to read upright
 
 # The tool installs what the faceplate declares — files are pushed

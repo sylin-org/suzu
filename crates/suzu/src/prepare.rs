@@ -21,19 +21,26 @@ struct FaceplateDecl {
 /// The faceplates declared in the repo, keyed by class id.
 fn faceplates_for(class: &str) -> Vec<FaceplateDecl> {
     let mut out = Vec::new();
-    let root = std::path::Path::new("faceplates");
+    // A class owns its dresses: hardware/classes/<class>/faceplates/*/
+    let root = std::path::Path::new("hardware/classes");
     let Ok(entries) = std::fs::read_dir(root) else {
         return out;
     };
     for dir in entries.flatten() {
-        let decl = dir.path().join("faceplate.yaml");
-        let Ok(text) = std::fs::read_to_string(&decl) else {
+        let fp_root = dir.path().join("faceplates");
+        let Ok(faces) = std::fs::read_dir(&fp_root) else {
             continue;
         };
-        if let Ok(d) = serde_yaml::from_str::<FaceplateDecl>(&text)
-            && d.class == class {
-                out.push(d);
-            }
+        for face in faces.flatten() {
+            let decl = face.path().join("faceplate.yaml");
+            let Ok(text) = std::fs::read_to_string(&decl) else {
+                continue;
+            };
+            if let Ok(d) = serde_yaml::from_str::<FaceplateDecl>(&text)
+                && d.class == class {
+                    out.push(d);
+                }
+        }
     }
     out
 }

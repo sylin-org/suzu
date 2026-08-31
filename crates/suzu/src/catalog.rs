@@ -92,72 +92,67 @@ fn mount_dir_name(mount: &str) -> String {
 }
 
 fn scan_faceplates(root: PathBuf) -> Vec<FaceplateInfo> {
+    // The root's own entries are the faces: <class>/faceplates/<face>/
     let mut out = Vec::new();
-    let Ok(class_dirs) = std::fs::read_dir(&root) else {
+    let Ok(faces) = std::fs::read_dir(&root) else {
         return out;
     };
-    for class_dir in class_dirs.flatten().map(|e| e.path()).filter(|p| p.is_dir()) {
-        let Ok(faces) = std::fs::read_dir(&class_dir) else {
+    for face_dir in faces.flatten().map(|e| e.path()).filter(|p| p.is_dir()) {
+        let Ok(text) = std::fs::read_to_string(face_dir.join("faceplate.yaml")) else {
             continue;
         };
-        for face_dir in faces.flatten().map(|e| e.path()).filter(|p| p.is_dir()) {
-            let Ok(text) = std::fs::read_to_string(face_dir.join("faceplate.yaml")) else {
-                continue;
-            };
-            let Ok(decl) = serde_yaml::from_str::<FaceplateDecl>(&text) else {
-                eprintln!("catalog: faceplate declaration unreadable in {}", face_dir.display());
-                continue;
-            };
-            let rings = RingDialect {
-                qualifiers: decl.rings.as_ref().map(|r| r.qualifiers).unwrap_or(true),
-                text: decl.rings.as_ref().map(|r| r.text).unwrap_or(true),
-            };
-            let display_name =
-                decl.display_name.clone().unwrap_or_else(|| decl.name.clone());
-            match decl.variants {
-                // Variant type: one dress per declared hang, bundled in
-                // its own mount directory beside the manifest.
-                Some(variants) if !variants.is_empty() => {
-                    for v in &variants {
-                        let dir = face_dir.join(mount_dir_name(&v.mount));
-                        if !dir.is_dir() {
-                            eprintln!(
-                                "catalog: {} declares {} but the {} bundle is missing",
-                                display_name, v.mount, mount_dir_name(&v.mount)
-                            );
-                            continue;
-                        }
-                        let has_preview = dir.join("preview.gif").exists()
-                            || dir.join("preview.png").exists();
-                        out.push(FaceplateInfo {
-                            display_name: display_name.clone(),
-                            id: v.id.clone(),
-                            class: decl.class.clone(),
-                            blurb: v.blurb.clone().or_else(|| decl.blurb.clone()),
-                            mount: Some(v.mount.clone()),
-                            version: decl.version.clone(),
-                            has_preview,
-                            rings,
-                            dir,
-                        });
+        let Ok(decl) = serde_yaml::from_str::<FaceplateDecl>(&text) else {
+            eprintln!("catalog: faceplate declaration unreadable in {}", face_dir.display());
+            continue;
+        };
+        let rings = RingDialect {
+            qualifiers: decl.rings.as_ref().map(|r| r.qualifiers).unwrap_or(true),
+            text: decl.rings.as_ref().map(|r| r.text).unwrap_or(true),
+        };
+        let display_name = decl.display_name.clone().unwrap_or_else(|| decl.name.clone());
+        match decl.variants {
+            // Variant type: one dress per declared hang, bundled in
+            // its own mount directory beside the manifest.
+            Some(variants) if !variants.is_empty() => {
+                for v in &variants {
+                    let dir = face_dir.join(mount_dir_name(&v.mount));
+                    if !dir.is_dir() {
+                        eprintln!(
+                            "catalog: {} declares {} but the {} bundle is missing",
+                            display_name, v.mount, mount_dir_name(&v.mount)
+                        );
+                        continue;
                     }
-                }
-                // Single type: one dress, bundled at the faceplate's root.
-                _ => {
-                    let has_preview = face_dir.join("preview.gif").exists()
-                        || face_dir.join("preview.png").exists();
+                    let has_preview = dir.join("preview.gif").exists()
+                        || dir.join("preview.png").exists();
                     out.push(FaceplateInfo {
-                        display_name,
-                        id: decl.name,
-                        class: decl.class,
-                        blurb: decl.blurb,
-                        mount: Some("usb-down".into()),
-                        version: decl.version,
+                        display_name: display_name.clone(),
+                        id: v.id.clone(),
+                        class: decl.class.clone(),
+                        blurb: v.blurb.clone().or_else(|| decl.blurb.clone()),
+                        mount: Some(v.mount.clone()),
+                        version: decl.version.clone(),
                         has_preview,
                         rings,
-                        dir: face_dir,
+                        dir,
                     });
                 }
+            }
+            // Single type: one dress, bundled at the faceplate's root.
+            _ => {
+                let has_preview = face_dir.join("preview.gif").exists()
+                    || face_dir.join("preview.png").exists();
+                out.push(FaceplateInfo {
+                    display_name,
+                    id: decl.name,
+                    class: decl.class,
+                    blurb: decl.blurb,
+                    mount: Some("usb-down".into()),
+                    version: decl.version,
+                    has_preview,
+                    rings,
+                    dir: face_dir,
+                });
             }
         }
     }
@@ -329,15 +324,11 @@ impl Catalog {
             let mut classes = Vec::new();
             let mut index: HashMap<u16, Vec<(Option<u16>, usize)>> = HashMap::new();
             let mut manifests: HashMap<String, ClassManifest> = HashMap::new();
-            // The faceplates root sits beside `hardware/` — the repo
-            // root; try the parent and the grandparent so both repo
-            // layouts and SUZU_HARDWARE_DIR resolve.
+            // A class owns its dresses: each class directory carries
+            // its faceplates beside its manifest.
             let mut faceplates = Vec::new();
-            for dir in [root.parent(), root.parent().and_then(|p| p.parent())].into_iter().flatten() {
-                faceplates = scan_faceplates(dir.join("faceplates"));
-                if !faceplates.is_empty() {
-                    break;
-                }
+            for dir in &class_dirs {
+                faceplates.extend(scan_faceplates(dir.join("faceplates")));
             }
             for dir in class_dirs {
                 if let Ok(text) = std::fs::read_to_string(dir.join("manifest.yaml"))
