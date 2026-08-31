@@ -6,3 +6,5 @@ panels.txt
 say-test.txt
 shot-*.png
 ear-debug.log
+target/
+__pycache__/
