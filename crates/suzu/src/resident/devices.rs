@@ -1073,7 +1073,7 @@ impl Devices {
             anyhow::bail!("{port}: no minded device");
         };
         let Some(device_id) = device.device_id().map(|s| s.to_string()) else {
-            anyhow::bail!("{port}: no device_id — adopt the individual first");
+            anyhow::bail!("{port}: no device_id — the house mints at identification");
         };
         let class = device.facts.class.clone();
         // The dress must be one the class declares — refused by name,
@@ -1174,18 +1174,15 @@ impl Devices {
             let port4 = port3.clone();
             let fresh = tokio::task::spawn_blocking(move || {
                 let mut out = None;
-                for attempt in 0..6 {
+                for _ in 0..6 {
                     match super::watcher::identify_facts(&catalog_fresh, &port4, vid, pid) {
                         Ok(facts) if facts.proto.as_deref() == Some("suzu/1") => {
                             out = Some(facts);
                             break;
                         }
-                        other => {
-                            out = other.ok();
-                        }
+                        other => out = other.ok(),
                     }
                     std::thread::sleep(std::time::Duration::from_millis(2500));
-                    let _ = attempt;
                 }
                 out
             })

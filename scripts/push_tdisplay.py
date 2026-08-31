@@ -23,6 +23,9 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from push_firmware import Repl, resolve_dress  # noqa: E402
 
 CLASS_ROOT = "hardware/classes/tdisplay-esp32-ch9102/faceplates"
+# The face ships as SOURCE: the board compiles it at boot (a few
+# seconds, once). A stale face.mpy on the device would shadow the
+# fresh source with wrong-vintage bytecode — the push removes it.
 BUNDLE_FILES = ["main.py", "face.py"]
 
 
@@ -50,7 +53,7 @@ def main():
     suzu = {
         "proto": "suzu/1",
         "companion": "firefly",
-        "family": "esp32-tdisplay",
+        "family": "firefly",
         "variant": "tdisplay",
         "faceplate": dress_name,
         "mount": dress_mount,
@@ -60,6 +63,8 @@ def main():
     if device_id:
         suzu["device_id"] = device_id
         print("identity preserved:", device_id)
+    # no id given: the house mints at identification and writes the
+    # deed through its own session — never an empty id on the device
 
     payload = [("suzu.json", json.dumps(suzu).encode())]
     for name in BUNDLE_FILES:
@@ -68,6 +73,10 @@ def main():
 
     for name, data in payload:
         repl.write_file(name, data)
+
+    # A leftover face.mpy from an older push would shadow the fresh
+    # source with the wrong vintage — remove it before the reboot.
+    repl.exec("import os; os.remove('face.mpy') if 'face.mpy' in os.listdir() else None")
 
     print("pushed %d files — soft reboot into the face" % len(payload))
     # soft_reboot closes the port; the face is on its own from here.

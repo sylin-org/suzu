@@ -7,7 +7,7 @@ use crate::catalog::Catalog;
 use std::sync::Arc;
 use crate::probe;
 use serialport::SerialPortType;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 use tokio::sync::broadcast::Sender;
 use tokio::sync::mpsc;
@@ -18,6 +18,10 @@ pub struct WatcherLinks {
     pub events: Sender<HouseEvent>,
     pub devices: mpsc::Sender<super::devices::DevicesCmd>,
 }
+
+/// Settled probes a known-class port gets to speak suzu/1 before its
+/// silence is believed (each probe carries its own boot-settle pause).
+const BOOT_PATIENCE: u32 = 5;
 
 pub struct Watcher {
     pub links: WatcherLinks,
@@ -85,6 +89,12 @@ impl Watcher {
         // port is a moment, not a verdict — tonight's lesson: a port
         // marked seen before a panicking probe never came back.
         let mut failed: HashSet<String> = HashSet::new();
+        // A known-class port that has not spoken suzu/1 yet is a face
+        // mid-boot (source compile takes seconds on the bigger boards),
+        // not an unknown-firmware verdict. It re-enters the probe queue,
+        // bounded — after BOOT_PATIENCE settled probes the silence is
+        // believed and the board is minded as unknown firmware.
+        let mut booting: HashMap<String, u32> = HashMap::new();
         loop {
             let ports = match tokio::task::spawn_blocking(serialport::available_ports).await {
                 Ok(Ok(ports)) => ports,
@@ -155,16 +165,29 @@ impl Watcher {
 
                 // Report-before-minding: an unreachable port is a fact
                 // for the house, never a device to mind. A class the
-                // catalog knows runs suzu - a silent descriptor means
-                // the face was mid-boot, not a verdict on its firmware;
-                // one settled re-probe before believing the silence.
+                // catalog knows runs suzu — a silent descriptor is a
+                // face mid-boot, not a firmware verdict: settled
+                // re-probes until patience runs out, then belief.
                 let facts = match identified {
+                    Ok(facts) if facts.proto.is_none() && facts.class.is_some() => {
+                        let tries = booting.entry(p.port_name.clone()).or_insert(0);
+                        *tries += 1;
+                        if *tries <= BOOT_PATIENCE {
+                            seen.remove(&p.port_name); // back in the queue
+                            continue;
+                        }
+                        booting.remove(&p.port_name);
+                        failed.remove(&p.port_name);
+                        facts // believed silent: unknown firmware, minded honestly
+                    }
                     Ok(facts) => {
+                        booting.remove(&p.port_name);
                         failed.remove(&p.port_name);
                         facts
                     }
                     Err(reason) => {
                         // Back in the queue — the next cycle retries.
+                        booting.remove(&p.port_name);
                         seen.remove(&p.port_name);
                         if first_attempt {
                             let _ = self.links.events.send(HouseEvent::PortBusy {

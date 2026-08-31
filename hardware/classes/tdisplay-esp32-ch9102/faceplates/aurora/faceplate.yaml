@@ -2,7 +2,7 @@ name: aurora
 class: tdisplay-esp32-ch9102
 display_name: Aurora
 blurb: A console in terminal digits — the lake rendered as light
-version: "1.0.0"
+version: "1.0.1"
 mount: usb-down
 
 # A single-type faceplate: one dress, bundled at this root. When the

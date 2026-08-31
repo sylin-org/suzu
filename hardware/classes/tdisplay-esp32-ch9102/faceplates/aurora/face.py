@@ -28,7 +28,7 @@ import select
 import sys
 import time
 
-from machine import Pin, SPI, UART, unique_id
+from machine import Pin, SPI, unique_id
 
 import ujson
 import ubinascii
@@ -36,7 +36,7 @@ import ubinascii
 # ── the dress tuple (stamped by tools/build_faceplates.py) ──
 DRESS_ID = "aurora"
 DRESS_MOUNT = "down"
-DRESS_VERSION = "1.0.0"
+DRESS_VERSION = "1.0.1"
 
 W = 240
 H = 135
@@ -77,7 +77,6 @@ _SIN_LEN = 64
 
 # ── state ──
 tft = None
-u = None
 last_rx = None
 label = "suzu"
 values = {"cpu": 255, "mem": 255, "gpu": 255}
@@ -407,7 +406,7 @@ def r(msg, checksum=False):
         for c in msg:
             x ^= ord(c)
         msg += "*%02x" % x
-    u.write(msg + "\n")
+    sys.stdout.write(msg + "\n")
     time.sleep_ms(2)
 
 def cmd(line):
@@ -671,9 +670,10 @@ def decay_tick(now):
         redraw_idle()
 
 def main():
-    global u, idle, idle_init, idle_t, last_rx
+    global idle, idle_init, idle_t, last_rx
     gc.collect()
-    u = UART(0, 115200)
+    # the console is the wire on ESP32 (sys.stdin/stdout); a UART(0)
+    # re-init kills the REPL console — the harvested PoC knew it
     load_label()
     has_display = init_display()
     if not has_display:
