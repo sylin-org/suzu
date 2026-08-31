@@ -9,3 +9,4 @@ ear-debug.log
 target/
 __pycache__/
 backups/
+workbench.log
