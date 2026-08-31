@@ -20,6 +20,16 @@ INVERT = False            # the -inverted build flips this (tools/build_faceplat
                           # board hung connector-up reads exactly as this reads
                           # connector-down. Same art, same words, other hang.
 BAND_U = 48               # the yellow band starts here (16 px wide)
+# The glass's painted yellow strip is fixed to the glass: it does not
+# move when the board is hung the other way. The 180° remap alone
+# would set the drawn strip against the numerals — numbers over the
+# paint, words deep in the blue. So the inverted hang re-homes the
+# composition: band strip at the panel's other edge, numerals after.
+NUM_U = 0                 # the numeral column's left edge
+BAND_X = BAND_U           # the strip's left edge (16 px wide)
+if INVERT:
+    NUM_U = W - BAND_U    # 16: numerals u 16..63
+    BAND_X = 0            # the strip re-homes to the panel's other edge
 AREA_H = 42               # 3 areas x 42 + 2 dividers = 128
 NUM_H = 34                # numeral zone inside an area
 REST_MS = 10000           # frames since last_rx before the face idles
@@ -211,19 +221,19 @@ def draw_band(inverted=False):
     """The strip: the stage's words while it holds, the face's name
     after. Cleared first — glyphs never overlay glyphs; a latched
     stage flashes by inverting the strip, never by going dark."""
-    rect(BAND_U, 0, W - BAND_U, H, 0)
-    if inverted:
-        rect(BAND_U, 0, W - BAND_U, H, 1)
-    x = BAND_U + 5                    # rotated glyphs are 5 across
+    rect(BAND_X, 0, W - BAND_U, H, 1 if inverted else 0)
+    x = BAND_X + 5                    # rotated glyphs are 5 across
     text = ring_label if ring_label else label
     for i, ch in enumerate(text.upper()[:30]):   # 4 + 29*4 <= 127
         band_glyph(x, 4 + i * 4, ch, 0 if inverted else 1)
 
 def draw_divider(v):
-    """1-px divider; the lit run hangs off the label band, growing left."""
-    rect(0, v, BAND_U, 1, 0)
+    """1-px divider; the lit run hangs off the label band, growing
+    away from it (left in the parent hang, right in the inverted)."""
+    rect(NUM_U, v, BAND_U, 1, 0)
     if pulse_lit:
-        rect(BAND_U - pulse_lit, v, pulse_lit, 1, 1)
+        run_u = NUM_U if INVERT else BAND_U - pulse_lit
+        rect(run_u, v, pulse_lit, 1, 1)
 
 def blit(u, v, w, rowbytes):
     """Draw one glyph's rows at (u,v); horizontal runs become fill_rects."""
@@ -258,7 +268,7 @@ def spr_for(ch):
 
 def draw_num(v0, text):
     """Big numerals centered in the 48-px column, below v0."""
-    rect(0, v0, BAND_U, NUM_H + 2, 0)
+    rect(NUM_U, v0, BAND_U, NUM_H + 2, 0)
     sprs = []
     for ch in text:
         s = spr_for(ch)
@@ -270,7 +280,7 @@ def draw_num(v0, text):
     if total > BAND_U:                # belt and braces: tighten, then clamp
         gap = 1
         total = sum(s[0] for s in sprs) + gap * (len(sprs) - 1)
-    x = max(0, (BAND_U - total) // 2)
+    x = NUM_U + max(0, (BAND_U - total) // 2)
     y = v0 + 1
     for (w, rowbytes) in sprs:
         blit(x, y, w, rowbytes)
@@ -278,7 +288,7 @@ def draw_num(v0, text):
 
 def draw_label(v0, text):
     for i, ch in enumerate(text.upper()):
-        glyph(2 + i * 4, v0, ch)
+        glyph(NUM_U + 2 + i * 4, v0, ch)
 
 def draw_area(area, label_text):
     v0 = area * AREA_H
@@ -344,13 +354,13 @@ def idle_start():
         # [u0, phase, speed, amp, v, delay] — the poc's particles,
         # portrait-turned: they drift DOWN the column, bob ±amp on the
         # sine table, and enter staggered (0/1000/2000 ms).
-        (24, 0, 1, 6, -2, 0),
-        (34, 4, 2, 8, 40, 1000),
-        (20, 10, 1, 5, 84, 2000),
+        (NUM_U + 24, 0, 1, 6, -2, 0),
+        (NUM_U + 34, 4, 2, 8, 40, 1000),
+        (NUM_U + 20, 10, 1, 5, 84, 2000),
     )]
 
 def idle_step():
-    rect(0, 0, BAND_U, H, 0)
+    rect(NUM_U, 0, BAND_U, H, 0)
     now = time.ticks_ms()
     for f in ff:
         if time.ticks_diff(now, ff_t0) < f[5]:
@@ -360,7 +370,7 @@ def idle_step():
             f[4] = -1
         f[1] = (f[1] + f[2]) % 16       # the poc's bob tempo
         x = f[0] + (f[3] * SIN[f[1]]) // 100   # ±amp, not ±25
-        px(max(1, min(46, x)), f[4], 1)
+        px(max(NUM_U + 1, min(NUM_U + BAND_U - 2, x)), f[4], 1)
     oled.show()
 
 def draw_icon(u, v, i, on=1):
@@ -411,10 +421,11 @@ def circle(cx, cy, rad, on=1):
 
 def draw_info():
     """The encircled I — the say that carries no alarm."""
-    circle(24, 64, 17)
-    rect(21, 54, 6, 21, 1)
-    rect(18, 51, 12, 3, 1)
-    rect(18, 75, 12, 3, 1)
+    cx = NUM_U + 24
+    circle(cx, 64, 17)
+    rect(cx - 3, 54, 6, 21, 1)
+    rect(cx - 6, 51, 12, 3, 1)
+    rect(cx - 6, 75, 12, 3, 1)
 
 def tri_edges(cx, cy, w, h, v):
     """half-width of the triangle at row v"""
@@ -427,7 +438,7 @@ def tri_edges(cx, cy, w, h, v):
 def draw_warn(inverted=False):
     """The exclamation triangle — attention, held steady. Inverted
     (lit fill, dark mark) is the exception's flash phase."""
-    cx, cy, w, h = 24, 62, 22, 19
+    cx, cy, w, h = NUM_U + 24, 62, 22, 19
     top, base = cy - h, cy + 2 * h // 3
     if inverted:
         for v in range(top, base + 1):
@@ -449,7 +460,7 @@ def stage_draw():
     and flashes by inversion while a latch holds."""
     flash = latch and (time.ticks_ms() // 400) % 2 == 1
     if stage == "full":
-        rect(0, 0, BAND_U, H, 0)
+        rect(NUM_U, 0, BAND_U, H, 0)
         if stage_glyph == "exception":
             draw_warn(flash)
         elif stage_glyph == "warn":
@@ -458,8 +469,8 @@ def stage_draw():
             draw_info()
     elif stage is not None:
         v0 = stage * AREA_H
-        rect(0, v0 + 1, BAND_U, NUM_H + 2, 0)
-        u = (BAND_U - 16) // 2
+        rect(NUM_U, v0 + 1, BAND_U, NUM_H + 2, 0)
+        u = NUM_U + (BAND_U - 16) // 2
         v = v0 + 1 + (NUM_H - 16) // 2
         if flash:
             rect(u, v, 16, 16, 1)
