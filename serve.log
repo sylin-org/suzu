@@ -908,3 +908,384 @@ control: `suzu pause` / `suzu resume` stop and restart the stream to devices.
 [sessions] COM12: consumer translating (suzu/1)
 [roster] admission PASSED for 01a0557d-8206-7017-81fb-2dc0ffa1dc32 on COM12 — handshake, currency, ack-law, label-roundtrip, display-truth
 [roster] stream attached — 01a0557d-8206-7017-81fb-2dc0ffa1dc32 on COM12
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 50% · disk 59% · up 173906s
+[sensor] ground: stone-leaded-sparkle · cpu 7% · gpu 0% · mem 50% · disk 59% · up 173968s
+[sensor] ground: stone-leaded-sparkle · cpu 6% · gpu 0% · mem 50% · disk 59% · up 174118s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 50% · disk 59% · up 174318s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 50% · disk 59% · up 174446s
+[sensor] ground: stone-leaded-sparkle · cpu 6% · gpu 0% · mem 50% · disk 59% · up 174658s
+[sensor] ground: stone-leaded-sparkle · cpu 7% · gpu 0% · mem 50% · disk 59% · up 174718s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 50% · disk 59% · up 174856s
+[sensor] ground: stone-leaded-sparkle · cpu 7% · gpu 0% · mem 50% · disk 59% · up 175048s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 50% · disk 59% · up 175308s
+[sensor] ground: stone-leaded-sparkle · cpu 6% · gpu 0% · mem 51% · disk 59% · up 176505s
+[sensor] ground: stone-leaded-sparkle · cpu 6% · gpu 0% · mem 51% · disk 59% · up 176575s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 51% · disk 59% · up 177018s
+[sensor] ground: stone-leaded-sparkle · cpu 6% · gpu 0% · mem 51% · disk 59% · up 177133s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 51% · disk 59% · up 177279s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 51% · disk 59% · up 177649s
+[sensor] ground: stone-leaded-sparkle · cpu 7% · gpu 0% · mem 51% · disk 59% · up 177779s
+[sensor] ground: stone-leaded-sparkle · cpu 7% · gpu 0% · mem 51% · disk 59% · up 178679s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 51% · disk 59% · up 178879s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 51% · disk 59% · up 178914s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 51% · disk 59% · up 178990s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 51% · disk 59% · up 179052s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 51% · disk 59% · up 179270s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 51% · disk 59% · up 179470s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 51% · disk 59% · up 179590s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 51% · disk 59% · up 179662s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 51% · disk 59% · up 179753s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 51% · disk 59% · up 179771s
+[sensor] ground: stone-leaded-sparkle · cpu 7% · gpu 0% · mem 51% · disk 59% · up 179848s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 51% · disk 59% · up 179864s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 51% · disk 59% · up 180052s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 51% · disk 59% · up 180132s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 51% · disk 59% · up 180171s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 51% · disk 59% · up 180651s
+[sensor] ground: stone-leaded-sparkle · cpu 6% · gpu 0% · mem 51% · disk 59% · up 181189s
+[sensor] ground: stone-leaded-sparkle · cpu 6% · gpu 0% · mem 51% · disk 59% · up 181279s
+[sensor] ground: stone-leaded-sparkle · cpu 6% · gpu 0% · mem 51% · disk 59% · up 181339s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 51% · disk 59% · up 181405s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 51% · disk 59% · up 181523s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 51% · disk 59% · up 181601s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 51% · disk 59% · up 181795s
+[sensor] ground: stone-leaded-sparkle · cpu 6% · gpu 0% · mem 51% · disk 59% · up 181850s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 51% · disk 59% · up 181883s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 51% · disk 59% · up 181906s
+[sensor] ground: stone-leaded-sparkle · cpu 6% · gpu 0% · mem 51% · disk 59% · up 182149s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 51% · disk 59% · up 182246s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 51% · disk 59% · up 182397s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 51% · disk 59% · up 182754s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 52% · disk 59% · up 183042s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 52% · disk 59% · up 183078s
+[sensor] ground: stone-leaded-sparkle · cpu 6% · gpu 0% · mem 52% · disk 59% · up 183342s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 52% · disk 59% · up 183676s
+[sensor] ground: stone-leaded-sparkle · cpu 10% · gpu 0% · mem 52% · disk 59% · up 183841s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 52% · disk 59% · up 183979s
+[sensor] ground: stone-leaded-sparkle · cpu 6% · gpu 0% · mem 52% · disk 59% · up 184282s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 52% · disk 59% · up 184377s
+[sensor] ground: stone-leaded-sparkle · cpu 9% · gpu 0% · mem 52% · disk 59% · up 184441s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 52% · disk 59% · up 184764s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 52% · disk 59% · up 185516s
+[sensor] ground: stone-leaded-sparkle · cpu 6% · gpu 0% · mem 52% · disk 59% · up 185628s
+[sensor] ground: stone-leaded-sparkle · cpu 6% · gpu 0% · mem 52% · disk 59% · up 185803s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 52% · disk 59% · up 185817s
+[sensor] ground: stone-leaded-sparkle · cpu 6% · gpu 0% · mem 52% · disk 59% · up 186030s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 52% · disk 59% · up 186137s
+[sensor] ground: stone-leaded-sparkle · cpu 8% · gpu 0% · mem 52% · disk 59% · up 186240s
+[sensor] ground: stone-leaded-sparkle · cpu 6% · gpu 0% · mem 52% · disk 59% · up 187165s
+[sensor] ground: stone-leaded-sparkle · cpu 6% · gpu 0% · mem 52% · disk 59% · up 187404s
+[sensor] ground: stone-leaded-sparkle · cpu 6% · gpu 0% · mem 52% · disk 59% · up 187440s
+[sensor] ground: stone-leaded-sparkle · cpu 7% · gpu 0% · mem 52% · disk 59% · up 187860s
+[sensor] ground: stone-leaded-sparkle · cpu 6% · gpu 0% · mem 52% · disk 59% · up 188035s
+[sensor] ground: stone-leaded-sparkle · cpu 6% · gpu 0% · mem 52% · disk 59% · up 188155s
+[sensor] ground: stone-leaded-sparkle · cpu 8% · gpu 0% · mem 52% · disk 59% · up 188221s
+[sensor] ground: stone-leaded-sparkle · cpu 7% · gpu 0% · mem 52% · disk 59% · up 188431s
+[sensor] ground: stone-leaded-sparkle · cpu 6% · gpu 0% · mem 52% · disk 59% · up 188457s
+[sensor] ground: stone-leaded-sparkle · cpu 6% · gpu 0% · mem 52% · disk 59% · up 188505s
+[sensor] ground: stone-leaded-sparkle · cpu 6% · gpu 0% · mem 52% · disk 59% · up 188575s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 52% · disk 59% · up 188717s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 52% · disk 59% · up 188849s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 52% · disk 59% · up 188991s
+[sensor] ground: stone-leaded-sparkle · cpu 6% · gpu 0% · mem 52% · disk 59% · up 189117s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 52% · disk 59% · up 189269s
+[sensor] ground: stone-leaded-sparkle · cpu 7% · gpu 0% · mem 52% · disk 59% · up 189302s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 52% · disk 59% · up 189443s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 52% · disk 59% · up 189480s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 52% · disk 59% · up 189498s
+[sensor] ground: stone-leaded-sparkle · cpu 6% · gpu 0% · mem 52% · disk 59% · up 189511s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 52% · disk 59% · up 189568s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 52% · disk 59% · up 189589s
+[sensor] ground: stone-leaded-sparkle · cpu 6% · gpu 0% · mem 52% · disk 59% · up 189777s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 52% · disk 59% · up 189859s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 53% · disk 59% · up 190339s
+[sensor] ground: stone-leaded-sparkle · cpu 8% · gpu 0% · mem 53% · disk 59% · up 190382s
+[sensor] ground: stone-leaded-sparkle · cpu 8% · gpu 0% · mem 53% · disk 59% · up 190502s
+[sensor] ground: stone-leaded-sparkle · cpu 10% · gpu 0% · mem 53% · disk 59% · up 190562s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 53% · disk 59% · up 190941s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 53% · disk 59% · up 191000s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 53% · disk 59% · up 191060s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 53% · disk 59% · up 191120s
+[sensor] ground: stone-leaded-sparkle · cpu 7% · gpu 0% · mem 53% · disk 59% · up 191283s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 53% · disk 59% · up 191415s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 53% · disk 59% · up 191481s
+[sensor] ground: stone-leaded-sparkle · cpu 6% · gpu 0% · mem 53% · disk 59% · up 191508s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 53% · disk 59% · up 191541s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 53% · disk 59% · up 191600s
+[sensor] ground: stone-leaded-sparkle · cpu 6% · gpu 0% · mem 53% · disk 59% · up 191718s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 53% · disk 59% · up 191841s
+[sensor] ground: stone-leaded-sparkle · cpu 6% · gpu 0% · mem 53% · disk 59% · up 192618s
+[sensor] ground: stone-leaded-sparkle · cpu 8% · gpu 0% · mem 57% · disk 59% · up 194193s
+[sensor] ground: stone-leaded-sparkle · cpu 16% · gpu 4% · mem 58% · disk 59% · up 194897s
+[roster] stream detached — 01a0557d-8206-7017-81fb-2dc0ffa1dc32 on COM12 (maintenance:soft)
+[maintenance] soft saga owns 01a0557d-8206-7017-81fb-2dc0ffa1dc32 on COM12 — the stream is withdrawn
+[sessions] COM12: released — fireflies when idle
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — Installing the suzu face (portrait-numerals-inverted) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — device files: ['boot.py', 'digits_bebas.bin', 'face.mpy', 'firefly_oled_v2.py', 'icons.bin', 'icons.py', 'label.txt', 'main.py', 'profont_10.mpy', 'profont_10.py', 'suzu.json', 'zen-garden.json'] 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up boot.py (473 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up digits_bebas.bin (539 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up face.mpy (7560 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up firefly_oled_v2.py (11504 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up icons.bin (24 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up icons.py (1501 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up label.txt (20 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up main.py (197 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up profont_10.mpy (3963 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up profont_10.py (9362 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up suzu.json (203 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up zen-garden.json (223 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — identity preserved: 01a0557d-8206-7017-81fb-2dc0ffa1dc32 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — pushing 9 files to COM12 ... (faceplate: portrait-numerals-inverted) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK boot.py (473 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK firefly_oled_v2.py (11504 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK icons.py (1501 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK profont_10.py (9362 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK suzu.json (212 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK main.py (197 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK face.mpy (7663 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK digits_bebas.bin (539 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK icons.bin (24 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — rebooted into suzu — run `suzu scan` to verify the handshake 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 2/2 — Handing to the exam 
+[maintenance] COM12: re-identified as esp8266-oled/oled-v2 — respawning
+[maintenance] soft saga done for 01a0557d-8206-7017-81fb-2dc0ffa1dc32 — admission decides the stream
+[sessions] COM12: consumer translating (suzu/1)
+[roster] admission PASSED for 01a0557d-8206-7017-81fb-2dc0ffa1dc32 on COM12 — handshake, currency, ack-law, label-roundtrip, display-truth
+[roster] stream attached — 01a0557d-8206-7017-81fb-2dc0ffa1dc32 on COM12
+[media] the media lane is watched — the faces blink for the window
+[roster] stream detached — 01a0557d-8206-7017-81fb-2dc0ffa1dc32 on COM12 (maintenance:soft)
+[maintenance] soft saga owns 01a0557d-8206-7017-81fb-2dc0ffa1dc32 on COM12 — the stream is withdrawn
+[sessions] COM12: released — fireflies when idle
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — Installing the suzu face (portrait-numerals) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — device files: ['boot.py', 'digits_bebas.bin', 'face.mpy', 'firefly_oled_v2.py', 'icons.bin', 'icons.py', 'label.txt', 'main.py', 'profont_10.mpy', 'profont_10.py', 'suzu.json', 'zen-garden.json'] 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up boot.py (473 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up digits_bebas.bin (539 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up face.mpy (7663 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up firefly_oled_v2.py (11504 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up icons.bin (24 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up icons.py (1501 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up label.txt (20 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up main.py (197 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up profont_10.mpy (3963 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up profont_10.py (9362 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up suzu.json (212 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up zen-garden.json (223 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — identity preserved: 01a0557d-8206-7017-81fb-2dc0ffa1dc32 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — pushing 9 files to COM12 ... (faceplate: portrait-numerals) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK boot.py (473 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK firefly_oled_v2.py (11504 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK icons.py (1501 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK profont_10.py (9362 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK suzu.json (203 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK main.py (197 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK face.mpy (7560 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK digits_bebas.bin (539 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK icons.bin (24 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — rebooted into suzu — run `suzu scan` to verify the handshake 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 2/2 — Handing to the exam 
+[maintenance] soft saga done for 01a0557d-8206-7017-81fb-2dc0ffa1dc32 — admission decides the stream
+[maintenance] COM12: re-identified as esp8266-oled/oled-v2 — respawning
+[sessions] COM12: consumer translating (suzu/1)
+[roster] admission PASSED for 01a0557d-8206-7017-81fb-2dc0ffa1dc32 on COM12 — handshake, currency, ack-law, label-roundtrip, display-truth
+[roster] stream attached — 01a0557d-8206-7017-81fb-2dc0ffa1dc32 on COM12
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 55% · disk 59% · up 197806s
+[roster] stream detached — 01a0557d-8206-7017-81fb-2dc0ffa1dc32 on COM12 (maintenance:soft)
+[maintenance] soft saga owns 01a0557d-8206-7017-81fb-2dc0ffa1dc32 on COM12 — the stream is withdrawn
+[sessions] COM12: released — fireflies when idle
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — Installing the suzu face (portrait-numerals-inverted) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — device files: ['boot.py', 'digits_bebas.bin', 'face.mpy', 'firefly_oled_v2.py', 'icons.bin', 'icons.py', 'label.txt', 'main.py', 'profont_10.mpy', 'profont_10.py', 'suzu.json', 'zen-garden.json'] 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up boot.py (473 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up digits_bebas.bin (539 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up face.mpy (7560 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up firefly_oled_v2.py (11504 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up icons.bin (24 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up icons.py (1501 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up label.txt (20 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up main.py (197 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up profont_10.mpy (3963 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up profont_10.py (9362 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up suzu.json (203 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up zen-garden.json (223 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — identity preserved: 01a0557d-8206-7017-81fb-2dc0ffa1dc32 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — pushing 9 files to COM12 ... (faceplate: portrait-numerals-inverted) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK boot.py (473 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK firefly_oled_v2.py (11504 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK icons.py (1501 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK profont_10.py (9362 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK suzu.json (212 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK main.py (197 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK face.mpy (7715 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK digits_bebas.bin (539 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK icons.bin (24 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — rebooted into suzu — run `suzu scan` to verify the handshake 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 2/2 — Handing to the exam 
+[maintenance] COM12: re-identified as esp8266-oled/oled-v2 — respawning
+[maintenance] soft saga done for 01a0557d-8206-7017-81fb-2dc0ffa1dc32 — admission decides the stream
+[sessions] COM12: consumer translating (suzu/1)
+[roster] admission PASSED for 01a0557d-8206-7017-81fb-2dc0ffa1dc32 on COM12 — handshake, currency, ack-law, label-roundtrip, display-truth
+[roster] stream attached — 01a0557d-8206-7017-81fb-2dc0ffa1dc32 on COM12
+[roster] stream detached — 01a0557d-8206-7017-81fb-2dc0ffa1dc32 on COM12 (maintenance:soft)
+[maintenance] soft saga owns 01a0557d-8206-7017-81fb-2dc0ffa1dc32 on COM12 — the stream is withdrawn
+[sessions] COM12: released — fireflies when idle
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — Installing the suzu face (portrait-numerals) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — device files: ['boot.py', 'digits_bebas.bin', 'face.mpy', 'firefly_oled_v2.py', 'icons.bin', 'icons.py', 'label.txt', 'main.py', 'profont_10.mpy', 'profont_10.py', 'suzu.json', 'zen-garden.json'] 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up boot.py (473 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up digits_bebas.bin (539 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up face.mpy (7715 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up firefly_oled_v2.py (11504 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up icons.bin (24 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up icons.py (1501 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up label.txt (20 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up main.py (197 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up profont_10.mpy (3963 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up profont_10.py (9362 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up suzu.json (212 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up zen-garden.json (223 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — identity preserved: 01a0557d-8206-7017-81fb-2dc0ffa1dc32 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — pushing 9 files to COM12 ... (faceplate: portrait-numerals) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK boot.py (473 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK firefly_oled_v2.py (11504 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK icons.py (1501 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK profont_10.py (9362 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK suzu.json (203 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK main.py (197 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK face.mpy (7612 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK digits_bebas.bin (539 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK icons.bin (24 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — rebooted into suzu — run `suzu scan` to verify the handshake 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 2/2 — Handing to the exam 
+[maintenance] COM12: re-identified as esp8266-oled/oled-v2 — respawning
+[maintenance] soft saga done for 01a0557d-8206-7017-81fb-2dc0ffa1dc32 — admission decides the stream
+[sessions] COM12: consumer translating (suzu/1)
+[roster] admission PASSED for 01a0557d-8206-7017-81fb-2dc0ffa1dc32 on COM12 — handshake, currency, ack-law, label-roundtrip, display-truth
+[roster] stream attached — 01a0557d-8206-7017-81fb-2dc0ffa1dc32 on COM12
+[roster] stream detached — 01a0557d-8206-7017-81fb-2dc0ffa1dc32 on COM12 (maintenance:soft)
+[maintenance] soft saga owns 01a0557d-8206-7017-81fb-2dc0ffa1dc32 on COM12 — the stream is withdrawn
+[sessions] COM12: released — fireflies when idle
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — Installing the suzu face (portrait-numerals-inverted) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — device files: ['boot.py', 'digits_bebas.bin', 'face.mpy', 'firefly_oled_v2.py', 'icons.bin', 'icons.py', 'label.txt', 'main.py', 'profont_10.mpy', 'profont_10.py', 'suzu.json', 'zen-garden.json'] 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up boot.py (473 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up digits_bebas.bin (539 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up face.mpy (7612 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up firefly_oled_v2.py (11504 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up icons.bin (24 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up icons.py (1501 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up label.txt (20 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up main.py (197 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up profont_10.mpy (3963 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up profont_10.py (9362 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up suzu.json (203 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up zen-garden.json (223 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — identity preserved: 01a0557d-8206-7017-81fb-2dc0ffa1dc32 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — pushing 9 files to COM12 ... (faceplate: portrait-numerals-inverted) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK boot.py (473 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK firefly_oled_v2.py (11504 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK icons.py (1501 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK profont_10.py (9362 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK suzu.json (212 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK main.py (197 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK face.mpy (7715 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK digits_bebas.bin (539 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK icons.bin (24 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — rebooted into suzu — run `suzu scan` to verify the handshake 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 2/2 — Handing to the exam 
+[maintenance] COM12: re-identified as esp8266-oled/oled-v2 — respawning
+[maintenance] soft saga done for 01a0557d-8206-7017-81fb-2dc0ffa1dc32 — admission decides the stream
+[sessions] COM12: consumer translating (suzu/1)
+[roster] admission PASSED for 01a0557d-8206-7017-81fb-2dc0ffa1dc32 on COM12 — handshake, currency, ack-law, label-roundtrip, display-truth
+[roster] stream attached — 01a0557d-8206-7017-81fb-2dc0ffa1dc32 on COM12
+[roster] stream detached — 01a0557d-8206-7017-81fb-2dc0ffa1dc32 on COM12 (maintenance:soft)
+[maintenance] soft saga owns 01a0557d-8206-7017-81fb-2dc0ffa1dc32 on COM12 — the stream is withdrawn
+[sessions] COM12: released — fireflies when idle
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — Installing the suzu face (portrait-numerals-inverted) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — device files: ['boot.py', 'digits_bebas.bin', 'face.mpy', 'firefly_oled_v2.py', 'icons.bin', 'icons.py', 'label.txt', 'main.py', 'profont_10.mpy', 'profont_10.py', 'suzu.json', 'zen-garden.json'] 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up boot.py (473 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up digits_bebas.bin (539 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up face.mpy (7715 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up firefly_oled_v2.py (11504 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up icons.bin (24 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up icons.py (1501 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up label.txt (20 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up main.py (197 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up profont_10.mpy (3963 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up profont_10.py (9362 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up suzu.json (212 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up zen-garden.json (223 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — identity preserved: 01a0557d-8206-7017-81fb-2dc0ffa1dc32 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — pushing 9 files to COM12 ... (faceplate: portrait-numerals-inverted) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK boot.py (473 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK firefly_oled_v2.py (11504 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK icons.py (1501 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK profont_10.py (9362 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK suzu.json (212 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK main.py (197 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK face.mpy (7743 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK digits_bebas.bin (539 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK icons.bin (24 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — rebooted into suzu — run `suzu scan` to verify the handshake 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 2/2 — Handing to the exam 
+[maintenance] COM12: re-identified as esp8266-oled/oled-v2 — respawning
+[maintenance] soft saga done for 01a0557d-8206-7017-81fb-2dc0ffa1dc32 — admission decides the stream
+[sessions] COM12: consumer translating (suzu/1)
+[roster] admission PASSED for 01a0557d-8206-7017-81fb-2dc0ffa1dc32 on COM12 — handshake, currency, ack-law, label-roundtrip, display-truth
+[roster] stream attached — 01a0557d-8206-7017-81fb-2dc0ffa1dc32 on COM12
