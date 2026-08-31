@@ -1289,3 +1289,178 @@ control: `suzu pause` / `suzu resume` stop and restart the stream to devices.
 [sessions] COM12: consumer translating (suzu/1)
 [roster] admission PASSED for 01a0557d-8206-7017-81fb-2dc0ffa1dc32 on COM12 — handshake, currency, ack-law, label-roundtrip, display-truth
 [roster] stream attached — 01a0557d-8206-7017-81fb-2dc0ffa1dc32 on COM12
+[watcher] gone COM12
+[devices] released COM12 (Some("01a0557d-8206-7017-81fb-2dc0ffa1dc32")) — the roster remembers them
+[moments] splash: departure 01a0557d-8206-7017-81fb-2dc0ffa1dc32
+[roster] stream detached — 01a0557d-8206-7017-81fb-2dc0ffa1dc32 on COM12 (departed)
+[sessions] COM12: released — fireflies when idle
+[watcher] sensed COM12
+[watcher] identified COM12 → esp8266-oled-v2-class · esp8266-oled/oled-v2 v2.0.0
+[devices] minding COM12 as Some("esp8266-oled-v2-class") (Some("01a0557d-8206-7017-81fb-2dc0ffa1dc32")) — state Accepted
+[moments] splash: discovery 01a0557d-8206-7017-81fb-2dc0ffa1dc32
+[roster] held 01a0557d-8206-7017-81fb-2dc0ffa1dc32 on COM12 (esp8266-oled-v2-class) — admission decides the stream
+[sessions] COM12: consumer translating (suzu/1)
+[roster] admission PASSED for 01a0557d-8206-7017-81fb-2dc0ffa1dc32 on COM12 — handshake, currency, ack-law, label-roundtrip, display-truth
+[roster] stream attached — 01a0557d-8206-7017-81fb-2dc0ffa1dc32 on COM12
+[sensor] ground: stone-leaded-sparkle · cpu 9% · gpu 1% · mem 57% · disk 59% · up 201906s
+[sensor] ground: stone-leaded-sparkle · cpu 7% · gpu 1% · mem 56% · disk 59% · up 202382s
+[sensor] ground: stone-leaded-sparkle · cpu 6% · gpu 0% · mem 55% · disk 59% · up 202608s
+[sensor] ground: stone-leaded-sparkle · cpu 4% · gpu 0% · mem 55% · disk 59% · up 202650s
+[sensor] ground: stone-leaded-sparkle · cpu 10% · gpu 1% · mem 55% · disk 59% · up 202716s
+[sensor] ground: stone-leaded-sparkle · cpu 10% · gpu 0% · mem 55% · disk 59% · up 202895s
+[sensor] ground: stone-leaded-sparkle · cpu 6% · gpu 0% · mem 55% · disk 59% · up 202977s
+[sensor] ground: stone-leaded-sparkle · cpu 6% · gpu 1% · mem 55% · disk 59% · up 203161s
+[api] shutdown requested — the resident rests
+catalog: 4 class signature(s) from hardware/classes
+suzu resident is up — domains: watcher · devices · moments · sensor · roster
+plug a device and watch the house talk. `tell <label>` rings the bell · `status` · `q` quits.
+control: `suzu pause` / `suzu resume` stop and restart the stream to devices.
+[api] the door is open on http://127.0.0.1:7899 — snapshot + stream, one truth
+[control] listening on 127.0.0.1:7898 — `suzu pause` / `suzu resume`
+[watcher] sensed COM12
+[sensor] ground: stone-leaded-sparkle · cpu 6% · gpu 3% · mem 56% · disk 59% · up 204776s
+[watcher] identified COM12 → esp8266-oled-v2-class · esp8266-oled/oled-v2 v2.0.0
+[devices] minding COM12 as Some("esp8266-oled-v2-class") (Some("01a0557d-8206-7017-81fb-2dc0ffa1dc32")) — state Accepted
+[moments] splash: discovery 01a0557d-8206-7017-81fb-2dc0ffa1dc32
+[roster] held 01a0557d-8206-7017-81fb-2dc0ffa1dc32 on COM12 (esp8266-oled-v2-class) — admission decides the stream
+[sessions] COM12: consumer translating (suzu/1)
+[roster] admission FAILED for 01a0557d-8206-7017-81fb-2dc0ffa1dc32 on COM12 — ✗ handshake
+[roster] stream detached — 01a0557d-8206-7017-81fb-2dc0ffa1dc32 on COM12 (admission failed)
+[roster] stream detached — 01a0557d-8206-7017-81fb-2dc0ffa1dc32 on COM12 (maintenance:soft)
+[maintenance] soft saga owns 01a0557d-8206-7017-81fb-2dc0ffa1dc32 on COM12 — the stream is withdrawn
+[sessions] COM12: released — fireflies when idle
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — Installing the suzu face (portrait-slate) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — device files: ['boot.py', 'digits_bebas.bin', 'face.mpy', 'firefly_oled_v2.py', 'icons.bin', 'icons.py', 'label.txt', 'main.py', 'profont_10.mpy', 'profont_10.py', 'suzu.json', 'zen-garden.json'] 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up boot.py (473 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up digits_bebas.bin (539 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up face.mpy (7743 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up firefly_oled_v2.py (11504 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up icons.bin (24 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up icons.py (1501 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up label.txt (20 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up main.py (197 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up profont_10.mpy (3963 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up profont_10.py (9362 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up suzu.json (212 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up zen-garden.json (223 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — identity preserved: 01a0557d-8206-7017-81fb-2dc0ffa1dc32 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — pushing 9 files to COM12 ... (faceplate: portrait-slate) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK boot.py (473 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK firefly_oled_v2.py (11504 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK icons.py (1501 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK profont_10.py (9362 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK suzu.json (200 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK main.py (197 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK face.mpy (7732 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK digits_slate.bin (671 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK icons.bin (24 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — rebooted into suzu — run `suzu scan` to verify the handshake 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 2/2 — Handing to the exam 
+[maintenance] soft saga done for 01a0557d-8206-7017-81fb-2dc0ffa1dc32 — admission decides the stream
+[maintenance] COM12: re-identified as esp8266-oled/oled-v2 — respawning
+[sessions] COM12: consumer translating (suzu/1)
+[roster] admission PASSED for 01a0557d-8206-7017-81fb-2dc0ffa1dc32 on COM12 — handshake, currency, ack-law, label-roundtrip, display-truth
+[roster] stream attached — 01a0557d-8206-7017-81fb-2dc0ffa1dc32 on COM12
+[media] the media lane is watched — the faces blink for the window
+[roster] stream detached — 01a0557d-8206-7017-81fb-2dc0ffa1dc32 on COM12 (maintenance:soft)
+[maintenance] soft saga owns 01a0557d-8206-7017-81fb-2dc0ffa1dc32 on COM12 — the stream is withdrawn
+[sessions] COM12: released — fireflies when idle
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — Installing the suzu face (portrait-slate) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — device files: ['boot.py', 'digits_bebas.bin', 'digits_slate.bin', 'face.mpy', 'firefly_oled_v2.py', 'icons.bin', 'icons.py', 'label.txt', 'main.py', 'profont_10.mpy', 'profont_10.py', 'suzu.json', 'zen-garden.json'] 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up boot.py (473 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up digits_bebas.bin (539 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up digits_slate.bin (671 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up face.mpy (7732 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up firefly_oled_v2.py (11504 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up icons.bin (24 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up icons.py (1501 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up label.txt (20 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up main.py (197 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up profont_10.mpy (3963 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up profont_10.py (9362 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up suzu.json (200 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up zen-garden.json (223 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — identity preserved: 01a0557d-8206-7017-81fb-2dc0ffa1dc32 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — pushing 9 files to COM12 ... (faceplate: portrait-slate) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK boot.py (473 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK firefly_oled_v2.py (11504 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK icons.py (1501 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK profont_10.py (9362 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK suzu.json (200 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK main.py (197 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK face.mpy (7798 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK digits_slate.bin (671 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK icons.bin (24 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — rebooted into suzu — run `suzu scan` to verify the handshake 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 2/2 — Handing to the exam 
+[maintenance] COM12: re-identified as esp8266-oled/oled-v2 — respawning
+[maintenance] soft saga done for 01a0557d-8206-7017-81fb-2dc0ffa1dc32 — admission decides the stream
+[sessions] COM12: consumer translating (suzu/1)
+[roster] admission PASSED for 01a0557d-8206-7017-81fb-2dc0ffa1dc32 on COM12 — handshake, currency, ack-law, label-roundtrip, display-truth
+[roster] stream attached — 01a0557d-8206-7017-81fb-2dc0ffa1dc32 on COM12
+[roster] stream detached — 01a0557d-8206-7017-81fb-2dc0ffa1dc32 on COM12 (maintenance:soft)
+[maintenance] soft saga owns 01a0557d-8206-7017-81fb-2dc0ffa1dc32 on COM12 — the stream is withdrawn
+[sessions] COM12: released — fireflies when idle
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — Installing the suzu face (portrait-slate) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — device files: ['boot.py', 'digits_bebas.bin', 'digits_slate.bin', 'face.mpy', 'firefly_oled_v2.py', 'icons.bin', 'icons.py', 'label.txt', 'main.py', 'profont_10.mpy', 'profont_10.py', 'suzu.json', 'zen-garden.json'] 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up boot.py (473 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up digits_bebas.bin (539 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up digits_slate.bin (671 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up face.mpy (7798 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up firefly_oled_v2.py (11504 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up icons.bin (24 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up icons.py (1501 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up label.txt (20 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up main.py (197 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up profont_10.mpy (3963 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up profont_10.py (9362 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up suzu.json (200 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — backed up zen-garden.json (223 bytes) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — identity preserved: 01a0557d-8206-7017-81fb-2dc0ffa1dc32 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — pushing 9 files to COM12 ... (faceplate: portrait-slate) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK boot.py (473 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK firefly_oled_v2.py (11504 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK icons.py (1501 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK profont_10.py (9362 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK suzu.json (200 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK main.py (197 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK face.mpy (7784 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK digits_slate.bin (561 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — raw REPL confirmed (attempt 1) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — OK icons.bin (24 bytes verified) 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 1/2 — rebooted into suzu — run `suzu scan` to verify the handshake 
+[maintenance] 01a0557d-8206-7017-81fb-2dc0ffa1dc32 · step 2/2 — Handing to the exam 
+[maintenance] COM12: re-identified as esp8266-oled/oled-v2 — respawning
+[maintenance] soft saga done for 01a0557d-8206-7017-81fb-2dc0ffa1dc32 — admission decides the stream
+[sessions] COM12: consumer translating (suzu/1)
+[roster] admission PASSED for 01a0557d-8206-7017-81fb-2dc0ffa1dc32 on COM12 — handshake, currency, ack-law, label-roundtrip, display-truth
+[roster] stream attached — 01a0557d-8206-7017-81fb-2dc0ffa1dc32 on COM12
