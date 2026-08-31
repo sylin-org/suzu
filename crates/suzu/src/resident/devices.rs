@@ -1444,6 +1444,9 @@ fn frame_blink(
 ) {
     let png = crate::shot::capture_on(serial, spec.size)
         .and_then(|frame| crate::shot::render_png_bytes(spec, zones, &frame));
+    if let Err(e) = &png {
+        println!("[sessions] {port}: blink failed — {e:#}");
+    }
     if let Ok(png) = png {
         let _ = events.send(HouseEvent::Frame {
             port: port.to_string(),

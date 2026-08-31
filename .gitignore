@@ -10,3 +10,9 @@ target/
 __pycache__/
 backups/
 workbench.log
+serve.log
+serve.err.log
+aurora-*.png
+idle.png
+warm.png
+shot14.png

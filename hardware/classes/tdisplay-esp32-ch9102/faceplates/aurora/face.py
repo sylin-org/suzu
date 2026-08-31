@@ -56,11 +56,13 @@ REST_MS = 10000
 MARKER_MS = 300
 TICK_MS = 100
 
-# the say hues (ADR-0001: urgency as color)
-HUE_INFO = (40, 120, 255)
-HUE_OK = (60, 200, 90)
-HUE_WARN = (255, 170, 40)
-HUE_CRIT = (255, 45, 45)
+# the say hues (ADR-0001: urgency as color) — DEGREES, the field's
+# own currency: field columns are hsl hue slots, never rgb tuples
+STAGE_HUES = {"info": 215, "ok": 120, "warn": 30, "exception": 0}
+HUE_INFO = 215
+HUE_OK = 120
+HUE_WARN = 30
+HUE_CRIT = 0
 
 WHITE = (236, 232, 224)
 DIMC = (120, 120, 120)
@@ -77,6 +79,9 @@ _SIN_LEN = 64
 
 # ── state ──
 tft = None
+mirror = None              # the face-kept framebuffer: the camera
+                           # photographs THIS — the glass is write-only
+                           # (the matrix's law, applied to color)
 last_rx = None
 label = "suzu"
 values = {"cpu": 255, "mem": 255, "gpu": 255}
@@ -107,6 +112,66 @@ def pack(c):
 
 def scale(c, k):
     return (c[0] * k // 100, c[1] * k // 100, c[2] * k // 100)
+
+
+def _c(color):
+    """Normalize: a (r,g,b) tuple packs; an int is already RGB565."""
+    return rgb(color) if isinstance(color, tuple) else color
+
+
+# rgb565 -> rgb332: 3-3-2 bits, a byte a pixel — this heap's honest
+# color. The mirror is 32.4 KB, not 64.8 (which does not fit); color
+# bands a little, words stay sharp. The 3 bits are each channel's
+# TOP bits (rrrrrggggggbbbbb → rrrgggbb): the bottom bits are noise,
+# and keeping them turned white into olive (measured on the bench).
+def to332(c):
+    return ((c >> 13) & 0x07) << 5 | ((c >> 8) & 0x07) << 2 | (c >> 5) & 0x03
+
+
+def m_set(x, y, c):
+    if 0 <= x < W and 0 <= y < H:
+        mirror[y * W + x] = to332(c)
+
+
+def fillf(x, y, w, h, color):
+    """A filled rect on the glass and the mirror — one truth."""
+    c = _c(color)
+    tft.fill_rect(x, y, w, h, c)
+    row = bytes((to332(c),)) * w
+    for yy in range(max(0, y), min(y + h, H)):
+        x0 = max(0, x)
+        ww = min(x + w, W) - x0
+        if ww > 0:
+            i = yy * W + x0
+            mirror[i:i + ww] = row[x0 - x:x0 - x + ww]
+
+
+def pixelf(x, y, color):
+    c = _c(color)
+    tft.pixel(x, y, c)
+    m_set(x, y, c)
+
+
+def rectf(x, y, w, h, color):
+    """1-px outline on both surfaces."""
+    fillf(x, y, w, 1, color)
+    fillf(x, y + h - 1, w, 1, color)
+    fillf(x, y, 1, h, color)
+    fillf(x + w - 1, y, 1, h, color)
+
+
+def hlinef(x, y, w, color):
+    fillf(x, y, w, 1, color)
+
+
+def fillall(color):
+    c = _c(color)
+    tft.fill(c)
+    row = bytes((to332(c),)) * W
+    for yy in range(H):
+        i = yy * W
+        mirror[i:i + W] = row
+
 
 def hsl(h, s, l):
     s2 = s / 100
@@ -149,9 +214,9 @@ def glyph(x, y, ch, color, scale=1):
         for c in range(3):
             if bits & (1 << (14 - row * 3 - c)):
                 if scale == 1:
-                    tft.pixel(x + c, y + row, col)
+                    pixelf(x + c, y + row, col)
                 else:
-                    tft.fill_rect(x + c * scale, y + row * scale,
+                    fillf(x + c * scale, y + row * scale,
                                   scale, scale, col)
 
 def text(x, y, s, color, scale=1):
@@ -168,8 +233,8 @@ def draw_ribbon():
     that fills while traffic is fresh."""
     h = stone_hue(label)
     base = hsl(h, 55, 42)
-    tft.fill_rect(0, 0, W, RIBBON_H, rgb(base))
-    tft.fill_rect(0, 0, W, 2, rgb(hsl(h, 55, 58)))
+    fillf(0, 0, W, RIBBON_H, rgb(base))
+    fillf(0, 0, W, 2, rgb(hsl(h, 55, 58)))
     name = label
     if name.startswith("stone-"):
         name = name[6:]
@@ -193,12 +258,12 @@ def draw_ribbon():
         else:
             sx = sm - (t2 - 2 * pause - st) * 2
         sx = max(0, min(sm, sx))
-        tft.fill_rect(0, 3, W - 6, 10, rgb(base))
+        fillf(0, 3, W - 6, 10, rgb(base))
         text(2 - sx, 3, name, WHITE, 2)
     # the notch: dark while idle, filled on fresh traffic
     fresh = last_rx is not None and \
         time.ticks_diff(time.ticks_ms(), last_rx) < MARKER_MS
-    tft.fill_rect(W - 5, RIBBON_H - 5, 3, 3,
+    fillf(W - 5, RIBBON_H - 5, 3, 3,
                   rgb(base) if fresh else pack(hsl(h, 30, 14)))
 
 # ── the gauge lines ──
@@ -212,12 +277,12 @@ def draw_gauge_line(idx, y):
     gx = 16
     for s in range(5):
         gw = 14
-        tft.fill_rect(gx, y, gw, 9, rgb(TRACK))
+        fillf(gx, y, gw, 9, rgb(TRACK))
         if s < filled:
-            tft.fill_rect(gx + 1, y + 1, gw - 2, 7,
+            fillf(gx + 1, y + 1, gw - 2, 7,
                           rgb(scale(SAY_HUE_OK, 40 + s * 15)))
         else:
-            tft.rect(gx, y, gw, 9, rgb(TRACK_EDGE))
+            rectf(gx, y, gw, 9, rgb(TRACK_EDGE))
         gx += gw + 3
     vs = "-" if val == 255 else str(val)
     text(W - 4 - text_w(vs, 2), y, vs, WHITE, 2)
@@ -225,8 +290,8 @@ def draw_gauge_line(idx, y):
 # ── the message area ──
 
 def draw_message():
-    tft.fill_rect(0, MSG_Y, W, FIELD_Y - MSG_Y - 2, rgb(BLACK))
-    tft.hline(0, MSG_Y, W, rgb(TRACK_EDGE))
+    fillf(0, MSG_Y, W, FIELD_Y - MSG_Y - 2, rgb(BLACK))
+    hlinef(0, MSG_Y, W, rgb(TRACK_EDGE))
     if ring_label:
         words = ring_label.upper()[:52]
         text(2, MSG_Y + 4, words[:26], WHITE, 2)
@@ -255,10 +320,10 @@ def field_draw_column(c):
         fade = 100 - r * 12
         x = c * (CELL_W + 1)
         y = FIELD_Y + r * (CELL_H + 1)
-        tft.fill_rect(x, y, CELL_W, CELL_H, rgb(scale(hsl(hue, 70, 20 + k // 3), max(20, fade))))
+        fillf(x, y, CELL_W, CELL_H, rgb(scale(hsl(hue, 70, 20 + k // 3), max(20, fade))))
 
 def field_draw_full():
-    tft.fill_rect(0, FIELD_Y, W, H - FIELD_Y, rgb(BLACK))
+    fillf(0, FIELD_Y, W, H - FIELD_Y, rgb(BLACK))
     for c in range(COLS):
         field_draw_column(c)
 
@@ -296,7 +361,7 @@ def stage_draw(now):
     """The stage owns everything below the ribbon. A latched
     exception blinks the whole field between burn and rest."""
     dark = latch and (now // 400) % 2 == 0
-    tft.fill_rect(0, RIBBON_H, W, H - RIBBON_H, rgb(BLACK))
+    fillf(0, RIBBON_H, W, H - RIBBON_H, rgb(BLACK))
     if dark:
         # the rest phase of the burn: dim field, dim words
         k = 30
@@ -305,12 +370,12 @@ def stage_draw(now):
             field[c][1] = k
             col = rgb(hsl(hue, 70, 12))
             for r in range(ROWS):
-                tft.fill_rect(c * (CELL_W + 1),
+                fillf(c * (CELL_W + 1),
                               FIELD_Y + r * (CELL_H + 1),
                               CELL_W, CELL_H - 1, col)
         text(2, MSG_Y + 4, (ring_label or "").upper()[:26], DIMC, 2)
         return
-    if stage == "stage" and stage_glyph == "exception":
+    if stage == "stage" and stage_kind == "exception":
         # burn: the say hue, loud
         for c in range(COLS):
             field[c] = [stage_hue_c, 90 + (c * 7) % 10]
@@ -319,7 +384,7 @@ def stage_draw(now):
             hue, k = field[c]
             col = rgb(hsl(hue, 75, 25 + k // 3))
             for r in range(ROWS):
-                tft.fill_rect(c * (CELL_W + 1),
+                fillf(c * (CELL_W + 1),
                               FIELD_Y + r * (CELL_H + 1),
                               CELL_W, CELL_H - 1, col)
     draw_ribbon()
@@ -328,19 +393,6 @@ def stage_draw(now):
         text(2, MSG_Y + 4, words, WHITE, 2)
         if len(ring_label) > 26:
             text(2, MSG_Y + 16, ring_label.upper()[26:52], WHITE, 2)
-
-def stage_start(kind, words, urgency):
-    global stage, stage_hue_c, stage_kind, ring_label, ring_until, latch, splash_k
-    hues = {"info": HUE_INFO, "ok": HUE_OK, "warn": HUE_WARN,
-            "exception": HUE_CRIT}
-    stage = "stage"
-    stage_kind = kind
-    stage_hue_c = hues.get(kind, HUE_WARN)
-    ring_label = words
-    latch = kind == "exception"
-    ring_until = None if latch else time.ticks_add(time.ticks_ms(), STAGE_MS)
-    splash_k = 60 + urgency * 8
-    stage_draw(time.ticks_ms())
 
 # ── the field's pulse state ──
 
@@ -454,7 +506,23 @@ def cmd(line):
             ctx = ujson.loads(a)
             if isinstance(ctx, dict):
                 if ctx.get("shot"):
-                    r("ERR,shot,not_supported")
+                    # the trail camera (the matrix's law): the mirror is
+                    # the shot — chunked so the reply stays RAM-flat
+                    import ubinascii
+                    sys.stdout.write("OK,")
+                    x = 0
+                    for ch in b"OK,":
+                        x ^= ch
+                    mv = memoryview(mirror)
+                    for i in range(0, len(mirror), 510):
+                        chunk = ubinascii.b2a_base64(mv[i:i + 510])[:-1]
+                        sys.stdout.write(chunk)
+                        for ch in chunk:
+                            x ^= ch
+                        time.sleep_ms(1)
+                    sys.stdout.write("*%02x" % (x & 0xFF))
+                    sys.stdout.write("\n")
+                    time.sleep_ms(2)
                     return
                 if ctx.get("name") and ctx["name"] != label:
                     label = ctx["name"]
@@ -490,14 +558,12 @@ def cmd(line):
                 kind = "info"
             else:
                 kind = "warn"
-            hues = {"info": HUE_INFO, "ok": HUE_OK, "warn": HUE_WARN,
-                    "exception": HUE_CRIT}
             ring_label = " ".join(p[5:])[:52] or None
             if len(p) > 4:
                 ring_seq = p[4]
             stage = "stage"
             stage_kind = kind
-            stage_hue_c = hues[kind]
+            stage_hue_c = STAGE_HUES.get(kind, HUE_WARN)
             latch = kind == "exception"
             ring_until = (None if latch
                           else time.ticks_add(time.ticks_ms(), STAGE_MS))
@@ -562,21 +628,21 @@ def midnight_draw():
         pos = (t + phase) % period
         sv = _SIN[pos * _SIN_LEN // period]
         if sv > 50:
-            tft.pixel(sx, sy, rgb((232, 228, 216)))
+            pixelf(sx, sy, rgb((232, 228, 216)))
         elif sv > 0:
-            tft.pixel(sx, sy, rgb((96, 94, 84)))
+            pixelf(sx, sy, rgb((96, 94, 84)))
         else:
-            tft.pixel(sx, sy, rgb(MIDNIGHT))
+            pixelf(sx, sy, rgb(MIDNIGHT))
     for idx, ff in enumerate(flies):
         prev = fly_prev[idx]
         if prev:
-            tft.fill_rect(prev[0] - 3, prev[1] - 3, 7, 7, rgb(MIDNIGHT))
+            fillf(prev[0] - 3, prev[1] - 3, 7, 7, rgb(MIDNIGHT))
             for sx, sy, tier, period, phase in stars:
                 if prev[0] - 4 <= sx <= prev[0] + 4 and \
                         prev[1] - 4 <= sy <= prev[1] + 4:
                     sv = _SIN[((t + phase) % period) * _SIN_LEN // period]
                     if sv > 50:
-                        tft.pixel(sx, sy, rgb((232, 228, 216)))
+                        pixelf(sx, sy, rgb((232, 228, 216)))
         ff[2] = (ff[2] + 1) % ff[4]
         ff[3] = (ff[3] + 1) % ff[5]
         ff[10] = (ff[10] + 1) % ff[11]
@@ -589,10 +655,10 @@ def midnight_draw():
         p_si = ff[10] * _SIN_LEN // ff[11]
         pulse = _SIN[p_si]
         if pulse > 30:
-            tft.fill_rect(px - 3, py - 3, 7, 7, rgb((60, 40, 15)))
+            fillf(px - 3, py - 3, 7, 7, rgb((60, 40, 15)))
         if pulse > -30:
-            tft.fill_rect(px - 2, py - 2, 5, 5, rgb((140, 100, 40)))
-        tft.fill_rect(px - 1, py - 1, 3, 3, rgb((255, 220, 140)))
+            fillf(px - 2, py - 2, 5, 5, rgb((140, 100, 40)))
+        fillf(px - 1, py - 1, 3, 3, rgb((255, 220, 140)))
         fly_prev[idx] = (px, py)
 
 # ── label persistence ──
@@ -618,7 +684,7 @@ def load_label():
 # ── the composite states ──
 
 def redraw_idle():
-    tft.fill(0)
+    fillall(0)
     draw_ribbon()
     for i in range(3):
         draw_gauge_line(i, G_Y0 + i * LINE_H)
@@ -644,9 +710,9 @@ def init_display():
         tft = st7789.ST7789(
             spi, W, H,
             reset=Pin(23, Pin.OUT), cs=Pin(5, Pin.OUT), dc=Pin(16, Pin.OUT),
-            backlight=Pin(4, Pin.OUT), rotation=0)
+            backlight=Pin(4, Pin.OUT), rotation=1)
         tft.init()
-        tft.fill(0)
+        fillall(0)
         tft.on()
         return True
     except Exception as e:
@@ -670,8 +736,12 @@ def decay_tick(now):
         redraw_idle()
 
 def main():
-    global idle, idle_init, idle_t, last_rx
+    global idle, idle_init, idle_t, last_rx, mirror
     gc.collect()
+    # The mirror first, before fragmentation: one contiguous
+    # 32.4 KB (rgb332, a byte a pixel) — the camera's film, priced
+    # to this heap (rgb565's 64.8 KB does not fit).
+    mirror = bytearray(W * H)
     # the console is the wire on ESP32 (sys.stdin/stdout); a UART(0)
     # re-init kills the REPL console — the harvested PoC knew it
     load_label()
@@ -694,7 +764,7 @@ def main():
                 idle = True
                 idle_init = False
                 idle_t = 0
-                tft.fill(rgb(MIDNIGHT))
+                fillall(rgb(MIDNIGHT))
             if idle and last_rx is not None and \
                     time.ticks_diff(now, last_rx) < REST_MS:
                 idle = False
@@ -705,7 +775,7 @@ def main():
                 if idle:
                     if not idle_init:
                         midnight_init()
-                        tft.fill(rgb(MIDNIGHT))
+                        fillall(rgb(MIDNIGHT))
                     midnight_draw()
                 elif stage is not None:
                     decay_tick(now)

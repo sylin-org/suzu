@@ -44,7 +44,13 @@ pub fn capture_on(port: &mut Box<dyn SerialPort>, expected: usize) -> Result<Vec
     dribble_line(port, "J,{\"shot\":1}")?;
 
     let mut acc = Vec::new();
-    let deadline = Instant::now() + Duration::from_secs(8);
+    // The reply rides base64 (4/3 inflation) at the wire's honest
+    // rate (11.5 k chars/s at 115200; budgeted at half that — the
+    // bench measured a healthy 32.4 KB mirror at 4.9 s and a thrashing
+    // face slower still). The bound is computed from the declared
+    // size, never guessed — and the one bound waited is the one told.
+    let secs = (2 + (expected as u64 * 4 / 3) / 6_000).max(8);
+    let deadline = Instant::now() + Duration::from_secs(secs);
     while Instant::now() < deadline {
         let mut scratch = [0u8; 512];
         match port.read(&mut scratch) {
@@ -61,7 +67,7 @@ pub fn capture_on(port: &mut Box<dyn SerialPort>, expected: usize) -> Result<Vec
         }
         std::thread::sleep(Duration::from_millis(20));
     }
-    bail!("no whole-frame reply within 8 s — face unreachable or mid-boot")
+    bail!("no whole-frame reply within {secs} s — face unreachable or mid-boot")
 }
 
 /// One in-band shot on a port by name (opens and settles it first).
@@ -175,7 +181,10 @@ pub fn decode_frame(
     // The declared order must agree with the format it decorates — a
     // manifest that lies about its bytes decodes to noise.
     let order_ok = match (spec.format.as_str(), spec.order.as_deref()) {
-        ("mvlsb", Some("column-major")) | ("rgb24", Some("row-major")) => true,
+        ("mvlsb", Some("column-major"))
+        | ("rgb24", Some("row-major"))
+        | ("rgb565", Some("row-major"))
+        | ("rgb332", Some("row-major")) => true,
         (f, o) if f == "mvlsb" || f == "rgb24" => o.is_none(),
         _ => true, // unknown format: rejected below with its own message
     };
@@ -194,6 +203,41 @@ pub fn decode_frame(
             let mut rgba = Vec::with_capacity(w * h * 4);
             for px in frame.chunks_exact(3) {
                 rgba.extend_from_slice(&[px[0], px[1], px[2], 255]);
+            }
+            Ok((w, h, rgba))
+        }
+        ("rgb565", 16) => {
+            if frame.len() != w * h * 2 {
+                bail!("rgb565: {} B is not a whole {w}x{h} frame", frame.len());
+            }
+            // Big-endian per pixel (the family's blit convention).
+            let mut rgba = Vec::with_capacity(w * h * 4);
+            for px in frame.chunks_exact(2) {
+                let v = ((px[0] as u16) << 8) | px[1] as u16;
+                let r = (((v >> 11) & 0x1F) * 255 / 31) as u8;
+                let g = (((v >> 5) & 0x3F) * 255 / 63) as u8;
+                let b = ((v & 0x1F) * 255 / 31) as u8;
+                rgba.extend_from_slice(&[r, g, b, 255]);
+            }
+            Ok((w, h, rgba))
+        }
+        ("rgb332", 8) => {
+            if frame.len() != w * h {
+                bail!("rgb332: {} B is not a whole {w}x{h} frame", frame.len());
+            }
+            // A byte a pixel: 3-3-2 bits, the small-heap mirror's
+            // honest color, expanded on precomputed ramps (7 * 255
+            // overflows a byte mid-expression — the table never does).
+            const R7: [u8; 8] = [0, 36, 73, 109, 146, 182, 219, 255];
+            const R3: [u8; 4] = [0, 85, 170, 255];
+            let mut rgba = Vec::with_capacity(w * h * 4);
+            for px in frame {
+                rgba.extend_from_slice(&[
+                    R7[((px >> 5) & 0x07) as usize],
+                    R7[((px >> 2) & 0x07) as usize],
+                    R3[(px & 0x03) as usize],
+                    255,
+                ]);
             }
             Ok((w, h, rgba))
         }
