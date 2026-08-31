@@ -20,6 +20,8 @@ INVERT = False            # the -inverted build flips this (tools/build_faceplat
                           # board hung connector-up reads exactly as this reads
                           # connector-down. Same art, same words, other hang.
 BAND_U = 48               # the yellow band starts here (16 px wide)
+TEXT_FLIP = False         # left-aligned mounts rotate the text area 180°
+                          # — the words would stand on their head otherwise
 # The glass's painted yellow strip is fixed to the glass: it does not
 # move when the board is hung the other way. The 180° remap alone
 # would set the drawn strip against the numerals — numbers over the
@@ -214,9 +216,15 @@ def band_glyph(u, v, ch, on=1):
         for col in range(3):
             if bits & (1 << (14 - row * 3 - col)):
                 if INVERT:
-                    px(u + row, v - col, on)
+                    if TEXT_FLIP:
+                        px(u + row, v - col, on)
+                    else:
+                        px(u + row, v + col, on)
                 else:
-                    px(u + (4 - row), v + col, on)
+                    if TEXT_FLIP:
+                        px(u + 1 + row, v - col, on)
+                    else:
+                        px(u + (4 - row), v + col, on)
 
 def draw_band(inverted=False):
     """The strip: the stage's words while it holds, the face's name
@@ -224,7 +232,7 @@ def draw_band(inverted=False):
     stage flashes by inverting the strip, never by going dark. The
     inverted hang lays the words in the mirrored direction so the
     rendered view reads exactly like the parent's."""
-    if INVERT:
+    if TEXT_FLIP:
         x, v0, step = 6, H - 5, -4
     else:
         x, v0, step = BAND_U + 5, 4, 4

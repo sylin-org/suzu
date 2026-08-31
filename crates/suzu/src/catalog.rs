@@ -58,59 +58,109 @@ struct FaceplateDecl {
     display_name: Option<String>,
     #[serde(default)]
     blurb: Option<String>,
-    #[serde(default)]
-    mount: Option<String>,
-    #[serde(default)]
-    based_on: Option<String>,
-    /// The dress version this bundle ships — what a face wearing it
-    /// reports in its descriptor. The currency gate (ADR-0005) holds
-    /// a face whose worn version is older than the declaration.
+    /// The dress version the family ships — what a face wearing any
+    /// hang of it reports in its descriptor. The currency gate
+    /// (ADR-0005) holds a face whose worn version is older.
     #[serde(default)]
     version: Option<String>,
     #[serde(default)]
     rings: Option<RingsDecl>,
+    /// Present on a variant-type faceplate: one entry per hang, each
+    /// naming the mount, the wire id of the dressed face, and a blurb
+    /// that guides the chooser. Absent on a single-type faceplate —
+    /// one dress, bundled at the faceplate's own root.
+    #[serde(default)]
+    variants: Option<Vec<VariantDecl>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct VariantDecl {
+    mount: String,
+    id: String,
+    #[serde(default)]
+    blurb: Option<String>,
 }
 
 /// Scan a faceplates root (`<repo>/faceplates/<class-dir>/<id>/`).
 /// A bundle without a parseable declaration is skipped with a word —
 /// the catalog never guesses.
+/// The bundle directory name for a mount: `usb-left` hangs from the
+/// `left-mount/` bundle beside the faceplate's manifest.
+fn mount_dir_name(mount: &str) -> String {
+    let side = mount.strip_prefix("usb-").unwrap_or(mount);
+    format!("{side}-mount")
+}
+
 fn scan_faceplates(root: PathBuf) -> Vec<FaceplateInfo> {
     let mut out = Vec::new();
     let Ok(class_dirs) = std::fs::read_dir(&root) else {
         return out;
     };
     for class_dir in class_dirs.flatten().map(|e| e.path()).filter(|p| p.is_dir()) {
-        let Ok(bundles) = std::fs::read_dir(&class_dir) else {
+        let Ok(faces) = std::fs::read_dir(&class_dir) else {
             continue;
         };
-        for bundle in bundles.flatten().map(|e| e.path()).filter(|p| p.is_dir()) {
-            let Ok(text) = std::fs::read_to_string(bundle.join("faceplate.yaml")) else {
+        for face_dir in faces.flatten().map(|e| e.path()).filter(|p| p.is_dir()) {
+            let Ok(text) = std::fs::read_to_string(face_dir.join("faceplate.yaml")) else {
                 continue;
             };
             let Ok(decl) = serde_yaml::from_str::<FaceplateDecl>(&text) else {
-                eprintln!("catalog: faceplate declaration unreadable in {}", bundle.display());
+                eprintln!("catalog: faceplate declaration unreadable in {}", face_dir.display());
                 continue;
             };
-            let has_preview = bundle.join("preview.gif").exists()
-                || bundle.join("preview.png").exists();
-            out.push(FaceplateInfo {
-                display_name: decl.display_name.unwrap_or_else(|| decl.name.clone()),
-                id: decl.name,
-                class: decl.class,
-                blurb: decl.blurb,
-                mount: decl.mount,
-                based_on: decl.based_on,
-                version: decl.version,
-                has_preview,
-                rings: RingDialect {
-                    qualifiers: decl.rings.as_ref().map(|r| r.qualifiers).unwrap_or(true),
-                    text: decl.rings.as_ref().map(|r| r.text).unwrap_or(true),
-                },
-                dir: bundle,
-            });
+            let rings = RingDialect {
+                qualifiers: decl.rings.as_ref().map(|r| r.qualifiers).unwrap_or(true),
+                text: decl.rings.as_ref().map(|r| r.text).unwrap_or(true),
+            };
+            let display_name =
+                decl.display_name.clone().unwrap_or_else(|| decl.name.clone());
+            match decl.variants {
+                // Variant type: one dress per declared hang, bundled in
+                // its own mount directory beside the manifest.
+                Some(variants) if !variants.is_empty() => {
+                    for v in &variants {
+                        let dir = face_dir.join(mount_dir_name(&v.mount));
+                        if !dir.is_dir() {
+                            eprintln!(
+                                "catalog: {} declares {} but the {} bundle is missing",
+                                display_name, v.mount, mount_dir_name(&v.mount)
+                            );
+                            continue;
+                        }
+                        let has_preview = dir.join("preview.gif").exists()
+                            || dir.join("preview.png").exists();
+                        out.push(FaceplateInfo {
+                            display_name: display_name.clone(),
+                            id: v.id.clone(),
+                            class: decl.class.clone(),
+                            blurb: v.blurb.clone().or_else(|| decl.blurb.clone()),
+                            mount: Some(v.mount.clone()),
+                            version: decl.version.clone(),
+                            has_preview,
+                            rings,
+                            dir,
+                        });
+                    }
+                }
+                // Single type: one dress, bundled at the faceplate's root.
+                _ => {
+                    let has_preview = face_dir.join("preview.gif").exists()
+                        || face_dir.join("preview.png").exists();
+                    out.push(FaceplateInfo {
+                        display_name,
+                        id: decl.name,
+                        class: decl.class,
+                        blurb: decl.blurb,
+                        mount: Some("usb-down".into()),
+                        version: decl.version,
+                        has_preview,
+                        rings,
+                        dir: face_dir,
+                    });
+                }
+            }
         }
     }
-    out.sort_by_key(|f| (f.based_on.is_some(), f.id.clone()));
     out
 }
 
@@ -140,8 +190,6 @@ pub struct FaceplateInfo {
     pub blurb: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mount: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub based_on: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     pub has_preview: bool,
@@ -363,7 +411,7 @@ impl Catalog {
             .iter()
             .filter(|f| f.class == class_id)
             .collect();
-        out.sort_by_key(|f| (f.based_on.is_some(), f.id.clone()));
+        out.sort_by(|a, b| a.dir.cmp(&b.dir).then(a.id.cmp(&b.id)));
         out
     }
 

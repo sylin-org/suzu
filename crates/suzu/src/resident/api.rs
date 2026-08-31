@@ -448,7 +448,7 @@ async fn route(ctx: &Ctx, method: &str, path: &str, body: &str) -> (u16, &'stati
                         "name": f.display_name,
                         "blurb": f.blurb,
                         "mount": f.mount,
-                        "based_on": f.based_on,
+                        "version": f.version,
                         "preview": f.has_preview.then(|| {
                             format!("/api/faceplate-preview/{class}/{}.gif", f.id)
                         }),

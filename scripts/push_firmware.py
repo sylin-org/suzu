@@ -250,17 +250,37 @@ class Repl:
         self.p.close()
 
 
+def resolve_dress_dir(faceplate):
+    """A dress id -> its bundle directory. Variant-type faceplates
+    declare their hangs in the manifest; single-type faceplates bundle
+    at their own root. The flat legacy layout still resolves."""
+    import yaml
+    root = pathlib.Path("faceplates/esp8266-oled-v2")
+    for mf in sorted(root.glob("*/faceplate.yaml")):
+        face = yaml.safe_load(mf.read_text(encoding="utf-8")) or {}
+        for v in face.get("variants") or []:
+            if v.get("id") == faceplate:
+                side = v["mount"].removeprefix("usb-")
+                return str(mf.parent / (side + "-mount"))
+        if face.get("name") == faceplate and not face.get("variants"):
+            return str(mf.parent)
+    raise SystemExit(f"faceplate {faceplate!r} is not declared anywhere — "
+                     "check the manifests under faceplates/")
+
+
 def main():
     port = sys.argv[1] if len(sys.argv) > 1 else "COM24"
     base = "firmware/suzu-d/esp8266-oled-v2/"
     device_id = sys.argv[2] if len(sys.argv) > 2 else None
     fresh = "--fresh" in sys.argv
-    # The dress (ADR-0005): a declared faceplate bundle carries its
-    # own main.py / face.mpy / art bins, and its id goes into suzu.json.
+    # The dress (ADR-0005): a declared faceplate carries its own
+    # main.py / face.mpy / art bins, and its id goes into suzu.json.
+    # Variant-type faceplates bundle one directory per hang beside
+    # their manifest; the id resolves through the manifest's variants.
     faceplate = "portrait-numerals"
     if "--faceplate" in sys.argv:
         faceplate = sys.argv[sys.argv.index("--faceplate") + 1]
-    dress_dir = f"faceplates/esp8266-oled-v2/{faceplate}"
+    dress_dir = resolve_dress_dir(faceplate)
 
     repl = Repl(port)
     files = repl.list_files()

@@ -1,9 +1,11 @@
-# suzu — portrait numerals faceplate (esp8266-oled-v2, suzu/1).
+# suzu — Slate faceplate (esp8266-oled-v2, suzu/1).
 # Portrait composition, 64 wide (u) x 128 tall (v); pixel(u,v)->oled(v,63-u).
-# Right edge: the yellow label band. Left: CPU/GPU/MEM big numerals,
-# 1-px pulse dividers lit by the audio.level lane. Frames (newline-term):
+# A console readout: block digits state the fact, a segmented gauge
+# carries the proportion, solid rules divide the areas, and the name
+# is embossed on a filled label strip whose end dot pulses with
+# traffic. Frames (newline-term):
 #   I -> OK,{descriptor}*hh | K -> OK | G,report,<cpu>,<mem>,<gpu> (255=dash)
-#   A,audio.level,<v> | J,{"name":...} | S,<name> | X | R,... -> ring blink.
+#   A,audio.level,<v> | J,{"name":...} | S,<name> | X | R,... -> the stage.
 # `*hh` checksums verified; 10 s without frames -> the face rests (dim).
 # Full contract: README.md. Keep this file SMALL — the ESP8266 compiles
 # it into an 80 KB heap; the ancestor face fit at ~11 KB source.
@@ -15,7 +17,7 @@ math_cos = math.cos             # the stage's circle, one lookup each
 math_sin = math.sin
 
 W, H = 64, 128            # portrait: u 0..63 across, v 0..127 down
-INVERT = True            # the -inverted build flips this (tools/build_faceplates.py):
+INVERT = False            # the -inverted build flips this (tools/build_faceplates.py):
                           # the composition mirrors along its long axis, so the
                           # board hung connector-up reads exactly as this reads
                           # connector-down. Same art, same words, other hang.
@@ -27,6 +29,8 @@ BAND_U = 48               # the yellow band starts here (16 px wide)
 # composition: band strip at the panel's other edge, numerals after.
 NUM_U = 0                 # the numeral column's left edge
 BAND_X = BAND_U           # the strip's left edge (16 px wide)
+TEXT_FLIP = False         # left-aligned mounts rotate the text area 180°
+                          # — the words would stand on their head otherwise
 if INVERT:
     NUM_U = W - BAND_U    # 16: numerals u 16..63
     BAND_X = 0            # the strip re-homes to the panel's other edge
@@ -54,20 +58,19 @@ ring_seq = "0"             # the stage's ring: DONE carries it, so a
                            # dropped animation can never answer for
                            # the one that replaced it
 band_lit = True            # the flash phase while a latched stage holds
+marker_lit = False         # the heartbeat dot: lit while traffic is fresh
 values = {"cpu": 255, "mem": 255, "gpu": 255}
-pulse_target = 0
-pulse_lit = 0
 
-# ── numerals: digits_bebas.bin — raw glyph rows (2 B each, MSB =
+# ── numerals: digits_slate.bin — raw glyph rows (2 B each, MSB =
 # leftmost), one width byte per glyph, 11 glyphs in DIG_CHARS order.
 # Read one glyph at a time at draw: the file costs ZERO import RAM,
 # which the ESP8266's 80 KB heap cannot spare (a .py font module
 # OOMs the display driver). Missing file -> the face degrades to
 # dashes, not a crash. ──
 DIG_CHARS = "0123456789-"
-DIG_H = 24
-DIG_STRIDE = 1 + DIG_H * 2
-DIG_FILE = "/digits_bebas.bin"
+DIG_H = 25
+DIG_STRIDE = 1 + DIG_H * 2          # widths <= 16: two bytes a row
+DIG_FILE = "/digits_slate.bin"
 NUM_H = DIG_H
 
 # ── the stage grammar (the keeper's design). Every say takes one of
@@ -175,8 +178,8 @@ def descriptor():
     except (OSError, ValueError):
         pass
     d["proto"] = "suzu/1"
-    d["version"] = "2.0.0"             # the faceplate.yaml version: the currency gate reads it
-    d["faceplate"] = "portrait-numerals-inverted" if INVERT else "portrait-numerals"
+    d["version"] = "1.0.0"             # the faceplate.yaml version: the currency gate reads it
+    d["faceplate"] = "portrait-slate-inverted" if INVERT else "portrait-slate"
     d["coverage"] = {
         "grounds": ["report"],
         "slots": {"report": ["cpu", "mem", "gpu"]},
@@ -203,9 +206,10 @@ def glyph(u, v, ch, on=1):
 def band_glyph(u, v, ch, on=1):
     """A microglyph rotated 90° — the spine convention. The letter's
     5-row height spans the band across (u 0..4), its 3-column width
-    runs along it; the top of each letter faces the band's outer
-    edge, and the inverted build's mirrored columns keep the rendered
-    view reading exactly like the parent's."""
+    runs along it. The mount chooses the layout: the parent hang and
+    the right-aligned hang read one way, the up and left hangs —
+    where the words would stand on their head — carry the rotated
+    text area."""
     i = GLYPH_KEYS.find(ch)
     if i < 0:
         return
@@ -214,37 +218,53 @@ def band_glyph(u, v, ch, on=1):
         for col in range(3):
             if bits & (1 << (14 - row * 3 - col)):
                 if INVERT:
-                    px(u + row, v - col, on)
+                    if TEXT_FLIP:
+                        px(u + row, v - col, on)
+                    else:
+                        px(u + row, v + col, on)
                 else:
-                    px(u + (4 - row), v + col, on)
+                    if TEXT_FLIP:
+                        px(u + 1 + row, v - col, on)
+                    else:
+                        px(u + (4 - row), v + col, on)
 
-def draw_band(inverted=False):
-    """The strip: the stage's words while it holds, the face's name
-    after. Cleared first — glyphs never overlay glyphs; a latched
-    stage flashes by inverting the strip, never by going dark. The
-    inverted hang lays the words in the mirrored direction so the
-    rendered view reads exactly like the parent's."""
-    if INVERT:
+def draw_band(dark=False):
+    """The label: a filled strip with the name knocked out — embossed
+    tape, this face's voice. Cleared first; glyphs never overlay
+    glyphs. A latched stage flashes the polarity: the whole label
+    blinks, never merely dims."""
+    if TEXT_FLIP:
         x, v0, step = 6, H - 5, -4
     else:
         x, v0, step = BAND_U + 5, 4, 4
-    rect(BAND_X, 0, W - BAND_U, H, 1 if inverted else 0)
+    rect(BAND_X, 0, W - BAND_U, H, 0 if dark else 1)
     text = ring_label if ring_label else label
     for i, ch in enumerate(text.upper()[:30]):   # 4 + 29*4 <= 127
-        band_glyph(x, v0 + i * step, ch, 0 if inverted else 1)
+        band_glyph(x, v0 + i * step, ch, 1 if dark else 0)
+
+def draw_marker():
+    """The heartbeat: a notch at the strip's far end that fills while
+    traffic is fresh and fades when the house goes quiet."""
+    global marker_lit
+    fresh = last_rx is not None and         time.ticks_diff(time.ticks_ms(), last_rx) < 300
+    if fresh != marker_lit:
+        marker_lit = fresh
+        rect(BAND_X + 2, 3 if TEXT_FLIP else H - 8, 2, 2,
+             0 if fresh else 1)
+        oled.show()
 
 def draw_divider(v):
-    """1-px divider; the lit run hangs off the label band, growing
-    away from it (left in the parent hang, right in the inverted)."""
-    rect(NUM_U, v, BAND_U, 1, 0)
-    if pulse_lit:
-        run_u = NUM_U if INVERT else BAND_U - pulse_lit
-        rect(run_u, v, pulse_lit, 1, 1)
+    """A solid rule between areas — the lane it used to carry now
+    lives in the label strip's end dot."""
+    rect(NUM_U, v, BAND_U, 1, 1)
 
 def blit(u, v, w, rowbytes):
-    """Draw one glyph's rows at (u,v); horizontal runs become fill_rects."""
-    for rix in range(len(rowbytes) // 2):
-        bits = (rowbytes[rix * 2] << 8) | rowbytes[rix * 2 + 1]
+    """Draw one glyph's rows at (u,v); horizontal runs become fill_rects.
+    Rows are packed MSB-left at (w + 7) // 8 bytes each — big pixel
+    fonts need the room."""
+    bpp = (w + 7) // 8
+    for rix in range(len(rowbytes) // bpp):
+        bits = int.from_bytes(rowbytes[rix * bpp:(rix + 1) * bpp], "big")
         col = 0
         while col < w:
             if bits & (1 << (w - 1 - col)):
@@ -268,7 +288,7 @@ def spr_for(ch):
     except OSError:
         g = bytearray(DIG_STRIDE)      # honest "not measured" dash
         g[0] = 10
-        g[1 + (DIG_H // 2) * 2] = 0x0F
+        g[1 + (DIG_H // 2) * ((10 + 7) // 8)] = 0x0F
         return (10, bytes(g))
     return (g[0], g[1:])
 
@@ -296,11 +316,27 @@ def draw_label(v0, text):
     for i, ch in enumerate(text.upper()):
         glyph(NUM_U + 2 + i * 4, v0, ch)
 
+def draw_gauge(u, v, val):
+    """Five cells beside the name, filled to the value, hollow past
+    it — the fact, at a glance."""
+    filled = (val * 5 + 50) // 100
+    for s in range(5):
+        su = u + s * 7
+        rect(su, v, 5, 4, 1)
+        if s >= filled:
+            rect(su + 2, v + 1, 3, 2, 0)
+
+def draw_dots(u, v):
+    for du in range(0, BAND_U, 2):
+        px(u + du, v, 1)
+
 def draw_area(area, label_text):
     v0 = area * AREA_H
     val = values[("cpu", "gpu", "mem")[area]]
     draw_num(v0 + 1, "-" if val == 255 else str(val))
-    draw_label(v0 + AREA_H - 7, label_text)
+    draw_label(v0 + 28, label_text)
+    draw_gauge(NUM_U + 13, v0 + 28, 0 if val == 255 else val)
+    draw_dots(NUM_U, v0 + 35)
 
 def redraw():
     oled.fill(0)
@@ -309,20 +345,11 @@ def redraw():
     draw_divider(AREA_H - 1)
     draw_divider(AREA_H * 2 - 1)
     draw_band()
+    draw_marker()
     oled.show()
 
-def set_pulse(v):
-    global pulse_target, pulse_lit
-    v = max(0, min(48, v))
-    pulse_target = v
-    if v >= pulse_lit:                # attack instant
-        pulse_lit = v
-        draw_divider(AREA_H - 1)
-        draw_divider(AREA_H * 2 - 1)
-        oled.show()
-
 def decay():
-    global pulse_lit, idle, ring_until, ring_label, stage, stage_glyph, latch, band_lit
+    global idle, ring_until, ring_label, stage, stage_glyph, latch, band_lit, marker_lit
     now = time.ticks_ms()
     if latch:
         # the exception holds: it flashes by inversion, ~400 ms a phase
@@ -336,11 +363,7 @@ def decay():
         stage = None                  # substrate fills the gap on its next
         stage_glyph = None            # frame
         redraw()
-    if pulse_lit > pulse_target and stage != "full":
-        pulse_lit = pulse_target + (pulse_lit - pulse_target) * 3 // 4
-        draw_divider(AREA_H - 1)
-        draw_divider(AREA_H * 2 - 1)
-        oled.show()
+    draw_marker()
     now = time.ticks_ms()
     quiet_for = (REST_MS if last_rx is not None
                  else BOOT_IDLE_MS + REST_MS)
@@ -484,6 +507,7 @@ def stage_draw():
         else:
             draw_icon(u, v, stage, 1)
     draw_band(flash)
+    draw_marker()
     oled.show()
 
 def wake():
@@ -548,10 +572,7 @@ def cmd(line):
             oled.show()
             r("OK")
         elif c == "A":
-            p = a.split(",")
-            if len(p) >= 2 and p[0] == "audio.level" and stage is None:
-                set_pulse(int(p[1]))  # the stage owns the dividers too
-            r("OK")
+            r("OK")               # any arrival relights the end dot
         elif c == "J":
             import ujson
             ctx = ujson.loads(a)

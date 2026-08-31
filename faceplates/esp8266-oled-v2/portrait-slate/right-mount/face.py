@@ -29,6 +29,8 @@ BAND_U = 48               # the yellow band starts here (16 px wide)
 # composition: band strip at the panel's other edge, numerals after.
 NUM_U = 0                 # the numeral column's left edge
 BAND_X = BAND_U           # the strip's left edge (16 px wide)
+TEXT_FLIP = False         # left-aligned mounts rotate the text area 180°
+                          # — the words would stand on their head otherwise
 if INVERT:
     NUM_U = W - BAND_U    # 16: numerals u 16..63
     BAND_X = 0            # the strip re-homes to the panel's other edge
@@ -177,7 +179,7 @@ def descriptor():
         pass
     d["proto"] = "suzu/1"
     d["version"] = "1.0.0"             # the faceplate.yaml version: the currency gate reads it
-    d["faceplate"] = "portrait-slate-inverted" if INVERT else "portrait-slate"
+    d["faceplate"] = "portrait-slate-right" if INVERT else "portrait-slate"
     d["coverage"] = {
         "grounds": ["report"],
         "slots": {"report": ["cpu", "mem", "gpu"]},
@@ -204,9 +206,10 @@ def glyph(u, v, ch, on=1):
 def band_glyph(u, v, ch, on=1):
     """A microglyph rotated 90° — the spine convention. The letter's
     5-row height spans the band across (u 0..4), its 3-column width
-    runs along it; the top of each letter faces the band's outer
-    edge, and the inverted build's mirrored columns keep the rendered
-    view reading exactly like the parent's."""
+    runs along it. The mount chooses the layout: the parent hang and
+    the right-aligned hang read one way, the up and left hangs —
+    where the words would stand on their head — carry the rotated
+    text area."""
     i = GLYPH_KEYS.find(ch)
     if i < 0:
         return
@@ -215,16 +218,22 @@ def band_glyph(u, v, ch, on=1):
         for col in range(3):
             if bits & (1 << (14 - row * 3 - col)):
                 if INVERT:
-                    px(u + row, v - col, on)
+                    if TEXT_FLIP:
+                        px(u + row, v - col, on)
+                    else:
+                        px(u + row, v + col, on)
                 else:
-                    px(u + (4 - row), v + col, on)
+                    if TEXT_FLIP:
+                        px(u + 1 + row, v - col, on)
+                    else:
+                        px(u + (4 - row), v + col, on)
 
 def draw_band(dark=False):
     """The label: a filled strip with the name knocked out — embossed
     tape, this face's voice. Cleared first; glyphs never overlay
     glyphs. A latched stage flashes the polarity: the whole label
     blinks, never merely dims."""
-    if INVERT:
+    if TEXT_FLIP:
         x, v0, step = 6, H - 5, -4
     else:
         x, v0, step = BAND_U + 5, 4, 4
@@ -240,7 +249,8 @@ def draw_marker():
     fresh = last_rx is not None and         time.ticks_diff(time.ticks_ms(), last_rx) < 300
     if fresh != marker_lit:
         marker_lit = fresh
-        rect(BAND_X + 2, H - 8, 2, 2, 0 if fresh else 1)
+        rect(BAND_X + 2, 3 if TEXT_FLIP else H - 8, 2, 2,
+             0 if fresh else 1)
         oled.show()
 
 def draw_divider(v):

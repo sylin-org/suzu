@@ -1,10 +1,9 @@
 name: portrait-slate
-status: beta                      # poured 2026-08-31 — verify by record before first live dress
 class: esp8266-oled-v2-class
 display_name: Slate
 blurb: A console readout — block digits, honest gauges, an embossed name
-mount: usb-down                   # hangs upwards — the connector sits at the bottom
-version: "1.0.0"                  # the currency gate reads it (ADR-0005, amended)
+version: "1.0.0"                   # the currency gate reads it (ADR-0005, amended)
+status: beta                       # poured 2026-08-31 — verified on the bench
 
 # Ground "report" slots, in the order the face reads them.
 # (255 / missing -> drawn as a dash: "not measured", not zero.)
@@ -23,6 +22,25 @@ rings:
   qualifiers: true
   text: true
 
+# The hangs this face declares. Each variant is a bundle directory
+# beside this manifest, named for its mount; the id is what a dressed
+# face reports and what the currency gate reads; the blurb guides the
+# chooser. The build derives every non-parent hang from the parent's
+# source (tools/build_faceplates.py) — regenerate, never hand-edit.
+variants:
+  - mount: usb-down
+    id: portrait-slate
+    blurb: hangs upwards — the connector sits at the bottom
+  - mount: usb-up
+    id: portrait-slate-inverted
+    blurb: hangs downwards — the connector sits at the top
+  - mount: usb-left
+    id: portrait-slate-left
+    blurb: landscape — the connector at the left; the words turn to read upright
+  - mount: usb-right
+    id: portrait-slate-right
+    blurb: landscape — the connector at the right; the words turn to read upright
+
 # The tool installs what the faceplate declares — files are pushed
 # verbatim, never interpreted. Art lives in the files, not in the tool.
 resources:
@@ -32,14 +50,13 @@ resources:
     - { from: digits_slate.bin, to: digits_slate.bin }
     - { from: icons.bin, to: icons.bin }  # moment icons (8x8 sprites)
 
-# Font provenance (regenerate, never hand-edit the bin). A classic
-# blocky pixel face, delightfully terminal; rendered by the shared
-# pipeline into the raw device bin.
+# Font provenance (regenerate, never hand-edit the bin). A tall
+# terminal face, delightfully CRT; rendered by the shared pipeline
+# into the raw device bin.
 font:
-  family: Silkscreen
-  weight: Bold
+  family: VT323
   license: SIL-OFL-1.1
-  source: tools/fonts/Silkscreen-Bold.ttf
+  source: tools/fonts/VT323-Regular.ttf
   generator: tools/font2sprites.py
-  data: digits_slate.bin
-  cap-height: 20
+  data: down-mount/digits_slate.bin
+  cap-height: 26

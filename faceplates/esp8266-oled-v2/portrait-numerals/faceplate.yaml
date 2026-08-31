@@ -1,10 +1,9 @@
 name: portrait-numerals
-status: beta                      # live on the bench since 2026-08-28
 class: esp8266-oled-v2-class
 display_name: BIG!
 blurb: Easy to read from a distance
-mount: usb-down                   # hangs upwards — the connector sits at the bottom
 version: "2.0.0"                   # the stage grammar — currency-gates the stream (ADR-0005)
+status: beta                       # live on the bench since 2026-08-28
 
 # Ground "report" slots, in the order the face reads them.
 # (255 / missing -> drawn as a dash: "not measured", not zero.)
@@ -18,11 +17,22 @@ frames: [I, K, G, A, J, S, X, R]
 
 # The ring voice (ADR-0006): what this face can speak. The instance
 # degrades every say to this dialect before a byte reaches the wire.
-# The ring voice (ADR-0006): what this face can speak. The instance
-# degrades every say to this dialect before a byte reaches the wire.
 rings:
   qualifiers: true      # dotted signals arrive whole (WARN.disk)
   text: true            # a words channel exists (the band)
+
+# The hangs this face declares. Each variant is a bundle directory
+# beside this manifest, named for its mount; the id is what a dressed
+# face reports and what the currency gate reads; the blurb guides the
+# chooser. The build derives every non-parent hang from the parent's
+# source (tools/build_faceplates.py) — regenerate, never hand-edit.
+variants:
+  - mount: usb-down
+    id: portrait-numerals
+    blurb: hangs upwards — the connector sits at the bottom
+  - mount: usb-up
+    id: portrait-numerals-inverted
+    blurb: hangs downwards — the connector sits at the top
 
 # The tool installs what the faceplate declares — files are pushed
 # verbatim, never interpreted. Art lives in the files, not in the tool.
@@ -31,24 +41,13 @@ resources:
     - { from: main.py, to: main.py }      # bootstrap: imports face
     - { from: face.mpy, to: face.mpy }    # the face, as bytecode
     - { from: digits_bebas.bin, to: digits_bebas.bin }
-    - { from: icons.bin, to: icons.bin }        # moment icons (8x8 sprites)
+    - { from: icons.bin, to: icons.bin }  # moment icons (8x8 sprites)
 
-# Provenance of the digit art (regenerate, never hand-edit). The raw
-# bin is what the device reads (one glyph at a time — import RAM on
-# the ESP8266 is 80 KB and spoken for); the .py module is host-side
-# reference only.
+# Font provenance (regenerate, never hand-edit the bin).
 font:
   family: Bebas Neue
   license: SIL-OFL-1.1
   source: tools/fonts/BebasNeue-Regular.ttf
-  icons:
-    source: firmware/suzu-d/esp8266-oled-v2/icons.py (stage set, redrawn
-      after Bootstrap Icons' cpu/gpu-card — MIT — and Lucide's
-      memory-stick — ISC)
-    packer: tools/pack_icons.py
-    keys: cpu gpu mem   # one sprite per ground area, in the areas' order
-  bytecode: "face.mpy — python -m mpy_cross -march=xtensa face.py -o face.mpy"
-  # (this firmware auto-runs main.py only; face.py is the human source)
   generator: tools/font2sprites.py
-  data: digits_bebas.bin
+  data: down-mount/digits_bebas.bin
   cap-height: 24
