@@ -48,10 +48,12 @@ def build_variant(face_dir, faceplate_name, variant):
         text = text.replace("INVERT = False", "INVERT = True", 1)
     if mount in TEXT_FLIP:
         text = text.replace("TEXT_FLIP = False", "TEXT_FLIP = True", 1)
-    # the variant's wire id rides one constant — the descriptor reports
-    # it whichever way the canvas turned
-    text = re.sub(r'(DRESS_ID = ")[^"]*(")',
-                  r'\g<1>' + variant["id"] + r'\g<2>', text, count=1)
+    # the dress tuple rides constants: the hang, and this hang's version
+    # (the variant's override, else the family's declaration)
+    side = mount.removeprefix("usb-")
+    version = variant.get("version") or family_version(face_dir) or "0.0.0"
+    text = re.sub(r'(DRESS_MOUNT = ")[^"]*(")', r'\g<1>' + side + r'\g<2>', text, count=1)
+    text = re.sub(r'(DRESS_VERSION = ")[^"]*(")', r'\g<1>' + version + r'\g<2>', text, count=1)
     vdir.mkdir(parents=True, exist_ok=True)
     (vdir / "face.py").write_text(text, encoding="utf-8")
 
@@ -78,6 +80,24 @@ def variants_of(face_dir):
     mf = face_dir / "faceplate.yaml"
     face = yaml.safe_load(mf.read_text(encoding="utf-8")) or {}
     return face.get("variants") or []
+
+
+def stamp_tuple(vdir, variant, family_ver):
+    """Stamp this hang's mount and version into its source, from the
+    manifest — one authority, every hang, the parent included."""
+    side = variant["mount"].removeprefix("usb-")
+    version = variant.get("version") or family_ver or "0.0.0"
+    src = vdir / "face.py"
+    text = src.read_text(encoding="utf-8")
+    text = re.sub(r'(DRESS_MOUNT = ")[^"]*(")', r"\g<1>" + side + r"\g<2>", text, count=1)
+    text = re.sub(r'(DRESS_VERSION = ")[^"]*(")', r"\g<1>" + version + r"\g<2>", text, count=1)
+    src.write_text(text, encoding="utf-8")
+
+
+def family_version(face_dir):
+    mf = face_dir / "faceplate.yaml"
+    face = yaml.safe_load(mf.read_text(encoding="utf-8")) or {}
+    return face.get("version")
 
 
 def main():
@@ -113,12 +133,15 @@ def main():
             print(f"  {name}:")
             for v in variants:
                 if v["mount"] == "usb-down":
-                    # The parent hang: the human source, compiled in place.
-                    src = face_dir / mount_dir("usb-down") / "face.py"
+                    # The parent hang: the human source, its tuple stamped
+                    # from the manifest like every other hang.
+                    src_dir = face_dir / mount_dir("usb-down")
+                    src = src_dir / "face.py"
                     if not src.exists():
                         print(f"  {name}: parent source missing — skipped")
                         ok = False
                         continue
+                    stamp_tuple(src_dir, v, family_version(face_dir))
                     r = subprocess.run(
                         [sys.executable, "-m", "mpy_cross", "-march=xtensa",
                          str(src), "-o", str(face_dir / mount_dir("usb-down") / "face.mpy")],

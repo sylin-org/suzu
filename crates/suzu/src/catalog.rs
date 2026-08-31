@@ -79,6 +79,9 @@ struct VariantDecl {
     id: String,
     #[serde(default)]
     blurb: Option<String>,
+    /// This hang's own version, when it diverges from the family's.
+    #[serde(default)]
+    version: Option<String>,
 }
 
 /// Scan a faceplates root (`<repo>/faceplates/<class-dir>/<id>/`).
@@ -128,10 +131,11 @@ fn scan_faceplates(root: PathBuf) -> Vec<FaceplateInfo> {
                     out.push(FaceplateInfo {
                         display_name: display_name.clone(),
                         id: v.id.clone(),
+                        faceplate: decl.name.clone(),
                         class: decl.class.clone(),
                         blurb: v.blurb.clone().or_else(|| decl.blurb.clone()),
                         mount: Some(v.mount.clone()),
-                        version: decl.version.clone(),
+                        version: v.version.clone().or_else(|| decl.version.clone()),
                         has_preview,
                         rings,
                         dir,
@@ -144,7 +148,8 @@ fn scan_faceplates(root: PathBuf) -> Vec<FaceplateInfo> {
                     || face_dir.join("preview.png").exists();
                 out.push(FaceplateInfo {
                     display_name,
-                    id: decl.name,
+                    id: decl.name.clone(),
+                    faceplate: decl.name,
                     class: decl.class,
                     blurb: decl.blurb,
                     mount: Some("usb-down".into()),
@@ -179,6 +184,9 @@ impl Default for RingDialect {
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct FaceplateInfo {
     pub id: String,
+    /// The faceplate's own name — the identity a dressed face reports,
+    /// before the mount flattens it into an install id.
+    pub faceplate: String,
     pub class: String,
     pub display_name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -407,6 +415,22 @@ impl Catalog {
     }
 
     /// One declared faceplate of a class, by id.
+    /// The dress a face reports: its faceplate's name and its mount
+    /// (a single-type faceplate reports none). This is the currency
+    /// question's resolution — the flattened ids are for installs.
+    pub fn dress(
+        &self,
+        class_id: &str,
+        faceplate: &str,
+        mount: Option<&str>,
+    ) -> Option<&FaceplateInfo> {
+        self.faceplates.iter().find(|f| {
+            f.class == class_id
+                && f.faceplate == faceplate
+                && f.mount.as_deref().map(|m| m.strip_prefix("usb-")) == Some(mount)
+        })
+    }
+
     pub fn faceplate(&self, class_id: &str, id: &str) -> Option<&FaceplateInfo> {
         self.faceplates
             .iter()

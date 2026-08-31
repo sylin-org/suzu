@@ -27,9 +27,14 @@ pub struct DeviceFacts {
     /// `"suzu/1"` once migrated; absent on pre-suzu firmware.
     pub proto: Option<String>,
     pub device_id: Option<String>,
-    /// The faceplate this face wears, as its own descriptor says it.
+    /// The faceplate this face wears, as its own descriptor says it —
+    /// its own name, never the flattened install id.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub faceplate: Option<String>,
+    /// The hang the dress was cut for: down | up | left | right.
+    /// Absent on a single-type faceplate (or an older dress).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mount: Option<String>,
     /// True when identified only by legacy CSV identity.
     pub legacy: bool,
 }

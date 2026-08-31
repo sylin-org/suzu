@@ -20,7 +20,9 @@ INVERT = True            # the -inverted build flips this (tools/build_faceplate
                           # board hung connector-up reads exactly as this reads
                           # connector-down. Same art, same words, other hang.
 BAND_U = 48               # the yellow band starts here (16 px wide)
-DRESS_ID = "numerals-up"            # the variant's wire id; the build sets it per mount
+DRESS_ID = "numerals"             # the faceplate this face wears (never flattened)
+DRESS_MOUNT = "up"          # the hang; the build sets it per mount
+DRESS_VERSION = "2.0.0"       # this hang's dress version; the build sets it per mount
 TEXT_FLIP = True         # left-aligned mounts rotate the text area 180°
                           # — the words would stand on their head otherwise
 # The glass's painted yellow strip is fixed to the glass: it does not
@@ -178,8 +180,9 @@ def descriptor():
     except (OSError, ValueError):
         pass
     d["proto"] = "suzu/1"
-    d["version"] = "2.0.0"             # the faceplate.yaml version: the currency gate reads it
+    d["version"] = DRESS_VERSION   # this hang's dress version             # the faceplate.yaml version: the currency gate reads it
     d["faceplate"] = DRESS_ID
+    d["mount"] = DRESS_MOUNT            # the orientation: down | up | left | right
     d["coverage"] = {
         "grounds": ["report"],
         "slots": {"report": ["cpu", "mem", "gpu"]},

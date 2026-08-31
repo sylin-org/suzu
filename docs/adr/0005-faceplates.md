@@ -89,14 +89,24 @@ A face worn in an outdated dress joined the stream as readily as a
 current one; nothing told the keeper, and nothing told the face.
 Amended:
 
-- **The declaration carries a `version`.** The descriptor a face
-  reports is the version of the dress it actually wears; the
-  declaration states the version the house now ships.
-- **Currency is part of worthiness.** The admission exam gains a
-  first step: worn older than declared fails it, and the stream
-  waits — the refusal names the remedy ("update the faceplate"),
-  and the workbench card offers it as a button. A declaration
-  without a version, or an unreadable one, asserts nothing.
+- **The dress a face wears is a tuple, stored on the face itself:
+  faceplate, mount, version.** The descriptor answers all three —
+  `slate`, `left`, `1.2.0` — and `suzu.json` keeps the same record
+  as the durable word past a reboot. (`variant` on this wire is the
+  hardware lineage, `oled-v2`; the orientation speaks as `mount`,
+  the vocabulary the declarations already use. A single-type
+  faceplate declares no mount.) The flattened ids (`slate-left`)
+  remain the doors' addressing for installs; the face itself never
+  stores a flattened name.
+- **Versions are per-hang.** The faceplate's declaration carries
+  the family version — one source, one version — and any variant
+  may declare its own to diverge. A hang left behind by a re-pour
+  is held by its own number, not waved through on its sibling's.
+- **Currency is part of worthiness.** The admission exam's first
+  step refuses a face whose worn version is older than its declared
+  one, or whose dress the class does not declare at all — the
+  refusal names the remedy, and the workbench card offers it as a
+  button.
 - **The update is the ceremony that already exists** — a soft saga:
   files, a nudge, and the exam again, now passing.
 - **A stale Suzu face updates itself.** A face that already speaks

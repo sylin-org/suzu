@@ -568,25 +568,21 @@ impl Devices {
                             if stale_declared
                                 && !self.in_maintenance.contains_key(&port)
                                 && *attempts <= 2
-                                && let Some(fp) = self
-                                    .devices
-                                    .get(&port)
-                                    .and_then(|d| d.facts.faceplate.clone())
-                                    && self
-                                        .catalog
-                                        .faceplate(
-                                            self.devices
-                                                .get(&port)
-                                                .and_then(|d| d.facts.class.as_deref())
-                                                .unwrap_or_default(),
-                                            &fp,
-                                        )
-                                        .is_some()
+                                && let Some(dress_id) = self.devices.get(&port)
+                                    .and_then(|d| {
+                                        self.catalog
+                                            .dress(
+                                                d.facts.class.as_deref().unwrap_or_default(),
+                                                d.facts.faceplate.as_deref().unwrap_or_default(),
+                                                d.facts.mount.as_deref(),
+                                            )
+                                            .map(|info| info.id.clone())
+                                    })
                             {
                                 println!(
-                                    "[house] {port}: dress {fp} is stale — updating it (the house keeps its own current)"
+                                    "[house] {port}: dress {dress_id} is stale — updating it (the house keeps its own current)"
                                 );
-                                let _ = self.maintenance_begin(&port, "soft", Some(fp));
+                                let _ = self.maintenance_begin(&port, "soft", Some(dress_id));
                             }
                         }
                         Ok(_) => {}
@@ -657,7 +653,8 @@ impl Devices {
         // no version, or the class declares no faceplates at all.
         let currency = match (&facts.faceplate, &facts.class) {
             (Some(fp), Some(class)) => {
-                let declared = self.catalog.faceplate(class, fp);
+                let declared =
+                    self.catalog.dress(class, fp, facts.mount.as_deref());
                 if declared.is_none()
                     && !self.catalog.faceplates_for_class(class).is_empty()
                 {
@@ -1096,16 +1093,17 @@ impl Devices {
         let faceplate = match faceplate {
             Some(f) => Some(f),
             None => {
-                let current = self
-                    .devices
-                    .get(port)
-                    .and_then(|d| d.facts.faceplate.clone());
-                match (&current, &class) {
-                    (Some(fp), Some(c)) if self.catalog.faceplate(c, fp).is_some() => {
-                        Some(fp.clone())
-                    }
-                    _ => None,
-                }
+                // the dress the face reports, resolved to its install id
+                let current = self.devices.get(port).and_then(|d| {
+                    self.catalog
+                        .dress(
+                            d.facts.class.as_deref().unwrap_or_default(),
+                            d.facts.faceplate.as_deref().unwrap_or_default(),
+                            d.facts.mount.as_deref(),
+                        )
+                        .map(|info| info.id.clone())
+                });
+                current
             }
         };
 

@@ -2,7 +2,7 @@ name: slate
 class: esp8266-oled
 display_name: Slate
 blurb: A console readout — block digits, honest gauges, an embossed name
-version: "1.1.0"                   # the currency gate reads it (ADR-0005, amended)
+version: "1.2.1"                   # the currency gate reads it (ADR-0005, amended)
 status: beta                       # poured 2026-08-31 — verified on the bench
 
 # Ground "report" slots, in the order the face reads them.
@@ -23,10 +23,13 @@ rings:
   text: true
 
 # The hangs this face declares. Each variant is a bundle directory
-# beside this manifest, named for its mount; the id is what a dressed
-# face reports and what the currency gate reads; the blurb guides the
-# chooser. The build derives every non-parent hang from the parent's
-# source (tools/build_faceplates.py) — regenerate, never hand-edit.
+# beside this manifest, named for its mount; the id is the doors'
+# addressing for installs (the face itself reports the tuple:
+# faceplate, mount, version); the blurb guides the chooser. The
+# family version above rules every hang; a variant may declare its
+# own `version:` to diverge. The build derives every non-parent hang
+# from the parent's source (tools/build_faceplates.py) — regenerate,
+# never hand-edit.
 variants:
   - mount: usb-down
     id: slate

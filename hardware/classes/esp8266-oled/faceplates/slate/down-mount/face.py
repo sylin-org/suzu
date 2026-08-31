@@ -29,7 +29,9 @@ BAND_U = 48               # the yellow band starts here (16 px wide)
 # composition: band strip at the panel's other edge, numerals after.
 NUM_U = 0                 # the numeral column's left edge
 BAND_X = BAND_U           # the strip's left edge (16 px wide)
-DRESS_ID = "slate"            # the variant's wire id; the build sets it per mount
+DRESS_ID = "slate"             # the faceplate this face wears (never flattened)
+DRESS_MOUNT = "down"          # the hang; the build sets it per mount
+DRESS_VERSION = "1.2.1"       # this hang's dress version; the build sets it per mount
 TEXT_FLIP = False         # left-aligned mounts rotate the text area 180°
                           # — the words would stand on their head otherwise
 if INVERT:
@@ -179,8 +181,9 @@ def descriptor():
     except (OSError, ValueError):
         pass
     d["proto"] = "suzu/1"
-    d["version"] = "1.1.0"             # the faceplate.yaml version: the currency gate reads it
+    d["version"] = DRESS_VERSION   # this hang's dress version             # the faceplate.yaml version: the currency gate reads it
     d["faceplate"] = DRESS_ID
+    d["mount"] = DRESS_MOUNT            # the orientation: down | up | left | right
     d["coverage"] = {
         "grounds": ["report"],
         "slots": {"report": ["cpu", "mem", "gpu"]},

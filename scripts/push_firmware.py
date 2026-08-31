@@ -250,10 +250,11 @@ class Repl:
         self.p.close()
 
 
-def resolve_dress_dir(faceplate):
-    """A dress id -> its bundle directory. Variant-type faceplates
-    declare their hangs in the manifest; single-type faceplates bundle
-    at their own root. The flat legacy layout still resolves."""
+def resolve_dress(faceplate):
+    """A dress id -> (bundle directory, the dress tuple the device
+    records: faceplate name, mount side, this hang's version).
+    Variant-type faceplates declare their hangs in the manifest;
+    single-type faceplates bundle at their own root."""
     import yaml
     root = pathlib.Path("hardware/classes/esp8266-oled/faceplates")
     for mf in sorted(root.glob("*/faceplate.yaml")):
@@ -261,9 +262,12 @@ def resolve_dress_dir(faceplate):
         for v in face.get("variants") or []:
             if v.get("id") == faceplate:
                 side = v["mount"].removeprefix("usb-")
-                return str(mf.parent / (side + "-mount"))
+                version = v.get("version") or face.get("version") or "0.0.0"
+                return (str(mf.parent / (side + "-mount")),
+                        face["name"], side, version)
         if face.get("name") == faceplate and not face.get("variants"):
-            return str(mf.parent)
+            return (str(mf.parent), face["name"], None,
+                    face.get("version") or "0.0.0")
     raise SystemExit(f"faceplate {faceplate!r} is not declared anywhere — "
                      "check the manifests under faceplates/")
 
@@ -280,7 +284,7 @@ def main():
     faceplate = "numerals"
     if "--faceplate" in sys.argv:
         faceplate = sys.argv[sys.argv.index("--faceplate") + 1]
-    dress_dir = resolve_dress_dir(faceplate)
+    dress_dir, dress_name, dress_mount, dress_version = resolve_dress(faceplate)
 
     repl = Repl(port)
     files = repl.list_files()
@@ -298,14 +302,20 @@ def main():
     # installer (erase -> flash -> provision) remains the heavy one.
     repl.backup_files(files, port)
 
+    # The durable word on the device: the dress tuple (ADR-0005) —
+    # this faceplate, this hang, this version. The descriptor answers
+    # the same three; the flattened install id is the doors' business.
     suzu = {
         "proto": "suzu/1",
         "companion": "firefly",
         "family": "esp8266-oled",
         "variant": "oled-v2",
-        "faceplate": faceplate,
+        "faceplate": dress_name,
         "adopted": "2026-08-28",
+        "dress_version": dress_version,
     }
+    if dress_mount:
+        suzu["mount"] = dress_mount
     if device_id:
         suzu["device_id"] = device_id              # preserve identity
         print("identity preserved:", device_id)
