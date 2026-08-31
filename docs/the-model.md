@@ -146,7 +146,7 @@ docs — but its vocabulary never enters suzu's language:
 - **firefly** is suzu's moniker for *visual* devices; **cricket** for
   *audio*. They are species names in suzu's own taxonomy, not references
   to any ancestor project.
-- Ancestor firmware gets the **temporal tag**: *ancestor firmware* — a
+- Unknown firmware gets the **state tag**: *not installed* — a
   device state, not an identity. Devices are never "zen garden things";
   they are fireflies and crickets waiting to speak suzu.
 - `zen-garden`, PoC numbers, and ancestor ADR ids may appear in history

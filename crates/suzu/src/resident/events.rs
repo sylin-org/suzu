@@ -24,7 +24,7 @@ pub struct DeviceFacts {
     pub family: Option<String>,
     pub variant: Option<String>,
     pub version: Option<String>,
-    /// `"suzu/1"` once migrated; absent on ancestor firmware.
+    /// `"suzu/1"` once installed; absent until the face speaks it.
     pub proto: Option<String>,
     pub device_id: Option<String>,
     /// The faceplate this face wears, as its own descriptor says it —

@@ -89,7 +89,7 @@ individuals for one COM12 on a single bench night.
 - **The face holds the deed.** `suzu.json` on the device is the
   record; the descriptor answers from it, so the second boot says
   the name the first was given. A face that cannot store (no
-  writable state, an ancestor dialect) simply stays on the old
+  writable state, an unknown dialect) simply stays on the old
   path: mint per session, no persistence, honestly visible as such.
 - **The install path is unchanged.** Sagas still write identity on
   install — now as one writer among the same deed, not the only

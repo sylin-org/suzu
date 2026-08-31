@@ -76,7 +76,7 @@ pub struct Transcript {
 pub enum Outcome {
     /// A JSON descriptor answered. `hello` = it spoke first.
     Suzu { json: Value, hello: bool },
-    /// Pre-suzu firefly CSV identity — ancestor firmware.
+    /// Firefly CSV identity — unknown firmware, as far as suzu knows.
     LegacyFirefly { line: String },
     /// No identity response within the deadline.
     Silent,

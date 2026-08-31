@@ -2,7 +2,7 @@ seen: 2026-08-28
 port: COM14
 device_id: "019d8d82-fd23-72a0-b1f5-57ca24156fed"
 hardware_id: "esp32-8813bffcf76c"
-board_note: "T-Display unit running ancestor firmware — distinct individual from the factory unit on COM13"
+board_note: "T-Display unit running firefly 1.0.0 — distinct individual from the factory unit on COM13"
 answered: "I on demand"
 descriptor:
   capabilities: [json-push, load-incremental, service-deltas, wipe-animations]

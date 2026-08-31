@@ -1040,7 +1040,7 @@ impl Devices {
         faceplate: Option<String>,
     ) -> anyhow::Result<()> {
         // The keeper's verb is "install"; the saga depends on what the
-        // face speaks today - an ancestor needs the full install, a
+        // face speaks today - an unknown board needs the full install, a
         // suzu face just its files back.
         let speaks_suzu = self
             .devices
@@ -1323,7 +1323,7 @@ fn session_thread(
     let mut serial = serial.expect("the retry loop either opened or returned");
     println!(
         "[sessions] {port}: consumer translating ({})",
-        if suzu { "suzu/1" } else { "ancestor" }
+        if suzu { "suzu/1" } else { "unknown" }
     );
 
     // The admission exam runs before anything flows. Its verdict goes

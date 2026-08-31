@@ -8,7 +8,7 @@
 - VID/PID `239a:80f4` — CircuitPython CDC (Adafruit VID, usbser driver)
 - product "USB Serial Device", manufacturer reported as Microsoft
 - serial always `E66…` — RP2040 flash-derived
-- silent to `I` — stock CircuitPython, no ancestor identity on any unit
+- silent to `I` — stock CircuitPython, no suzu identity on any unit
 
 ## Individuals
 
@@ -33,7 +33,7 @@ pending more samples.
   RESET button; procedures should treat os-error-22 as "ask for RESET,
   retry once" rather than failure.
 - All units take the `circuitpy-drive-copy` upgrade path — none has
-  ancestor firmware.
+  the firefly firmware.
 
 
 ## LED order (2026-08-30, the golden/green mismatch)

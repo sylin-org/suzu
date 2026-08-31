@@ -123,7 +123,7 @@ impl Watcher {
                 .unwrap_or_else(|e| Err(format!("join: {e}")));
 
                 // A silent descriptor from a board the catalog knows by
-                // vid/pid is a face mid-boot, not an ancestor verdict —
+                // vid/pid is a face mid-boot, not a firmware verdict —
                 // one settled re-probe before believing the silence.
                 let identified = match identified {
                     Ok(facts)
@@ -146,7 +146,7 @@ impl Watcher {
                 // Report-before-minding: an unreachable port is a fact
                 // for the house, never a device to mind. A class the
                 // catalog knows runs suzu - a silent descriptor means
-                // the face was mid-boot, not that it is an ancestor;
+                // the face was mid-boot, not a verdict on its firmware;
                 // one settled re-probe before believing the silence.
                 let facts = match identified {
                     Ok(facts) => {

@@ -83,7 +83,7 @@ pub fn migrate(port: &str) -> Result<String> {
     }
 }
 
-/// Restore the ancestor firmware from the backup, and remove the suzu
+/// Restore the device's own firmware from the backup, and remove the suzu
 /// identity — the un-migration.
 pub fn restore(port: &str) -> Result<String> {
     let identity = identify(port)?;
@@ -96,7 +96,7 @@ pub fn restore(port: &str) -> Result<String> {
     let main_backup = std::fs::read(dir.join("main.py"))
         .map_err(|_| anyhow::anyhow!("no backup for {device_id} — refusing to touch the device"))?;
 
-    println!("  restoring ancestor main.py from backup …");
+    println!("  restoring the device's own main.py from backup …");
     let mut repl = Repl::open(port)?;
     repl.write_file("main.py", &main_backup)?;
     if let Err(e) = repl.remove_file("suzu.json") {
@@ -109,8 +109,8 @@ pub fn restore(port: &str) -> Result<String> {
             if json.get("proto").and_then(|v| v.as_str()) == Some("suzu/1") {
                 bail!("still answering as suzu — restore did not take");
             }
-            Ok("restored ✓ — ancestor firmware is back in charge".into())
+            Ok("restored ✓ — the device's own firmware is back in charge".into())
         }
-        _ => Ok("restored ✓ — device answers with its ancestor identity".into()),
+        _ => Ok("restored ✓ — device answers with its own identity".into()),
     }
 }

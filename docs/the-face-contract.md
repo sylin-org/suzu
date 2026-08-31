@@ -78,7 +78,7 @@ frame.
 | **light** (5×5 matrix) | hue = valence, intensity = urgency, tempo = the gloss, pattern = the story | raindrops and atom fireflies |
 | **text+icons** (OLED v2) | glowing spine label, icons, band blink | the portrait composition |
 | **terminal** | words, timestamps, structure | the full line |
-| **ancestor** | its own installed voice | `WIPE-IN`, wipes, its dashboard — visibly non-lossy |
+| **not installed** | its own installed voice | `WIPE-IN`, wipes, its dashboard — visibly non-lossy |
 
 A device that cannot render a moment's *icon* still renders its
 *objective* (severity, tempo, words where possible) — the icon is

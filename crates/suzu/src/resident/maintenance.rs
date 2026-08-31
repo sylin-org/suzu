@@ -555,7 +555,7 @@ fn default_dress(catalog: &Catalog) -> &str {
         .unwrap_or("numerals")
 }
 
-/// An ancestor walks in: the full install (the proven fresh push that
+/// An unknown board walks in: the full install (the proven fresh push that
 /// gives it the suzu face, identity kept), then the exam decides.
 fn esp8266_adopt(
     saga: &mut Saga,

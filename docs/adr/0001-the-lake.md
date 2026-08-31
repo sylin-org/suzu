@@ -50,7 +50,7 @@ Per the face contract (`docs/the-face-contract.md`):
 - **The host reduces.** The serial hop carries the device's dialect
   only: light sentences for the matrix (hue = valence, intensity =
   urgency, tempo = the gloss, pattern = the story), text+icons+tempo for
-  the OLED, its own voice for ancestor faces.
+  the OLED, its own voice until a suzu face is installed.
 
 **Recording stays host-side** (the trail camera): the face never buffers
 or stages — each screenshot is one stateless in-band reply, and `suzu

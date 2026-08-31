@@ -40,5 +40,5 @@ of truth.
 ## Language
 
 firefly (visual) and cricket (audio) are suzu's own monikers. Ancestor
-firmware is called *ancestor* — a device state, never an identity.
+firmware is called *not installed* — a device state, never an identity.
 History stays in the harvest docs, never in these files.

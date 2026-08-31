@@ -86,7 +86,7 @@ Order of work:
    then a downloaded condensed display font (Keeper's call — Bebas
    Neue / Big Shoulders class) converted to digit sprites.
 3. The bench unit on COM12 is freshly provisioned by the ancestor
-   installer (ancestor, device `01a04aea…`) — the perfect subject for
+   installer (not installed, device `01a04aea…`) — the perfect subject for
    the migration test: backup → push suzu files → verify
    `proto: suzu/1` → watch the portrait face light up.
 

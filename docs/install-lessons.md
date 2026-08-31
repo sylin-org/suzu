@@ -108,7 +108,7 @@ one command, un-bricked, provisioned, display tested. That is the bar
   program — close it and I'll try again."
 - A **silent port is a diagnosis, not a shrug**: "no answer — try a
   data cable, or hold BOOT while plugging to force the bootloader."
-- The list shows **what the tool knows**: fresh / ancestor / suzu x.y /
+- The list shows **what the tool knows**: fresh / unknown / suzu x.y /
   busy / unknown — never a guess dressed as a fact.
 - After any write: verify, then *say so* — "wrote and verified" beats
   "done".

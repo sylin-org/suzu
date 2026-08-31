@@ -292,7 +292,7 @@
     } else if (lc === "paused") {
       line = "off the stream - the face rests";
     } else if (!row.proto) {
-      line = `ancestor firmware (${escapeHtml(row.version ?? "?")}) - not yet adopted`;
+      line = `not installed - not on the stream`;
     } else {
       line = "installed - joining the stream\u2026";
     }
