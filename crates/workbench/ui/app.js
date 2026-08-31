@@ -292,7 +292,7 @@
     } else if (lc === "paused") {
       line = "off the stream - the face rests";
     } else if (!row.proto) {
-      line = `pre-suzu firmware (${escapeHtml(row.version ?? "?")}) - not on the stream`;
+      line = `ancestor firmware (${escapeHtml(row.version ?? "?")}) - not yet adopted`;
     } else {
       line = "installed - joining the stream\u2026";
     }

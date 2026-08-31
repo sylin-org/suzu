@@ -10,7 +10,7 @@ sets: [os]
 boards:
   - name: "TENSTAR T-Display ESP32-D0WD, Type-C — factory unit"
     status: observed                 # COM13 first session, silent to I
-  - name: "TENSTAR T-Display ESP32-D0WD, Type-C — pre-suzu firmware unit"
+  - name: "TENSTAR T-Display ESP32-D0WD, Type-C — ancestor firmware unit"
     status: observed                 # COM14, firefly fw 1.0.0
   - name: "different-vendor T-Display-class unit (CH9102F)"
     status: observed                 # COM13 second session, firefly fw 1.0.0

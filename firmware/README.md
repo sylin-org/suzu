@@ -18,7 +18,7 @@ swept into suzu's language: same faces, same grammar, suzu identity.
 
 Each folder carries a `suzu.json` descriptor template. Adoption writes
 the real descriptor (minting a device_id, or preserving one from
-pre-suzu provisioning); every family's `descriptor_json()` merges
+ancestor provisioning); every family's `descriptor_json()` merges
 `"proto": "suzu/1"` into the response, so migrated boards answer the
 handshake as suzu while keeping their identity.
 

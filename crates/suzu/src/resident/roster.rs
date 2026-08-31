@@ -12,7 +12,7 @@
 //! - **Live** — subscribed to the streams (ground, pulses, rings).
 //!   Granted exactly one way: a passing admission test, from New.
 //! - **New** — present, not on the stream. Whatever the reason (just
-//!   plugged in, failed its exam, pre-suzu firmware) the remedy is the
+//!   plugged in, failed its exam, ancestor firmware) the remedy is the
 //!   same pair of tools: Install Firmware, or Factory Reset.
 //! - **Paused** — the keeper lifted it off the stream. Trust is not
 //!   withdrawn: resume re-subscribes without a re-test.

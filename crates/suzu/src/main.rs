@@ -107,7 +107,7 @@ fn verdict_from(catalog: &Catalog, vid: u16, pid: u16, t: &Transcript) -> Verdic
             None => format!("{family} v{version}"),
         };
         let tag = if proto.is_empty() {
-            "pre-suzu descriptor".to_string()
+            "ancestor descriptor".to_string()
         } else {
             format!("[{proto}]")
         };
@@ -123,8 +123,8 @@ fn verdict_from(catalog: &Catalog, vid: u16, pid: u16, t: &Transcript) -> Verdic
             .as_deref()
             .and_then(|tok| catalog.class_by_signature("firefly", tok));
         let head = match class {
-            Some(c) => format!("{} · firefly (pre-suzu firmware)", c.id),
-            None => "firefly (pre-suzu firmware)".to_string(),
+            Some(c) => format!("{} · firefly (ancestor firmware)", c.id),
+            None => "firefly (ancestor firmware)".to_string(),
         };
         return Verdict::new(
             head,
@@ -376,7 +376,7 @@ fn run_test(port: &str) {
             }
         }
         Ok(Outcome::LegacyFirefly { line }) => {
-            println!("  pre-suzu firefly identity: {line}");
+            println!("  ancestor firefly identity: {line}");
             println!("  → still alive. Migration lands with the install procedure.");
         }
         Ok(Outcome::Silent) => println!("  no identity response — fresh or foreign firmware"),

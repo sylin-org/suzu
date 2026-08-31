@@ -1,7 +1,7 @@
 //! `suzu prepare` — the adoption front door.
 //!
 //! Lists every plugged candidate (serial faces and CircuitPython
-//! drives), shows its honest state (suzu / pre-suzu firefly / blank),
+//! drives), shows its honest state (suzu / ancestor firefly / blank),
 //! offers the class's faceplates, and installs by the class's reliable
 //! path: CircuitPython drives get file copies with read-back verify;
 //! REPL faces get the proven push.
@@ -281,7 +281,7 @@ fn install_rp2040_once(drive: &str) -> anyhow::Result<()> {
                 suzu["device_id"] = serde_json::Value::String(id.to_string());
                 println!("  identity preserved: {id}");
             }
-    if suzu.get("device_id").map(|v| v == "assigned at adoption (preserved from pre-suzu provisioning when present)").unwrap_or(false) || suzu.get("device_id").is_none() {
+    if suzu.get("device_id").map(|v| v == "assigned at adoption (preserved from ancestor provisioning when present)").unwrap_or(false) || suzu.get("device_id").is_none() {
         let id = mint_v7();
         suzu["device_id"] = serde_json::Value::String(id.clone());
         println!("  identity minted: {id}");
