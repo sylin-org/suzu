@@ -8,8 +8,11 @@
 # Full contract: README.md. Keep this file SMALL — the ESP8266 compiles
 # it into an 80 KB heap; the ancestor face fit at ~11 KB source.
 
-import gc, sys, time, select
+import gc, math, sys, time, select
 from machine import Timer, UART
+
+math_cos = math.cos             # the stage's circle, one lookup each
+math_sin = math.sin
 
 W, H = 64, 128            # portrait: u 0..63 across, v 0..127 down
 INVERT = False            # the -inverted build flips this (tools/build_faceplates.py):
@@ -31,16 +34,16 @@ boot_ms = None
 idle = False
 ff = ()                   # the fireflies: [u0, phase, speed, v] each
 label = "suzu"
-ring_label = None          # a moment's text, shown in the band briefly
-ring_icon = None           # its icon's index, when the signal has one
-ring_verb = None           # the objective: alert latches, the rest bloom
-ring_until = None          # when the splash ends (ticks_ms); None = none
-latch = False              # True while an alert is up
+stage = None               # the stage: None (ground showing), "full",
+                           # or the addressed area 0..2 (cpu/gpu/mem)
+stage_glyph = None         # the full stage's subject: info|warn|exception
+ring_label = None          # a moment's words, glowing on the band
+ring_until = None          # when the stage ends (ticks_ms); None = latched
+latch = False              # True while an exception holds the stage
 ring_seq = "0"             # the stage's ring: DONE carries it, so a
                            # dropped animation can never answer for
                            # the one that replaced it
-band_lit = True            # the band's blink phase during a latched alert
-last_blink = 0
+band_lit = True            # the flash phase while a latched stage holds
 values = {"cpu": 255, "mem": 255, "gpu": 255}
 pulse_target = 0
 pulse_lit = 0
@@ -57,18 +60,21 @@ DIG_STRIDE = 1 + DIG_H * 2
 DIG_FILE = "/digits_bebas.bin"
 NUM_H = DIG_H
 
-# ── the say vocabulary: the nine rings. Each names its objective —
-# alert latches (the only sustained-fast state), allclear heals,
-# momentary rings bloom for ~5 s and return. Urgency is the 0-5
-# vitality scale rendered as tempo. Icons: the signal's qualifier may
-# name one; the objective never depends on it. ──
-RING_VERBS = ("alert", "allclear", "completion", "discovery", "begin",
-              "departure", "tended", "transition", "heartbeat")
+# ── the stage grammar (the keeper's design). Every say takes one of
+# three modes, by its signal's first word: info/ok/allclear bloom the
+# encircled I; warn and the other verbs hold the triangle; the
+# exception family (alert/crit) latches — it flashes until allclear
+# or X. A bare say takes the whole stage: the panel clears and one
+# big glyph speaks, alone. A qualifier that names a ground area
+# (cpu/gpu/mem) addresses only that area: its sprite replaces the
+# numeral while the other areas keep breathing. Anything the face
+# cannot place degrades to the full stage — never disconnected. ──
+STAGE_MS = 5000            # a bloom's length; a latch knows no clock
 
 # ── moment icons: icons.bin — 8x8 sprites, 8 bytes each, MSB-left
-# rows, in ICON_KEYS order. A ring's signal names one; the icon rides
-# the overlay. Zero boot RAM — read at draw, like the digits. ──
-ICON_KEYS = "disk usb gear net clock heart warn wilt"
+# rows, one per ground area, in the areas' own order. Zero boot RAM —
+# read at draw, like the digits. ──
+ICON_KEYS = "cpu gpu mem"
 ICON_FILE = "/icons.bin"
 
 # ── microglyphs: 3x5, upright (rows -> +v, cols -> +u). Packed as a
@@ -201,13 +207,17 @@ def band_glyph(u, v, ch, on=1):
                 else:
                     px(u + (4 - row), v + col, on)
 
-def draw_band():
-    """The yellow strip, kept dark: the label as glowing spine text,
-    reading top -> bottom. Lit letters outread black cutouts at 1 px."""
+def draw_band(inverted=False):
+    """The strip: the stage's words while it holds, the face's name
+    after. Cleared first — glyphs never overlay glyphs; a latched
+    stage flashes by inverting the strip, never by going dark."""
+    rect(BAND_U, 0, W - BAND_U, H, 0)
+    if inverted:
+        rect(BAND_U, 0, W - BAND_U, H, 1)
     x = BAND_U + 5                    # rotated glyphs are 5 across
     text = ring_label if ring_label else label
     for i, ch in enumerate(text.upper()[:30]):   # 4 + 29*4 <= 127
-        band_glyph(x, 4 + i * 4, ch, 1)
+        band_glyph(x, 4 + i * 4, ch, 0 if inverted else 1)
 
 def draw_divider(v):
     """1-px divider; the lit run hangs off the label band, growing left."""
@@ -296,13 +306,20 @@ def set_pulse(v):
         oled.show()
 
 def decay():
-    global pulse_lit, idle, ring_label, ring_icon, ring_until
-    if ring_until is not None and time.ticks_diff(time.ticks_ms(), ring_until) > 0:
-        ring_label = None             # the moment passed; the substrate
-        ring_icon = None              # fills the gap on its next frame
-        ring_until = None
+    global pulse_lit, idle, ring_until, stage, stage_glyph, latch, band_lit
+    now = time.ticks_ms()
+    if latch:
+        # the exception holds: it flashes by inversion, ~400 ms a phase
+        phase = (now // 400) % 2 == 1
+        if band_lit != phase:
+            band_lit = phase
+            stage_draw()
+    elif ring_until is not None and time.ticks_diff(now, ring_until) > 0:
+        ring_until = None             # the moment passed; the substrate
+        stage = None                  # fills the gap on its next frame
+        stage_glyph = None
         redraw()
-    if pulse_lit > pulse_target:      # decay exponential toward the target
+    if pulse_lit > pulse_target and stage != "full":
         pulse_lit = pulse_target + (pulse_lit - pulse_target) * 3 // 4
         draw_divider(AREA_H - 1)
         draw_divider(AREA_H * 2 - 1)
@@ -345,7 +362,7 @@ def idle_step():
         px(max(1, min(46, x)), f[4], 1)
     oled.show()
 
-def draw_icon(u, v, i):
+def draw_icon(u, v, i, on=1):
     try:
         with open(ICON_FILE, "rb") as f:
             f.seek(i * 8)
@@ -355,30 +372,116 @@ def draw_icon(u, v, i):
     for r in range(8):
         for c in range(8):
             if rows[r] & (0x80 >> c):
-                px(u + c * 2, v + r * 2, 1)
-                px(u + c * 2 + 1, v + r * 2, 1)
-                px(u + c * 2, v + r * 2 + 1, 1)
-                px(u + c * 2 + 1, v + r * 2 + 1, 1)
+                px(u + c * 2, v + r * 2, on)
+                px(u + c * 2 + 1, v + r * 2, on)
+                px(u + c * 2, v + r * 2 + 1, on)
+                px(u + c * 2 + 1, v + r * 2 + 1, on)
 
-def ring_draw():
-    """The overlay: the moment's icon centered in the column, its
-    words glowing on the band."""
-    rect(0, 0, BAND_U, H, 0)
-    if ring_icon is not None:
-        draw_icon((BAND_U - 16) // 2, 20, ring_icon)
-    draw_band()
+# ── the stage's big glyphs: code-drawn geometry, not sprites — they
+# must read across the room at 1 bit, and shapes cost no heap. ──
+
+def line(x0, y0, x1, y1, on=1):
+    dx = abs(x1 - x0)
+    sx = 1 if x0 < x1 else -1
+    dy = -abs(y1 - y0)
+    sy = 1 if y0 < y1 else -1
+    err = dx + dy
+    while True:
+        px(x0, y0, on)
+        if x0 == x1 and y0 == y1:
+            return
+        e2 = 2 * err
+        if e2 >= dy:
+            err += dy
+            x0 += sx
+        if e2 <= dx:
+            err += dx
+            y0 += sy
+
+def circle(cx, cy, rad, on=1):
+    steps = rad * 6
+    prev = None
+    for i in range(steps + 1):
+        a = 6.2832 * i / steps
+        pt = (cx + int(rad * math_cos(a)), cy + int(rad * math_sin(a)))
+        if prev:
+            line(prev[0], prev[1], pt[0], pt[1], on)
+        prev = pt
+
+def draw_info():
+    """The encircled I — the say that carries no alarm."""
+    circle(24, 64, 17)
+    rect(21, 54, 6, 21, 1)
+    rect(18, 51, 12, 3, 1)
+    rect(18, 75, 12, 3, 1)
+
+def tri_edges(cx, cy, w, h, v):
+    """half-width of the triangle at row v"""
+    top = cy - h
+    base = cy + 2 * h // 3
+    if v < top or v > base:
+        return None
+    return (v - top) * w // (base - top)
+
+def draw_warn(inverted=False):
+    """The exclamation triangle — attention, held steady. Inverted
+    (lit fill, dark mark) is the exception's flash phase."""
+    cx, cy, w, h = 24, 62, 22, 19
+    top, base = cy - h, cy + 2 * h // 3
+    if inverted:
+        for v in range(top, base + 1):
+            t = tri_edges(cx, cy, w, h, v)
+            if t is not None:
+                rect(cx - t, v, 2 * t + 1, 1, 1)
+    else:
+        line(cx, top, cx - w, base, 1)
+        line(cx, top, cx + w, base, 1)
+        line(cx - w, base, cx + w, base, 1)
+    ink = 0 if inverted else 1
+    rect(cx - 1, cy - 6, 3, 9, ink)
+    rect(cx - 1, cy + 5, 3, 3, ink)
+
+def stage_draw():
+    """The stage: a bare say clears the panel and one big glyph
+    speaks, alone; a qualified say replaces only that area's numeral
+    while the rest keeps breathing. The band clears before it speaks
+    and flashes by inversion while a latch holds."""
+    flash = latch and (time.ticks_ms() // 400) % 2 == 1
+    if stage == "full":
+        rect(0, 0, BAND_U, H, 0)
+        if stage_glyph == "exception":
+            draw_warn(flash)
+        elif stage_glyph == "warn":
+            draw_warn(False)
+        else:
+            draw_info()
+    elif stage is not None:
+        v0 = stage * AREA_H
+        rect(0, v0 + 1, BAND_U, NUM_H + 2, 0)
+        u = (BAND_U - 16) // 2
+        v = v0 + 1 + (NUM_H - 16) // 2
+        if flash:
+            rect(u, v, 16, 16, 1)
+            draw_icon(u, v, stage, 0)
+        else:
+            draw_icon(u, v, stage, 1)
+    draw_band(flash)
     oled.show()
 
 def wake():
     global idle
     if idle:
         idle = False
-        redraw()
+        if stage is not None:
+            stage_draw()              # the say that woke the face stays up
+        else:
+            redraw()
 
 # ── frames ──
 
 def cmd(line):
-    global last_rx, label, values, ring_until
+    global last_rx, label, values, ring_until, ring_label
+    global stage, stage_glyph, latch, band_lit, ring_seq
     line = line.strip()
     if not line:
         return
@@ -410,8 +513,17 @@ def cmd(line):
             for i, key in enumerate(("cpu", "mem", "gpu")):
                 if len(p) > i + 1 and p[i + 1]:
                     values[key] = int(p[i + 1])
-            if ring_until is not None:
-                r("OK")               # a splash owns the panel; ground waits
+            if stage == "full":
+                r("OK")               # the stage owns the panel; ground waits
+                return
+            if stage is not None:
+                # a qualified stage: the addressed area is spoken for,
+                # the other two keep breathing
+                for i in range(3):
+                    if i != stage:
+                        draw_area(i, ("CPU", "GPU", "MEM")[i])
+                oled.show()
+                r("OK")
                 return
             for i, label_text in enumerate(("CPU", "GPU", "MEM")):
                 draw_area(i, label_text)
@@ -419,8 +531,8 @@ def cmd(line):
             r("OK")
         elif c == "A":
             p = a.split(",")
-            if len(p) >= 2 and p[0] == "audio.level" and ring_until is None:
-                set_pulse(int(p[1]))  # the splash owns the dividers too
+            if len(p) >= 2 and p[0] == "audio.level" and stage is None:
+                set_pulse(int(p[1]))  # the stage owns the dividers too
             r("OK")
         elif c == "J":
             import ujson
@@ -451,29 +563,35 @@ def cmd(line):
                 oled.show()
             r("OK")
         elif c == "X":
-            r("OK")                   # nothing overlaid yet; ground is showing
+            # the host stands the stage down (the latch's other key)
+            stage = None
+            stage_glyph = None
+            latch = False
+            ring_until = None
+            redraw()
+            r("OK")
         elif c == "R":
-            global ring_label, ring_until, ring_icon, ring_verb, band_lit, latch
             p = a.split(",")
             signal = p[0].lower()
-            verb = next((v for v in RING_VERBS if signal.startswith(v)), "transition")
-            ring_verb = verb
+            word = signal.split(".", 1)[0]
             qual = signal.split(".", 1)[1] if "." in signal else ""
-            keys = ICON_KEYS.split()
-            ring_icon = keys.index(qual) if qual in keys else -1
-            ring_label = " ".join(p[5:])[:30] or None
-            if verb == "alert":
-                latch = True                    # alert latches until allclear
-                ring_until = None
-
+            if word[:5] == "alert" or word[:4] == "crit" or word[:9] == "exception":
+                glyph = "exception"
+            elif word[:4] == "info" or word[:2] == "ok" or word[:8] == "allclear":
+                glyph = "info"
             else:
-                latch = False
-                ring_until = time.ticks_add(time.ticks_ms(), 5000)
-            band_lit = True
+                glyph = "warn"
+            ring_label = " ".join(p[5:])[:30] or None
             if len(p) > 4:
                 ring_seq = p[4]
-            ring_draw()
-            oled.show()
+            keys = ICON_KEYS.split()
+            stage = keys.index(qual) if qual in keys else "full"
+            stage_glyph = glyph
+            latch = glyph == "exception"    # the exception latches; the
+            ring_until = (None if latch     # rest blooms and returns
+                          else time.ticks_add(time.ticks_ms(), STAGE_MS))
+            band_lit = False
+            stage_draw()
             ack = "OK," + p[4] if len(p) > 4 else "OK"   # echo the seq
             r(ack, checksum=True)
         else:

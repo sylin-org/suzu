@@ -81,6 +81,29 @@ was already semantic — the stage was the missing half); OS-specific
 port patterns in the grammar (the enumeration is the truth, and it
 already knows).
 
+## Amendment — the stage grammar (2026-08-31)
+
+The original decision's cost note said a face's numerals "freeze"
+during a splash. When rings finally ran live (they had crashed since
+birth), the keeper judged the OLED's actual composition — numerals
+erased, an empty column, words alone — and designed the replacement:
+
+- **Three modes, by the signal's first word.** info/ok/allclear bloom
+  the encircled I; warn and the other verbs hold the exclamation
+  triangle; the exception family (alert/crit) is a triangle that
+  **latches, flashing by inversion**, until allclear or the host X.
+- **Bare says take the whole stage** — the panel clears and one big
+  glyph (code-drawn geometry) speaks, alone. **A qualifier that names
+  a ground area addresses only that area**: its sprite replaces the
+  numeral while the other areas keep breathing. A qualifier the face
+  cannot place degrades to the full stage, never disconnected.
+- **The band clears before it speaks** — glyphs never overlay glyphs —
+  and flashes by inverting the strip, never by going dark.
+
+Presentation remains the faceplate's decision (ADR-0005); this is the
+esp8266-oled-v2 faceplate's declared grammar, now the reference for
+the family.
+
 ## References
 
 - `docs/adr/0001-the-lake.md` — the asymmetry principle, turned to the room

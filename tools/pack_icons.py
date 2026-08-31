@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
-"""Pack the harvested Open Iconic set into a faceplate icons.bin.
+"""Pack the stage sprite set into a faceplate icons.bin.
 
-Source: firmware/suzu-d/esp8266-oled-v2/icons.py — the ancestor's
-Open Iconic bitmaps (8 bytes per icon, MSB-left rows, MIT licensed).
-The bin is raw sprite data: 8 bytes per icon in the order of KEYS,
-read straight off the filesystem by the face at draw time.
+Source: firmware/suzu-d/esp8266-oled-v2/icons.py — the stage set
+drawn for the keeper's stage grammar (8 bytes per icon, MSB-left
+rows). The bin is raw sprite data: 8 bytes per icon in the order of
+KEYS, read straight off the filesystem by the face at draw time.
+The keys are the face's ground areas: a qualified say names one and
+the face replaces that area's numeral with its sprite.
 
-    python tools/pack_icons.py > faceplates/.../icons.bin   # (writes binary)
-
-Usage:
     python tools/pack_icons.py --out faceplates/.../icons.bin
 """
 
@@ -17,16 +16,11 @@ import re
 
 SOURCE = "firmware/suzu-d/esp8266-oled-v2/icons.py"
 
-# key -> ICON_ variable in the source file
+# key -> ICON_ variable in the source file; the keys are the areas
 SELECT = {
-    "disk": "ICON_DSK",
-    "usb": "ICON_USB",
-    "gear": "ICON_GEAR",
-    "net": "ICON_NET",
-    "clock": "ICON_CLOCK",
-    "heart": "ICON_THRIVING",
-    "warn": "ICON_WITHERING",
-    "wilt": "ICON_WILTING",
+    "cpu": "ICON_CPU",
+    "gpu": "ICON_GPU",
+    "mem": "ICON_MEM",
 }
 
 

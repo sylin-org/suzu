@@ -42,9 +42,11 @@ font:
   license: SIL-OFL-1.1
   source: tools/fonts/BebasNeue-Regular.ttf
   icons:
-    source: firmware/suzu-d/esp8266-oled-v2/icons.py (Open Iconic, MIT)
+    source: firmware/suzu-d/esp8266-oled-v2/icons.py (stage set, redrawn
+      after Bootstrap Icons' cpu/gpu-card — MIT — and Lucide's
+      memory-stick — ISC)
     packer: tools/pack_icons.py
-    keys: disk usb gear net clock heart warn wilt
+    keys: cpu gpu mem   # one sprite per ground area, in the areas' order
   bytecode: "face.mpy — python -m mpy_cross -march=xtensa face.py -o face.mpy"
   # (this firmware auto-runs main.py only; face.py is the human source)
   generator: tools/font2sprites.py
