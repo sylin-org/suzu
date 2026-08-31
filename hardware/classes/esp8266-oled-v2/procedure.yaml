@@ -57,13 +57,13 @@ procedures:
   # display-truth draws a known ground pattern (G,report,88,77,66) and
   # asserts two witnesses: the face acks the draw (an ERR is a face
   # that cannot be fed), and the decoded shot lights the cyan field
-  # beyond the resting face's own glyphs — the dash face cleared the
-  # old 150-px bar on the night the ring forgot how to speak. The
-  # label round-trip is skipped: this face's descriptor declares no
-  # label key.
+  # beyond the resting face's own glyphs (the view is 1:1 with the
+  # framebuffer — a three-digit ground lights ~1040 px, the resting
+  # face ~40; the bar sits at 500). The label round-trip is skipped:
+  # this face's descriptor declares no label key.
   admission_test:
     display_truth: ground-pattern
-    assert: "the ground frame acks OK and ≥1500 lit pixels in the cyan field of the decoded shot"
+    assert: "the ground frame acks OK and ≥500 lit pixels in the cyan field of the decoded shot"
 
 artifacts:
   - file: micropython-esp8266-1mib.bin

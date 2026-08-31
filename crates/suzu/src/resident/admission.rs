@@ -223,7 +223,11 @@ fn display_truth(
             std::thread::sleep(Duration::from_millis(400));
             let (_w, _h, rgba) = view_of(serial, spec, zones)?;
             let field = rgba.chunks_exact(4).filter(|p| p[2] > 150).count();
-            if field < 1500 {
+            // The view is 1:1 with the framebuffer: a three-digit
+            // ground lights ~1040 px, the resting face's own glyphs
+            // ~40 — 500 separates them by an order of magnitude
+            // either way.
+            if field < 500 {
                 anyhow::bail!("only {field} lit field px for a three-digit ground — the panel did not draw");
             }
             Ok(format!("ground pattern acked and drew itself ({field} lit field px)"))
