@@ -19,7 +19,7 @@ frame:
   order: row-major
   width: 5
   height: 5
-  render: { rotate: 0, scale: 24 }
+  render: { rotate: 0 }
 constraints: "25 px; host-side frames engine"
 boards:
   - name: "Waveshare RP2040-Matrix, Type-C"

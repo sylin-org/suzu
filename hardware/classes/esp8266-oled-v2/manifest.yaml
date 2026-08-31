@@ -21,7 +21,7 @@ frame:
   order: column-major
   width: 128
   height: 64
-  render: { rotate: 90, scale: 3 }   # the panel stands on its long edge
+  render: { rotate: 90 }             # the panel stands on its long edge; viewing size is the client's
   palette: ["#000000", "#ffffff"]    # fallback when no zone claims a row; zones color the truth here
 sets: [os]
 boards:

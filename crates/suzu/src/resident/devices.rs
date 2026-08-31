@@ -1485,16 +1485,14 @@ fn record_job(
         next_at += period;
         match crate::shot::capture_on(serial, spec.size) {
             Ok(frame) => if let Ok((w, h, rgba)) = crate::shot::render_view(spec, zones, &frame) {
-                let scale = spec.render.as_ref().map(|r| r.scale).unwrap_or(1).max(1);
-                let scaled = scale_rgba(&rgba, w, h, scale);
                 let png = {
                     let rgb: Vec<[u8; 3]> =
-                        scaled.chunks_exact(4).map(|p| [p[0], p[1], p[2]]).collect();
-                    crate::shot::png_bytes(w * scale, h * scale, &rgb, 1).unwrap_or_default()
+                        rgba.chunks_exact(4).map(|p| [p[0], p[1], p[2]]).collect();
+                    crate::shot::png_bytes(w, h, &rgb).unwrap_or_default()
                 };
-                vw = w * scale;
-                vh = h * scale;
-                rgba_frames.push(scaled);
+                vw = w;
+                vh = h;
+                rgba_frames.push(rgba);
                 let frames = rgba_frames.len() as u32;
                 let _ = events.send(HouseEvent::Frame {
                     port: port.to_string(),
@@ -1540,21 +1538,6 @@ fn record_job(
         j.state = state;
         j.gif = gif;
     });
-}
-
-fn scale_rgba(rgba: &[u8], w: usize, h: usize, scale: usize) -> Vec<u8> {
-    let mut out = Vec::with_capacity(rgba.len() * scale * scale);
-    for y in 0..h {
-        for _ in 0..scale {
-            for x in 0..w {
-                let px = &rgba[(y * w + x) * 4..(y * w + x) * 4 + 4];
-                for _ in 0..scale {
-                    out.extend_from_slice(px);
-                }
-            }
-        }
-    }
-    out
 }
 
 fn translate_suzu(g: &MachineReport, named: &mut Option<String>) -> Vec<String> {

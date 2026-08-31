@@ -171,7 +171,9 @@ pub struct FrameSpec {
     /// (display section) override the lit color per row when present.
     #[serde(default)]
     pub palette: Vec<String>,
-    /// Output view hints: rotation (deg cw) and integer upscale.
+    /// Output view hints: rotation (deg cw) — how the panel is
+    /// mounted. Viewing size is the client's business, never the
+    /// host's: the view is the panel, one to one.
     pub render: Option<RenderHint>,
 }
 
@@ -180,9 +182,6 @@ pub struct RenderHint {
     /// 0 | 90 (clockwise) — how the panel is mounted.
     #[serde(default)]
     pub rotate: i32,
-    /// Integer nearest-neighbour upscale so a 5×5 is lookable-at.
-    #[serde(default)]
-    pub scale: usize,
 }
 
 #[derive(Debug, Clone, Deserialize)]

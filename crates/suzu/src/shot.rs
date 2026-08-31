@@ -262,28 +262,7 @@ pub fn render_view(
     }
 }
 
-/// The view's upscale, from the manifest (1 if undeclared).
-fn view_scale(spec: &FrameSpec) -> usize {
-    spec.render.as_ref().map(|r| r.scale).unwrap_or(1).max(1)
-}
-
-/// Integer nearest-neighbour upscale of a flat RGBA view.
-fn scale_rgba(rgba: &[u8], w: usize, h: usize, scale: usize) -> Vec<u8> {
-    let mut out = Vec::with_capacity(rgba.len() * scale * scale);
-    for y in 0..h {
-        for _ in 0..scale {
-            for x in 0..w {
-                let px = &rgba[(y * w + x) * 4..(y * w + x) * 4 + 4];
-                for _ in 0..scale {
-                    out.extend_from_slice(px);
-                }
-            }
-        }
-    }
-    out
-}
-
-/// One face view → a truecolor PNG (upscale from the manifest).
+/// One face view → a truecolor PNG.
 pub fn render_png(
     path: &std::path::Path,
     spec: &FrameSpec,
@@ -296,17 +275,16 @@ pub fn render_png(
 }
 
 /// One frame → the finished PNG bytes: decode per the manifest,
-/// orient, upscale, encode. What the workbench's shot endpoint serves.
+/// orient, encode — one pixel of the panel per pixel of the PNG.
+/// Viewing size is the client's; the wire carries the truth.
 pub fn render_png_bytes(
     spec: &FrameSpec,
     zones: &[(usize, usize, [u8; 3])],
     frame: &[u8],
 ) -> Result<Vec<u8>> {
     let (w, h, rgba) = render_view(spec, zones, frame)?;
-    let scale = view_scale(spec);
-    let scaled = scale_rgba(&rgba, w, h, scale);
-    let rgb: Vec<[u8; 3]> = scaled.chunks_exact(4).map(|p| [p[0], p[1], p[2]]).collect();
-    png_bytes(w * scale, h * scale, &rgb, 1)
+    let rgb: Vec<[u8; 3]> = rgba.chunks_exact(4).map(|p| [p[0], p[1], p[2]]).collect();
+    png_bytes(w, h, &rgb)
 }
 
 /// A decodable face: its port and the manifest knowledge that names
@@ -353,8 +331,7 @@ pub fn record_first(
         // This face answered: it is the subject.
         println!("  {} [{}] answers — the subject", face.port, face.class);
         let (w, h, rgba) = render_view(&face.spec, &face.zones, &first)?;
-        let scale = view_scale(&face.spec);
-        let mut frames = vec![scale_rgba(&rgba, w, h, scale)];
+        let mut frames = vec![rgba];
         let mut next_at = Instant::now();
         let end = next_at + Duration::from_secs(secs as u64);
         while Instant::now() < end {
@@ -362,7 +339,7 @@ pub fn record_first(
             match capture_on(&mut port, face.spec.size) {
                 Ok(f) => {
                     let (_, _, v) = render_view(&face.spec, &face.zones, &f)?;
-                    frames.push(scale_rgba(&v, w, h, scale));
+                    frames.push(v);
                 }
                 Err(e) => {
                     println!("  {} went quiet mid-record ({e})", face.port);
@@ -378,22 +355,20 @@ pub fn record_first(
         }
 
         let out = std::path::PathBuf::from(format!("{prefix}-{}.gif", face.port));
-        crate::gif::write_gif_rgba(&out, w * scale, h * scale, delay_cs, &frames)?;
+        crate::gif::write_gif_rgba(&out, w, h, delay_cs, &frames)?;
         return Ok((out, frames.len()));
     }
     bail!("no face answered the shot request — nothing to record")
 }
 
 /// PNG encoder, no dependencies: 8-bit truecolor, stored-deflate IDAT.
-/// `px` is one RGB triple per pixel, `w` x `h`, at scale 1 (the
-/// caller upscales first — `render_png_bytes` is the usual front).
-pub fn png_bytes(w: usize, h: usize, px: &[[u8; 3]], scale: usize) -> Result<Vec<u8>> {    let sw = w * scale;
-    let mut raw = Vec::with_capacity(h * scale * (1 + sw * 3));
-    for y in 0..h * scale {
+/// `px` is one RGB triple per pixel, `w` x `h`.
+pub fn png_bytes(w: usize, h: usize, px: &[[u8; 3]]) -> Result<Vec<u8>> {
+    let mut raw = Vec::with_capacity(h * (1 + w * 3));
+    for y in 0..h {
         raw.push(0u8); // filter: none
-        let sy = y / scale;
-        for x in 0..sw {
-            raw.extend_from_slice(&px[sy * w + x / scale]);
+        for x in 0..w {
+            raw.extend_from_slice(&px[y * w + x]);
         }
     }
     let mut idat = vec![0x78, 0x01];
@@ -409,8 +384,8 @@ pub fn png_bytes(w: usize, h: usize, px: &[[u8; 3]], scale: usize) -> Result<Vec
     let mut png = Vec::new();
     png.extend_from_slice(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]);
     let mut ihdr = Vec::new();
-    ihdr.extend_from_slice(&be32(sw as u32));
-    ihdr.extend_from_slice(&be32((h * scale) as u32));
+    ihdr.extend_from_slice(&be32(w as u32));
+    ihdr.extend_from_slice(&be32(h as u32));
     ihdr.extend_from_slice(&[8, 2, 0, 0, 0]); // 8-bit truecolor RGB
     for (kind, data) in [("IHDR", ihdr), ("IDAT", idat), ("IEND", vec![])] {
         png.extend_from_slice(&be32(data.len() as u32));
