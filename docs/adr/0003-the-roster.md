@@ -73,6 +73,29 @@ bypass flag for "trusted" devices (the flag always ends up set
 forever). Sagas declared only in code (the procedure files are the
 class's own record of what maintenance means).
 
+## Amendment — the deed is written at adoption (2026-08-30)
+
+The original decision wrote a minted identity to the device "when
+firmware is installed." Between installs, nothing persisted it: every
+resident restart re-read a descriptor with no `device_id`, minted a
+new one, and the roster grew a ghost per boot — three fresh
+individuals for one COM12 on a single bench night.
+
+- **The deed rides the session, not the saga.** A face minted at
+  first sight receives its `device_id` through the same wire that
+  feeds it (`J,{"device_id":…}`), the moment its session opens —
+  before any exam verdict. Identity precedes trust: a face that
+  fails its exam keeps the name it will pass the retry under.
+- **The face holds the deed.** `suzu.json` on the device is the
+  record; the descriptor answers from it, so the second boot says
+  the name the first was given. A face that cannot store (no
+  writable state, an ancestor dialect) simply stays on the old
+  path: mint per session, no persistence, honestly visible as such.
+- **The install path is unchanged.** Sagas still write identity on
+  install — now as one writer among the same deed, not the only
+  one. Factory reset remains the deliberate exception that carries
+  the identity across the erase.
+
 ## References
 
 - `docs/the-face-contract.md` — the face side of the same honesty

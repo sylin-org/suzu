@@ -103,6 +103,24 @@ def save_label():
     except OSError:
         pass
 
+def store_identity(dev_id):
+    """The house names a face at adoption; the name outlives the
+    session that minted it (ADR-0003). suzu.json is the deed."""
+    import ujson
+    try:
+        d = {}
+        try:
+            with open("/suzu.json") as f:
+                d = ujson.loads(f.read())
+        except (OSError, ValueError):
+            pass
+        if d.get("device_id") != dev_id:
+            d["device_id"] = dev_id
+            with open("/suzu.json", "w") as f:
+                f.write(ujson.dumps(d))
+    except OSError:
+        pass
+
 # portrait mapping: visual (u,v) -> native (x=v, y=63-u);
 # inverted builds mirror the long axis: (u,v) -> native (127-v, u) —
 # the band stays on the panel's right, the reading runs bottom-up,
@@ -422,6 +440,8 @@ def cmd(line):
                     save_label()
                     draw_band()
                     oled.show()
+                if ctx.get("device_id"):
+                    store_identity(ctx["device_id"])
             r("OK")
         elif c == "S":                # compat alias: set the band
             if a and a != label:
