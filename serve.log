@@ -637,3 +637,8 @@ control: `suzu pause` / `suzu resume` stop and restart the stream to devices.
 [devices] minding COM12 as Some("esp8266-oled-v2-class") (Some("01a0557d-8206-7017-81fb-2dc0ffa1dc32")) — state Accepted
 [moments] splash: discovery 01a0557d-8206-7017-81fb-2dc0ffa1dc32
 [roster] held 01a0557d-8206-7017-81fb-2dc0ffa1dc32 on COM12 (esp8266-oled-v2-class) — admission decides the stream
+[sessions] COM12: consumer translating (suzu/1)
+[roster] admission PASSED for 01a0557d-8206-7017-81fb-2dc0ffa1dc32 on COM12 — handshake, ack-law, label-roundtrip, display-truth
+[roster] stream attached — 01a0557d-8206-7017-81fb-2dc0ffa1dc32 on COM12
+[media] the media lane is watched — the faces blink for the window
+[api] shutdown requested — the resident rests
