@@ -204,7 +204,8 @@ def band_glyph(u, v, ch, on=1):
     """A microglyph rotated 90° — the spine convention. The letter's
     5-row height spans the band across (u 0..4), its 3-column width
     runs along it; the top of each letter faces the band's outer
-    edge, and the inverted build reads bottom-up."""
+    edge, and the inverted build's mirrored columns keep the rendered
+    view reading exactly like the parent's."""
     i = GLYPH_KEYS.find(ch)
     if i < 0:
         return
@@ -213,19 +214,24 @@ def band_glyph(u, v, ch, on=1):
         for col in range(3):
             if bits & (1 << (14 - row * 3 - col)):
                 if INVERT:
-                    px(u + row, v + col, on)
+                    px(u + row, v - col, on)
                 else:
                     px(u + (4 - row), v + col, on)
 
 def draw_band(inverted=False):
     """The strip: the stage's words while it holds, the face's name
     after. Cleared first — glyphs never overlay glyphs; a latched
-    stage flashes by inverting the strip, never by going dark."""
+    stage flashes by inverting the strip, never by going dark. The
+    inverted hang lays the words in the mirrored direction so the
+    rendered view reads exactly like the parent's."""
+    if INVERT:
+        x, v0, step = 6, H - 5, -4
+    else:
+        x, v0, step = BAND_U + 5, 4, 4
     rect(BAND_X, 0, W - BAND_U, H, 1 if inverted else 0)
-    x = BAND_X + 5                    # rotated glyphs are 5 across
     text = ring_label if ring_label else label
     for i, ch in enumerate(text.upper()[:30]):   # 4 + 29*4 <= 127
-        band_glyph(x, 4 + i * 4, ch, 0 if inverted else 1)
+        band_glyph(x, v0 + i * step, ch, 0 if inverted else 1)
 
 def draw_divider(v):
     """1-px divider; the lit run hangs off the label band, growing
