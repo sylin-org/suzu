@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Reference install procedure: push suzu firmware files over the
-MicroPython serial REPL (the esp8266-oled-v2 path).
+MicroPython serial REPL (the esp8266-oled path).
 
 This is the executable form of the procedure checklists in
 hardware/classes/*/procedure.yaml — the same steps the Rust resident
@@ -255,7 +255,7 @@ def resolve_dress_dir(faceplate):
     declare their hangs in the manifest; single-type faceplates bundle
     at their own root. The flat legacy layout still resolves."""
     import yaml
-    root = pathlib.Path("hardware/classes/esp8266-oled-v2/faceplates")
+    root = pathlib.Path("hardware/classes/esp8266-oled/faceplates")
     for mf in sorted(root.glob("*/faceplate.yaml")):
         face = yaml.safe_load(mf.read_text(encoding="utf-8")) or {}
         for v in face.get("variants") or []:

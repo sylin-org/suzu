@@ -2,7 +2,7 @@
 # identity (device_id) belongs to individuals and lives in evidence/.
 schema: 1
 image: device.jpg               # product photo, ESP8266 NodeMCU-class board with 0.96 OLED (via image search)
-id: esp8266-oled-v2-class
+id: esp8266-oled
 coverage_target: suzu-d
 flash:
   backend: repl-push

@@ -179,7 +179,7 @@ def descriptor():
     except (OSError, ValueError):
         pass
     d["proto"] = "suzu/1"
-    d["version"] = "1.0.0"             # the faceplate.yaml version: the currency gate reads it
+    d["version"] = "1.1.0"             # the faceplate.yaml version: the currency gate reads it
     d["faceplate"] = DRESS_ID
     d["coverage"] = {
         "grounds": ["report"],

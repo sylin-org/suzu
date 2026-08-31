@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Pack the stage sprite set into a faceplate icons.bin.
 
-Source: firmware/suzu-d/esp8266-oled-v2/icons.py — the stage set
+Source: firmware/suzu-d/esp8266-oled/icons.py — the stage set
 drawn for the keeper's stage grammar (8 bytes per icon, MSB-left
 rows). The bin is raw sprite data: 8 bytes per icon in the order of
 KEYS, read straight off the filesystem by the face at draw time.
@@ -14,7 +14,7 @@ the face replaces that area's numeral with its sprite.
 import argparse
 import re
 
-SOURCE = "firmware/suzu-d/esp8266-oled-v2/icons.py"
+SOURCE = "firmware/suzu-d/esp8266-oled/icons.py"
 
 # key -> ICON_ variable in the source file; the keys are the areas
 SELECT = {

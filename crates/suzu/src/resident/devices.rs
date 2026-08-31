@@ -404,6 +404,9 @@ pub struct Devices {
     frames: BTreeMap<String, (Instant, String)>,
     /// port → (kind, faceplate) while a saga runs (ADR-0005).
     in_maintenance: BTreeMap<String, (String, Option<String>)>,
+    /// Auto-dress attempts per port since the last successful attach:
+    /// a dress that will not bump must not loop the house (ADR-0005).
+    auto_dress: BTreeMap<String, u8>,
     paused: bool,
     /// The watched lane's echo (ADR-0004 amendment): the gate's flag,
     /// read by the session threads at wire speed.
@@ -439,6 +442,7 @@ impl Devices {
             jobs,
             frames: BTreeMap::new(),
             in_maintenance: BTreeMap::new(),
+            auto_dress: BTreeMap::new(),
             paused: false,
             media_watched: Arc::new(AtomicBool::new(false)),
             rows_dirty: false,
@@ -511,6 +515,7 @@ impl Devices {
                 ev = bus.recv() => {
                     match ev {
                         Ok(HouseEvent::StreamAttached { port, .. }) => {
+                            self.auto_dress.remove(&port);
                             if let Some(d) = self.devices.get_mut(&port) {
                                 d.streaming.store(true, Ordering::Relaxed);
                                 self.rows_dirty = true;
@@ -535,6 +540,53 @@ impl Devices {
                         Ok(HouseEvent::Ring { signal, label, urgency }) => {
                             if !self.paused {
                                 self.ring(&signal, &label, urgency);
+                            }
+                        }
+                        // The house keeps its own faces current (ADR-0005,
+                        // amended): a Suzu face whose declared dress is
+                        // merely older updates itself — the same dress,
+                        // newer files, the exam after. Ancestors, undeclared
+                        // dresses and factory resets keep their ceremony.
+                        Ok(HouseEvent::AdmissionReport {
+                            port,
+                            passed: false,
+                            steps,
+                            ..
+                        }) => {
+                            // exactly one failure, and it the stale-declared
+                            // verdict ("older than", never "not declared")
+                            let failed: Vec<_> =
+                                steps.iter().filter(|s| !s.ok).collect();
+                            let stale_declared = failed.len() == 1
+                                && failed[0].name == "currency"
+                                && failed[0].detail.contains("older than the declared");
+                            let attempts = self
+                                .auto_dress
+                                .entry(port.clone())
+                                .and_modify(|n| *n += 1)
+                                .or_insert(1);
+                            if stale_declared
+                                && !self.in_maintenance.contains_key(&port)
+                                && *attempts <= 2
+                                && let Some(fp) = self
+                                    .devices
+                                    .get(&port)
+                                    .and_then(|d| d.facts.faceplate.clone())
+                                    && self
+                                        .catalog
+                                        .faceplate(
+                                            self.devices
+                                                .get(&port)
+                                                .and_then(|d| d.facts.class.as_deref())
+                                                .unwrap_or_default(),
+                                            &fp,
+                                        )
+                                        .is_some()
+                            {
+                                println!(
+                                    "[house] {port}: dress {fp} is stale — updating it (the house keeps its own current)"
+                                );
+                                let _ = self.maintenance_begin(&port, "soft", Some(fp));
                             }
                         }
                         Ok(_) => {}

@@ -549,7 +549,7 @@ fn rp2040_factory(
 /// dress pass it; this is the last resort, not the default path.)
 fn default_dress(catalog: &Catalog) -> &str {
     catalog
-        .faceplates_for_class("esp8266-oled-v2-class")
+        .faceplates_for_class("esp8266-oled")
         .first()
         .map(|f| f.id.as_str())
         .unwrap_or("numerals")

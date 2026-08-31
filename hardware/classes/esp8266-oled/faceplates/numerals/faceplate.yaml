@@ -1,5 +1,5 @@
 name: numerals
-class: esp8266-oled-v2-class
+class: esp8266-oled
 display_name: BIG!
 blurb: Easy to read from a distance
 version: "2.0.0"                   # the stage grammar — currency-gates the stream (ADR-0005)

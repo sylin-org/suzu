@@ -1,8 +1,8 @@
 name: slate
-class: esp8266-oled-v2-class
+class: esp8266-oled
 display_name: Slate
 blurb: A console readout — block digits, honest gauges, an embossed name
-version: "1.0.0"                   # the currency gate reads it (ADR-0005, amended)
+version: "1.1.0"                   # the currency gate reads it (ADR-0005, amended)
 status: beta                       # poured 2026-08-31 — verified on the bench
 
 # Ground "report" slots, in the order the face reads them.

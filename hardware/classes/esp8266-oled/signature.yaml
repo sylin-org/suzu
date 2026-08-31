@@ -1,7 +1,7 @@
 # Identification bits — the one file the tool parses at boot.
 # Everything needed to recognize the class on the wire lives here.
 schema: 1
-id: esp8266-oled-v2-class
+id: esp8266-oled
 family: firefly                    # the firefly family — suzu.s visual moniker
 variant: oled
 capabilities: [dashboard, wipe-animations, brightness, seed-bank-icon]

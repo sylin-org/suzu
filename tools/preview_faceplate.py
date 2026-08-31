@@ -8,7 +8,7 @@ path validates the fallback numeral table by hiding digits_bebas.
 
 Usage:
     python tools/preview_faceplate.py \
-        faceplates/esp8266-oled-v2/portrait-numerals [out.png] [--fallback]
+        faceplates/esp8266-oled/portrait-numerals [out.png] [--fallback]
 """
 
 import io

@@ -487,7 +487,7 @@ impl ClassSignature {
     }
 
     fn signature_variant_matches(&self, variant: &str) -> bool {
-        // Class ids like `esp8266-oled-v2` carry variant tokens; match
+        // Class ids like `esp8266-oled` carry variant tokens; match
         // by containment so `oled` finds `oled-v2` classes.
         self.variant == variant || self.id.contains(variant)
     }
@@ -512,7 +512,7 @@ pub fn seed_hint(vid: u16, pid: u16) -> Option<&'static str> {
 
 pub fn seed_class_for(vid: u16, pid: u16) -> Option<String> {
     match (vid, pid) {
-        (0x1a86, 0x7523) => Some("esp8266-oled-v2-class".to_string()),
+        (0x1a86, 0x7523) => Some("esp8266-oled".to_string()),
         (0x1a86, _) => Some("tdisplay-esp32-ch9102".to_string()),
         (0x2e8a, _) => Some("waveshare-rp2040-matrix".to_string()),
         (0x303a, _) => Some("xiao-esp32s3-sense".to_string()),

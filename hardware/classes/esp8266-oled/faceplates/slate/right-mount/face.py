@@ -17,7 +17,7 @@ math_cos = math.cos             # the stage's circle, one lookup each
 math_sin = math.sin
 
 W, H = 64, 128            # portrait: u 0..63 across, v 0..127 down
-INVERT = False            # the -inverted build flips this (tools/build_faceplates.py):
+INVERT = True            # the -inverted build flips this (tools/build_faceplates.py):
                           # the composition mirrors along its long axis, so the
                           # board hung connector-up reads exactly as this reads
                           # connector-down. Same art, same words, other hang.
@@ -29,7 +29,7 @@ BAND_U = 48               # the yellow band starts here (16 px wide)
 # composition: band strip at the panel's other edge, numerals after.
 NUM_U = 0                 # the numeral column's left edge
 BAND_X = BAND_U           # the strip's left edge (16 px wide)
-DRESS_ID = "slate"            # the variant's wire id; the build sets it per mount
+DRESS_ID = "slate-right"            # the variant's wire id; the build sets it per mount
 TEXT_FLIP = False         # left-aligned mounts rotate the text area 180°
                           # — the words would stand on their head otherwise
 if INVERT:
@@ -179,7 +179,7 @@ def descriptor():
     except (OSError, ValueError):
         pass
     d["proto"] = "suzu/1"
-    d["version"] = "1.0.0"             # the faceplate.yaml version: the currency gate reads it
+    d["version"] = "1.1.0"             # the faceplate.yaml version: the currency gate reads it
     d["faceplate"] = DRESS_ID
     d["coverage"] = {
         "grounds": ["report"],

@@ -402,7 +402,7 @@ pub fn run(catalog: &Catalog) -> anyhow::Result<()> {
             };
             install_rp2040(&drive, &class)?;
         }
-        Some("esp8266-oled-v2") => {
+        Some("esp8266-oled") => {
             install_esp8266(&cand.name, cand.device_id.as_deref())?;
         }
         other => bail!("no install path for {other:?} yet — the class needs a procedure"),

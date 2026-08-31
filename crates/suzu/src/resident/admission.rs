@@ -258,7 +258,7 @@ fn display_truth(
         // beyond anything the resting face lights on its own — the
         // dash glyphs, labels and band of an unfed face cleared the
         // old 150-px bar on the night the ring forgot how to speak.
-        Some("esp8266-oled-v2-class") => {
+        Some("esp8266-oled") => {
             crate::shot::dribble_line(serial, "G,report,88,77,66")?;
             match read_line_matching(serial, HANDSHAKE_SECS, |l| {
                 l == "OK" || l.starts_with("OK,") || l.starts_with("ERR")

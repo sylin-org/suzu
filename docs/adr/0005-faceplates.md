@@ -99,6 +99,13 @@ Amended:
   without a version, or an unreadable one, asserts nothing.
 - **The update is the ceremony that already exists** — a soft saga:
   files, a nudge, and the exam again, now passing.
+- **A stale Suzu face updates itself.** A face that already speaks
+  suzu/1 and wears a declared dress that is merely older needs no
+  keeper's hand: the house starts the soft saga for the same dress
+  the moment the exam refuses it, bounded to two attempts per
+  attach — a dress that will not bump must not loop the house.
+  Ancestors, undeclared dresses and factory resets keep their
+  ceremony; this is housekeeping, not adoption.
 
 ## References
 

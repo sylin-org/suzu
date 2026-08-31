@@ -15,7 +15,7 @@ per-glyph (proportional widths).
 
 Usage:
     python tools/font2sprites.py --font tools/fonts/BebasNeue-Regular.ttf \
-        --out faceplates/esp8266-oled-v2/portrait-numerals/digits_bebas.py \
+        --out faceplates/esp8266-oled/portrait-numerals/digits_bebas.py \
         --preview tools/fonts/digits_bebas_preview.png
 """
 
