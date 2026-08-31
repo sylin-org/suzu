@@ -555,7 +555,7 @@ pub async fn run(catalog: Arc<Catalog>) -> anyhow::Result<()> {
         }
     });
 
-    println!("suzu resident is up — domains: watcher · devices · moments · sensor · publisher");
+    println!("suzu resident is up — domains: watcher · devices · moments · sensor · roster");
     println!("plug a device and watch the house talk. `tell <label>` rings the bell · `status` · `q` quits.");
     println!("control: `suzu pause` / `suzu resume` stop and restart the stream to devices.");
 
