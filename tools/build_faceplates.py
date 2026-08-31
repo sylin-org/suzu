@@ -53,7 +53,7 @@ def build(child: Path, parent_name: str) -> bool:
 
     # Shared cargo: everything the parent bundles that the derived
     # declaration does not redefine — assets and the bootstrap.
-    for item in ("main.py", "digits_bebas.bin", "icons.bin"):
+    for item in ("main.py", "digits_bebas.bin", "digits_slate.bin", "icons.bin"):
         if not (child / item).exists() and (parent / item).exists():
             shutil.copy2(parent / item, child / item)
 

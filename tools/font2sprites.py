@@ -136,18 +136,22 @@ def main():
     # Companion raw bin: the device-side form. A .py module builds real
     # objects in the ESP8266's 80 KB heap at import; a raw file costs
     # nothing until the face reads one glyph at draw time. Layout per
-    # glyph: [width byte][2 B per row, MSB = leftmost].
+    # glyph: [width byte][BPP B per row, MSB = leftmost] — BPP is
+    # uniform across the set, sized for the widest glyph, so the face
+    # can seek a fixed stride.
     bin_path = os.path.splitext(args.out)[0] + ".bin"
     rows_per_glyph = len(next(iter(glyphs.values()))[1])
+    max_w = max(w for w, _ in glyphs.values())
+    bpp = (max_w + 7) // 8
     with open(bin_path, "wb") as f:
         for ch in args.chars:
             f.write(bytes((glyphs[ch][0],)))
             for bits in glyphs[ch][1]:
-                f.write(bytes(((bits >> 8) & 0xFF, bits & 0xFF)))
+                f.write(bits.to_bytes(bpp, "big"))
     print(
-        "wrote %s: %d B (%d glyphs x (1 + %d rows x 2 B))"
-        % (bin_path, len(args.chars) * (1 + rows_per_glyph * 2),
-           len(args.chars), rows_per_glyph)
+        "wrote %s: %d B (%d glyphs x (1 + %d rows x %d B), widths <= %d px)"
+        % (bin_path, len(args.chars) * (1 + rows_per_glyph * bpp),
+           len(args.chars), rows_per_glyph, bpp, bpp * 8)
     )
 
     if args.preview:

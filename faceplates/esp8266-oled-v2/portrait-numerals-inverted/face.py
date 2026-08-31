@@ -604,8 +604,17 @@ def cmd(line):
             if len(p) > 4:
                 ring_seq = p[4]
             keys = ICON_KEYS.split()
+            prev = stage
             stage = keys.index(qual) if qual in keys else "full"
             stage_glyph = glyph
+            if stage != "full":
+                # stepping between stages: the old mark must not haunt
+                # the areas — clear the column, repaint the rest from
+                # the stored truth, and let the stage own its area
+                rect(NUM_U, 0, BAND_U, H, 0)
+                for i in range(3):
+                    if i != stage:
+                        draw_area(i, ("CPU", "GPU", "MEM")[i])
             latch = glyph == "exception"    # the exception latches; the
             ring_until = (None if latch     # rest blooms and returns
                           else time.ticks_add(time.ticks_ms(), STAGE_MS))

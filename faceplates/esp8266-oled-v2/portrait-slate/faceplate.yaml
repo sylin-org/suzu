@@ -1,0 +1,45 @@
+name: portrait-slate
+status: beta                      # poured 2026-08-31 — verify by record before first live dress
+class: esp8266-oled-v2-class
+display_name: Slate
+blurb: A console readout — block digits, honest gauges, an embossed name
+mount: usb-down                   # hangs upwards — the connector sits at the bottom
+version: "1.0.0"                  # the currency gate reads it (ADR-0005, amended)
+
+# Ground "report" slots, in the order the face reads them.
+# (255 / missing -> drawn as a dash: "not measured", not zero.)
+slots: [cpu, mem, gpu]
+
+# Fast-lane atoms: on Slate the pulse is a heartbeat — the dot at the
+# label strip's end fills while traffic is fresh. No value is carried.
+extras: [audio.level]
+
+# suzu/1 frames this face answers (see the parent's README).
+frames: [I, K, G, A, J, S, X, R]
+
+# The ring voice (ADR-0006): what this face can speak. The instance
+# degrades every say to this dialect before a byte reaches the wire.
+rings:
+  qualifiers: true
+  text: true
+
+# The tool installs what the faceplate declares — files are pushed
+# verbatim, never interpreted. Art lives in the files, not in the tool.
+resources:
+  install:
+    - { from: main.py, to: main.py }      # bootstrap: imports face
+    - { from: face.mpy, to: face.mpy }    # the face, as bytecode
+    - { from: digits_slate.bin, to: digits_slate.bin }
+    - { from: icons.bin, to: icons.bin }  # moment icons (8x8 sprites)
+
+# Font provenance (regenerate, never hand-edit the bin). A classic
+# blocky pixel face, delightfully terminal; rendered by the shared
+# pipeline into the raw device bin.
+font:
+  family: Silkscreen
+  weight: Bold
+  license: SIL-OFL-1.1
+  source: tools/fonts/Silkscreen-Bold.ttf
+  generator: tools/font2sprites.py
+  data: digits_slate.bin
+  cap-height: 20
