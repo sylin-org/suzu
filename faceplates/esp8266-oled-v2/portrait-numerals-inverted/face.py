@@ -306,7 +306,7 @@ def set_pulse(v):
         oled.show()
 
 def decay():
-    global pulse_lit, idle, ring_until, stage, stage_glyph, latch, band_lit
+    global pulse_lit, idle, ring_until, ring_label, stage, stage_glyph, latch, band_lit
     now = time.ticks_ms()
     if latch:
         # the exception holds: it flashes by inversion, ~400 ms a phase
@@ -315,9 +315,10 @@ def decay():
             band_lit = phase
             stage_draw()
     elif ring_until is not None and time.ticks_diff(now, ring_until) > 0:
-        ring_until = None             # the moment passed; the substrate
-        stage = None                  # fills the gap on its next frame
-        stage_glyph = None
+        ring_until = None             # the moment passed: the words go
+        ring_label = None             # with it, the name returns, and the
+        stage = None                  # substrate fills the gap on its next
+        stage_glyph = None            # frame
         redraw()
     if pulse_lit > pulse_target and stage != "full":
         pulse_lit = pulse_target + (pulse_lit - pulse_target) * 3 // 4
@@ -568,6 +569,7 @@ def cmd(line):
             stage_glyph = None
             latch = False
             ring_until = None
+            ring_label = None
             redraw()
             r("OK")
         elif c == "R":
