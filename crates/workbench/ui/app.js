@@ -297,11 +297,20 @@
       line = "installed - joining the stream\u2026";
     }
 
+    // The currency gate (ADR-0005, amended): a dress older than its
+    // declaration is held at the gate, the exam refusing by name —
+    // and the card offers the remedy, not a wall.
+    const currencyStep = rosterEntry?.admission?.steps?.find((s) => s.name === "currency");
+    const stale = lc === "new" && currencyStep && !currencyStep.ok;
+    if (stale) line = escapeHtml(currencyStep.detail);
+
     const streamButton = lc === "live"
       ? `<button class="ghost-button" data-action="pause" ${lock}>Pause</button>`
       : lc === "paused"
         ? `<button class="ghost-button" data-action="resume" ${lock}>Resume</button>`
-        : `<button class="ghost-button" data-action="install" ${lock}>Install Firmware</button>`;
+        : stale
+          ? `<button class="ghost-button" data-action="update" ${lock}>Update Dress</button>`
+          : `<button class="ghost-button" data-action="install" ${lock}>Install Firmware</button>`;
     const reinstall = `<button class="ghost-button" data-action="install" ${lock}>Reinstall Firmware</button>`;
     // A live face may change its dress in place: files and a nudge,
     // no bootloader — and the exam re-proves it before LIVE.
@@ -404,6 +413,12 @@
         // button back.
         button.disabled = false;
       }
+    } else if (action === "update") {
+      button.disabled = true;
+      // the held face already runs MicroPython: a dress update, not
+      // an install — files and a nudge, the exam decides the rest.
+      const d = await postOrToast(`/api/maintenance/${port}`, { kind: "soft" });
+      if (d.message) toast(d.message);
     } else if (action === "faceplate") {
       const row = Store.state.devices.get(port);
       await fetchFaceplates(row?.class);

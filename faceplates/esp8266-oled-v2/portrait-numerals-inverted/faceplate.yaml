@@ -5,6 +5,7 @@ class: esp8266-oled-v2-class
 display_name: BIG!                # shared with the parent: one face, several hangs
 blurb: Easy to read from a distance
 mount: usb-up                     # hangs downwards — the connector sits at the top
+version: "2.0.0"                   # tracks the parent: one face, one version
 
 # Ground "report" slots, in the order the face reads them.
 # (255 / missing -> drawn as a dash: "not measured", not zero.)

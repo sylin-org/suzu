@@ -4,7 +4,7 @@ class: esp8266-oled-v2-class
 display_name: BIG!
 blurb: Easy to read from a distance
 mount: usb-down                   # hangs upwards — the connector sits at the bottom
-aesthetic: striking
+version: "2.0.0"                   # the stage grammar — currency-gates the stream (ADR-0005)
 
 # Ground "report" slots, in the order the face reads them.
 # (255 / missing -> drawn as a dash: "not measured", not zero.)

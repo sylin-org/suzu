@@ -83,6 +83,23 @@ source into two files (the first fix applied to one and not the other
 was inevitable); a generic "rotate any face" mode in the tool (art
 lives in the files, not in the tool — ADR-0003's provisioning law).
 
+## Amendment — the currency gate (2026-08-31)
+
+A face worn in an outdated dress joined the stream as readily as a
+current one; nothing told the keeper, and nothing told the face.
+Amended:
+
+- **The declaration carries a `version`.** The descriptor a face
+  reports is the version of the dress it actually wears; the
+  declaration states the version the house now ships.
+- **Currency is part of worthiness.** The admission exam gains a
+  first step: worn older than declared fails it, and the stream
+  waits — the refusal names the remedy ("update the faceplate"),
+  and the workbench card offers it as a button. A declaration
+  without a version, or an unreadable one, asserts nothing.
+- **The update is the ceremony that already exists** — a soft saga:
+  files, a nudge, and the exam again, now passing.
+
 ## References
 
 - `docs/adr/0003-the-roster.md` — the ceremony every dress re-enters through

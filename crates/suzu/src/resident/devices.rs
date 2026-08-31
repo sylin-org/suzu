@@ -595,6 +595,16 @@ impl Devices {
         let substrate = Arc::clone(&self.substrate);
         let device_id = facts.device_id.clone();
         let class = facts.class.clone();
+        // The currency question (ADR-0005): what the face's descriptor
+        // says it wears, vs what the declaration ships. None when the
+        // declaration states no version — then the gate stays open.
+        let currency = facts
+            .faceplate
+            .as_deref()
+            .zip(facts.class.as_deref())
+            .and_then(|(fp, class)| self.catalog.faceplate(class, fp))
+            .and_then(|f| f.version.clone())
+            .map(|declared| (facts.version.clone().unwrap_or_default(), declared));
         let streaming2 = Arc::clone(&streaming);
         let close2 = Arc::clone(&close);
         let join = std::thread::Builder::new()
@@ -603,7 +613,7 @@ impl Devices {
                 session_thread(
                     port, thread_slot, substrate.clone(), close2, streaming2,
                     suzu, spec, zones, events, jobs, media_watched, voice,
-                    device_id, class, identity_store,
+                    device_id, class, identity_store, currency,
                 )
             })
             .ok();
@@ -1204,6 +1214,7 @@ fn session_thread(
     device_id: Option<String>,
     class: Option<String>,
     identity_store: Option<String>,
+    currency: Option<(String, String)>,
 ) {
     // One master per port, with grace: a retired session's thread may
     // still be exiting (a capture takes up to 8 s), so the open
@@ -1235,8 +1246,15 @@ fn session_thread(
 
     // The admission exam runs before anything flows. Its verdict goes
     // to the roster; the roster's StreamAttached opens the gate.
+    let currency_refs = currency.as_ref().map(|(w, c)| (w.as_str(), c.as_str()));
     if suzu {
-        let report = admission::run(&mut serial, class.as_deref(), spec.as_ref(), &zones);
+        let report = admission::run(
+            &mut serial,
+            class.as_deref(),
+            spec.as_ref(),
+            &zones,
+            currency_refs,
+        );
         let _ = events.send(HouseEvent::AdmissionReport {
             device_id: device_id.clone().unwrap_or_default(),
             port: port.clone(),
@@ -1261,7 +1279,7 @@ fn session_thread(
         session_loop(
             &mut serial, &slot, &substrate, &close, &streaming, suzu, &port,
             spec, zones, &events, &jobs, &media_watched, voice, device_id,
-            class,
+            class, currency_refs,
         );
     }));
     if outcome.is_err() {
@@ -1341,6 +1359,7 @@ fn session_loop(
     voice: RingVoice,
     device_id: Option<String>,
     class: Option<String>,
+    currency: Option<(&str, &str)>,
 ) {
     let mut named: Option<String> = None;
     let mut seq: u8 = 0;
@@ -1388,7 +1407,13 @@ fn session_loop(
                 }
                 Ask::Admission => {
                     if suzu {
-                        let report = admission::run(serial, class.as_deref(), spec.as_ref(), &zones);
+                        let report = admission::run(
+                            serial,
+                            class.as_deref(),
+                            spec.as_ref(),
+                            &zones,
+                            currency,
+                        );
                         let _ = events.send(HouseEvent::AdmissionReport {
                             device_id: device_id.clone().unwrap_or_default(),
                             port: port.to_string(),

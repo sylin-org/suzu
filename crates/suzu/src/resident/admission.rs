@@ -50,6 +50,13 @@ fn write_line(serial: &mut Box<dyn SerialPort>, line: &str) -> Result<()> {
     Ok(())
 }
 
+/// `"1.2.3"` → [1, 2, 3]; anything unparseable is None.
+fn parse_version(v: &str) -> Option<Vec<u64>> {
+    let parts: Result<Vec<u64>, _> =
+        v.split('.').map(|p| p.trim().parse::<u64>()).collect();
+    parts.ok()
+}
+
 /// Read accumulated serial until a line satisfies `pred`, or the
 /// deadline passes. Never anchors on the first line — boot noise
 /// produces shorter lines (the identity-parse lesson).
@@ -87,12 +94,16 @@ fn descriptor_of(serial: &mut Box<dyn SerialPort>) -> Option<Value> {
 
 /// Run the exam on an open session. `spec`/`zones` come from the
 /// class manifest; a face without a decodable frame law skips the
-/// display-truth step (marked so, not silently).
+/// display-truth step (marked so, not silently). `currency` carries
+/// (worn, declared) dress versions when the faceplate declares one:
+/// a dress older than its declaration may not join the stream — the
+/// refusal names the remedy (ADR-0005, amended).
 pub fn run(
     serial: &mut Box<dyn SerialPort>,
     class: Option<&str>,
     spec: Option<&FrameSpec>,
     zones: &[(usize, usize, [u8; 3])],
+    currency: Option<(&str, &str)>,
 ) -> Report {
     let mut report = Report { passed: true, steps: Vec::new() };
     let fail = |r: &mut Report, name: &str, detail: String| {
@@ -114,6 +125,36 @@ pub fn run(
             descriptor.get("device_id").and_then(|v| v.as_str()).unwrap_or("?")
         ),
     );
+
+    // ── currency (ADR-0005, amended) — cheap, and first to fail: a
+    // face in an outdated dress need not prove its pixels to be told
+    // the remedy. ──
+    if let Some((worn, declared)) = currency {
+        match parse_version(declared) {
+            None => report.step(
+                "currency",
+                true,
+                format!("declared version `{declared}` unreadable — not asserted"),
+            ),
+            Some(declared_v) => {
+                let worn_v = parse_version(worn);
+                let current = worn_v.as_ref().is_some_and(|w| w >= &declared_v);
+                if current {
+                    report.step("currency", true, format!("dress {worn} is current"));
+                } else {
+                    let worn_text = worn_v
+                        .map(|v| v.iter().map(|n| n.to_string()).collect::<Vec<_>>().join("."))
+                        .unwrap_or_else(|| "unversioned".to_string());
+                    fail(
+                        &mut report,
+                        "currency",
+                        format!("dress {worn_text} is older than the declared {declared} — update the faceplate to join the stream"),
+                    );
+                    return report;
+                }
+            }
+        }
+    }
 
     // ── ack law ──
     let _ = write_line(serial, "K");

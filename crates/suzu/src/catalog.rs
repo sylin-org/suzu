@@ -62,6 +62,11 @@ struct FaceplateDecl {
     mount: Option<String>,
     #[serde(default)]
     based_on: Option<String>,
+    /// The dress version this bundle ships — what a face wearing it
+    /// reports in its descriptor. The currency gate (ADR-0005) holds
+    /// a face whose worn version is older than the declaration.
+    #[serde(default)]
+    version: Option<String>,
     #[serde(default)]
     rings: Option<RingsDecl>,
 }
@@ -95,6 +100,7 @@ fn scan_faceplates(root: PathBuf) -> Vec<FaceplateInfo> {
                 blurb: decl.blurb,
                 mount: decl.mount,
                 based_on: decl.based_on,
+                version: decl.version,
                 has_preview,
                 rings: RingDialect {
                     qualifiers: decl.rings.as_ref().map(|r| r.qualifiers).unwrap_or(true),
@@ -136,6 +142,8 @@ pub struct FaceplateInfo {
     pub mount: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub based_on: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
     pub has_preview: bool,
     pub rings: RingDialect,
     #[serde(skip)]
