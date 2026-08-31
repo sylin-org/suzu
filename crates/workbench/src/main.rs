@@ -18,6 +18,13 @@ use tauri::{Emitter, Manager, WindowEvent};
 const MAIN_WINDOW: &str = "main";
 const PORT_NUM: u16 = 7899;
 
+/// Set once the webview is listening: the bridge redials, and the
+/// fresh connection's opening snapshot lands on a listener instead of
+/// the void. The bridge connects before the window loads — without
+/// this, the snapshot is announced to nobody and the window sits
+/// factless until the resident next changes its mind.
+static BRIDGE_RESYNC: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// The Resident's door, as one address. One name, one place.
 fn resident() -> String {
     format!("127.0.0.1:{PORT_NUM}")
@@ -37,6 +44,9 @@ fn ready(app: tauri::AppHandle) {
         let _ = window.show();
         let _ = window.set_focus();
     }
+    // The webview's listeners are up: ask the bridge for a fresh
+    // connection, whose opening snapshot is the whole truth re-poured.
+    BRIDGE_RESYNC.store(true, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// Open one of the About page's destinations. Anything outside the
@@ -260,11 +270,13 @@ fn spawn_house_events(app: tauri::AppHandle) {
         let ok = (|| -> std::io::Result<()> {
             use std::io::{Read, Write};
             use std::net::SocketAddr;
+            use std::time::Instant;
             let addr: SocketAddr = resident().parse().expect("loopback addr");
             let mut stream = std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(2))?;
-            // The house pings every 10 s; 15 s of silence means the
-            // connection is a corpse — hang up and try again.
-            stream.set_read_timeout(Some(std::time::Duration::from_secs(15))).ok();
+            // Short naps between reads: the loop stays responsive to
+            // the resync ask, and the corpse rule is explicit — 15 s
+            // without a byte (the house pings every 10) means hang up.
+            stream.set_read_timeout(Some(std::time::Duration::from_millis(500))).ok();
             stream.write_all(
                 format!("GET /api/events HTTP/1.1\r\nhost: {}\r\naccept: text/event-stream\r\nconnection: close\r\n\r\n", resident())
                     .as_bytes(),
@@ -273,10 +285,27 @@ fn spawn_house_events(app: tauri::AppHandle) {
             let _ = app.emit("house-health", "connected");
             let mut buf: Vec<u8> = Vec::new();
             let mut chunk = [0u8; 1024];
+            let mut last_rx = Instant::now();
             loop {
                 match stream.read(&mut chunk) {
                     Ok(0) => break,
-                    Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                    Ok(n) => {
+                        last_rx = Instant::now();
+                        buf.extend_from_slice(&chunk[..n]);
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock
+                        || e.kind() == std::io::ErrorKind::TimedOut =>
+                    {
+                        // A quiet nap, not a death: Windows reports the
+                        // read timeout as TimedOut, Unix as WouldBlock.
+                        if last_rx.elapsed() > std::time::Duration::from_secs(15) {
+                            break; // a corpse: the house stopped pinging
+                        }
+                        if BRIDGE_RESYNC.swap(false, std::sync::atomic::Ordering::Relaxed) {
+                            break; // a listener asked for the truth again
+                        }
+                        continue;
+                    }
                     Err(_) => break,
                 }
                 // One SSE frame = optional `event:` line + `data:` line,
