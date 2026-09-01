@@ -469,48 +469,64 @@ impl Devices {
                                 self.send_notification(&signal, &label, urgency);
                             }
                         }
-                        // Automatically update a faceplate whose reported
-                        // version is older than the catalog declaration.
+                        // Automatically bring a faceplate back onto the
+                        // catalog: preserve a declared faceplate while
+                        // updating its version, or port an undeclared legacy
+                        // faceplate to the class's first compatible default.
                         Ok(ResidentEvent::AdmissionReport {
                             port,
                             passed: false,
                             steps,
                             ..
                         }) => {
-                            // exactly one failure, and it the stale-declared
-                            // verdict ("older than", never "not declared")
+                            // Exactly one failure, and it is safe to repair by
+                            // installing catalog files. Other admission
+                            // failures still require a person's judgment.
                             let failed: Vec<_> =
                                 steps.iter().filter(|s| !s.ok).collect();
                             let stale_declared = failed.len() == 1
                                 && failed[0].name == "faceplate-version"
                                 && failed[0].detail.contains("older than the declared");
-                            let attempts = self
-                                .auto_faceplate_updates
-                                .entry(port.clone())
-                                .and_modify(|n| *n += 1)
-                                .or_insert(1);
-                            if stale_declared
+                            let undeclared_legacy = failed.len() == 1
+                                && failed[0].name == "faceplate-version"
+                                && failed[0].detail.contains("not declared for this class");
+                            let faceplate_id = self.devices.get(&port).and_then(|d| {
+                                let class = d.facts.class.as_deref().unwrap_or_default();
+                                if stale_declared {
+                                    self.catalog
+                                        .installed_faceplate(
+                                            class,
+                                            d.facts.faceplate.as_deref().unwrap_or_default(),
+                                            d.facts.mount.as_deref(),
+                                        )
+                                        .map(|info| info.id.clone())
+                                } else if undeclared_legacy {
+                                    self.catalog
+                                        .faceplates_for_class(class)
+                                        .first()
+                                        .map(|info| info.id.clone())
+                                } else {
+                                    None
+                                }
+                            });
+                            if let Some(faceplate_id) = faceplate_id
                                 && !self.in_maintenance.contains_key(&port)
-                                && *attempts <= 2
-                                && let Some(faceplate_id) = self.devices.get(&port)
-                                    .and_then(|d| {
-                                        self.catalog
-                                            .installed_faceplate(
-                                                d.facts.class.as_deref().unwrap_or_default(),
-                                                d.facts.faceplate.as_deref().unwrap_or_default(),
-                                                d.facts.mount.as_deref(),
-                                            )
-                                            .map(|info| info.id.clone())
-                                    })
                             {
-                                println!(
-                                    "[devices] {port}: faceplate {faceplate_id} is outdated; starting automatic update"
-                                );
-                                let _ = self.act(
-                                    &port,
-                                    DeviceAction::Update,
-                                    Some(faceplate_id),
-                                );
+                                let attempts = self
+                                    .auto_faceplate_updates
+                                    .entry(port.clone())
+                                    .and_modify(|n| *n += 1)
+                                    .or_insert(1);
+                                if *attempts <= 2 {
+                                    println!(
+                                        "[devices] {port}: faceplate needs compatibility update to {faceplate_id}; starting automatic update"
+                                    );
+                                    let _ = self.act(
+                                        &port,
+                                        DeviceAction::Update,
+                                        Some(faceplate_id),
+                                    );
+                                }
                             }
                         }
                         Ok(_) => {}
