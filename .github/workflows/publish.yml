@@ -1,0 +1,153 @@
+# Post-release publication: publishing the release fans out to every
+# channel configured for it. Each job skips with a visible notice when
+# its token secret is absent, so the pipeline is useful from day one and
+# a channel lights up the moment its secret appears.
+# Secrets (see docs/release.md):
+#   TAP_TOKEN      fine-grained PAT, Contents RW on sylin-org/homebrew-tap
+#   WEBSITE_TOKEN  fine-grained PAT, Contents RW on sylin-org/website
+#   NPM_TOKEN      npm token with publish rights on @sylin-org
+#   WINGET_TOKEN   classic PAT, public_repo (PRs to microsoft/winget-pkgs)
+name: publish
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  tap:
+    name: brew formula
+    runs-on: ubuntu-latest
+    env:
+      TAP: sylin-org/homebrew-tap
+    steps:
+      - name: Gate on TAP_TOKEN
+        env:
+          T: ${{ secrets.TAP_TOKEN }}
+        run: |
+          if [ -z "$T" ]; then
+            echo "::notice::TAP_TOKEN not set — the brew channel waits"
+            echo "SKIP=1" >> "$GITHUB_ENV"
+          fi
+      - uses: actions/checkout@v4
+        if: env.SKIP != '1'
+      - name: Fetch the release checksums
+        if: env.SKIP != '1'
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          gh release download "$tag" --repo sylin-org/suzu -p SHA256SUMS -O SHA256SUMS
+          python .github/scripts/render_tap_formula.py "$tag" SHA256SUMS > suzu.rb
+          head -1 suzu.rb
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Push the formula to the tap
+        if: env.SKIP != '1'
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          git clone --depth 1 "https://x-access-token:${{ secrets.TAP_TOKEN }}@github.com/${TAP}.git" tap
+          cp suzu.rb tap/Formula/suzu.rb
+          git -C tap config user.name "suzu release bot"
+          git -C tap config user.email "noreply@sylin.org"
+          if git -C tap diff --quiet; then
+            echo "formula already current — nothing to push"
+            exit 0
+          fi
+          git -C tap add Formula/suzu.rb
+          git -C tap commit -m "suzu ${tag#v} — formula from the release"
+          git -C tap push
+
+  npm:
+    name: npm @sylin-org/suzu
+    runs-on: ubuntu-latest
+    steps:
+      - name: Gate on NPM_TOKEN
+        env:
+          T: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$T" ]; then
+            echo "::notice::NPM_TOKEN not set — the npm channel waits"
+            echo "SKIP=1" >> "$GITHUB_ENV"
+          fi
+      - uses: actions/checkout@v4
+        if: env.SKIP != '1'
+      - uses: actions/setup-node@v4
+        if: env.SKIP != '1'
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+      - name: Publish the shim at the release version
+        if: env.SKIP != '1'
+        working-directory: packaging/npm
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          node -e "const f='package.json';const p=require('./'+f);p.version=process.argv[1].slice(1);require('fs').writeFileSync(f,JSON.stringify(p,null,2)+'\n')" "$tag"
+          npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  winget:
+    name: winget manifest
+    runs-on: windows-latest
+    steps:
+      - name: Gate on WINGET_TOKEN
+        env:
+          T: ${{ secrets.WINGET_TOKEN }}
+        shell: pwsh
+        run: |
+          if (-not $env:T) {
+            Write-Output "::notice::WINGET_TOKEN not set — the winget channel waits"
+            "SKIP=1" | Out-File -Append $env:GITHUB_ENV
+          }
+      - name: Submit the manifest PR
+        if: env.SKIP != '1'
+        shell: pwsh
+        run: |
+          $tag = "${env:GITHUB_REF_NAME}"
+          $zip = "suzu-$tag-x86_64-windows.zip"
+          $url = "https://github.com/sylin-org/suzu/releases/download/$tag/$zip"
+          # wingetcreate: the first submission opens the PR that adds
+          # sylin.suzu to winget-pkgs; later ones update it.
+          Invoke-WebRequest "https://github.com/microsoft/winget-create/releases/latest/download/wingetcreate.exe" -OutFile wingetcreate.exe
+          .\wingetcreate.exe submit --token "${{ secrets.WINGET_TOKEN }}" --name "suzu" --publisher "sylin-org" --version "$($tag.TrimStart('v'))" --installer-url $url --installer-type zip
+
+  website:
+    name: website fallback version
+    runs-on: ubuntu-latest
+    env:
+      SITE: sylin-org/website
+    steps:
+      - name: Gate on WEBSITE_TOKEN
+        env:
+          T: ${{ secrets.WEBSITE_TOKEN }}
+        run: |
+          if [ -z "$T" ]; then
+            echo "::notice::WEBSITE_TOKEN not set — the site's runtime overlay carries the version alone"
+            echo "SKIP=1" >> "$GITHUB_ENV"
+          fi
+      - name: Bump the suzu versionFallback
+        if: env.SKIP != '1'
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          git clone --depth 1 "https://x-access-token:${{ secrets.WEBSITE_TOKEN }}@github.com/${SITE}.git" site
+          python - "$tag" <<'EOF'
+          import re, sys
+          tag = sys.argv[1]
+          p = "site/src/_data/portfolio.js"
+          src = open(p, encoding="utf-8").read()
+          i = src.find("slug: 'suzu'")
+          j = src.find("versionFallback:", i)
+          assert i > 0 and j > i, "suzu entry or versionFallback not found"
+          src = src[:j] + re.sub(r"versionFallback: '[^']*'", f"versionFallback: '{tag[1:]}'", src[j:j+60], count=1) + src[j+60:]
+          open(p, "w", encoding="utf-8", newline="\n").write(src)
+          EOF
+          git -C site config user.name "suzu release bot"
+          git -C site config user.email "noreply@sylin.org"
+          if git -C site diff --quiet; then
+            echo "fallback already current"
+            exit 0
+          fi
+          git -C site add src/_data/portfolio.js
+          git -C site commit -m "chore(suzu): refresh public fallback for $tag"
+          git -C site push

@@ -102,6 +102,18 @@ jobs:
           cd dist
           sha256sum *.zip *.tar.gz > SHA256SUMS
           cat SHA256SUMS
+      - name: Write latest.json for update checks
+        run: |
+          cd dist
+          v="${GITHUB_REF_NAME}"
+          python - "$v" <<'EOF'
+          import json, os, sys
+          v = sys.argv[1]
+          assets = {n.rsplit("-", 2)[1] + "-" + n.rsplit("-", 1)[1].split(".")[0]: n
+                    for n in os.listdir(".") if n.startswith("suzu-") and not n.endswith(".txt")}
+          json.dump({"version": v, "assets": assets}, open("latest.json", "w"), indent=2)
+          print(open("latest.json").read())
+          EOF
       - name: Publish the release
         uses: softprops/action-gh-release@v2
         with:
@@ -110,3 +122,4 @@ jobs:
             dist/*.zip
             dist/*.tar.gz
             dist/SHA256SUMS
+            dist/latest.json
