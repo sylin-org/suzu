@@ -1,6 +1,9 @@
 [package]
 name = "suzu-workbench"
 description = "Desktop management interface for the Suzu Resident and connected devices"
+homepage = "https://sylin.org/suzu"
+repository = "https://github.com/sylin-org/suzu"
+authors = ["Leo Botinelly <leonardo.botinelly@gmail.com>"]
 publish = false
 version = "0.1.0"
 edition = "2021"

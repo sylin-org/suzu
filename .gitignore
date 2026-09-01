@@ -24,3 +24,6 @@ strip-zoom.png
 
 # ZCode client session state
 .zcode/
+
+# Local-only testbed access (disposable credentials, ADR-0008 test platforms)
+.ignore/

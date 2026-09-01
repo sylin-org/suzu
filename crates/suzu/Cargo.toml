@@ -3,7 +3,13 @@ name = "suzu"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
-description = "suzu adoption & servicing tool: detect, identify, test"
+description = "suzu — detect, identify, and service a fleet of small companion displays; the Resident service and its CLI"
+homepage = "https://sylin.org/suzu"
+repository = "https://github.com/sylin-org/suzu"
+authors = ["Leo Botinelly <leonardo.botinelly@gmail.com>"]
+keywords = ["hardware", "serial", "embedded", "service", "monitoring"]
+categories = ["hardware-support", "command-line-utilities"]
+readme = "../../README.md"
 
 [dependencies]
 anyhow = "1"

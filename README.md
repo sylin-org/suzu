@@ -306,7 +306,6 @@ house feel something.
 
 ## License
 
-To be decided — the intent is open source and community-drivable; the crate
-says MIT in the meantime, and no license text ships until the choice is made.
-Bundled fonts and icons keep their own licenses (Bebas Neue: SIL OFL; Open
-Iconic: MIT).
+MIT — the [`LICENSE`](LICENSE) file ships with the repository and every
+release. Bundled fonts and icons keep their own licenses (Bebas Neue: SIL
+OFL; Open Iconic: MIT).
