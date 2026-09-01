@@ -234,8 +234,6 @@ tools, plus a previewer that runs the face against a fake framebuffer.
   [`.github/actions/bell`](.github/actions/bell/action.yml).
 
 **Next:**
-
-- Ratifying the `suzu/1` wire language into `CONTRACT.md`.
 - Faceplate-declared installs — today the ESP8266 push list is hardcoded and
   the matrix path copies `code.py` + `suzu.json`.
 - Bench proof for the raw-REPL migration path (`suzu firmware` /
