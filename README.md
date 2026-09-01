@@ -248,10 +248,13 @@ tools, plus a previewer that runs the face against a fake framebuffer.
 
 The design paper trail is in [`docs/`](docs) — [`the-model.md`](docs/the-model.md)
 is the constitution (where older documents disagree, it wins), beside the wire
-protocol, the face contract, the prior-art survey, and
+protocol, the face contract, the prior-art survey,
 [`install-lessons.md`](docs/install-lessons.md), the installation incident and
 its un-brick ladder — I bricked the first board so the procedure now refuses
-to. ADR-0001 records why the matrix is a lake.
+to. ADR-0001 records why the matrix is a lake. The service's Linux
+testbeds — three disposable hosts the deployment is proven on before it
+lands anywhere long-lived — are documented in
+[`docs/test-platforms.md`](docs/test-platforms.md).
 
 ## Getting started
 
