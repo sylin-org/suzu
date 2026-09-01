@@ -86,11 +86,17 @@ $ suzu pause                                   # one UDP datagram: hold your bre
 (`pause` dials `127.0.0.1:7898` — S-U-Z-U on a phone keypad. `suzu resume`
 lets it breathe again.)
 
+For an always-on Linux host, install the Resident as an unprivileged systemd
+service. The repeatable Debian/Arch/Fedora workflow, verification checklist,
+native-package contract, and rollback steps are in
+[`docs/linux-installation-playbook.md`](docs/linux-installation-playbook.md).
+
 The whole vocabulary:
 
 | Verb | What it does |
 | --- | --- |
 | `suzu scan` | Identify every serial port, joined with the hardware catalog |
+| `suzu list` | List the Resident's compatible devices; in a terminal, select one to pause, identify, install or change its faceplate, or factory-reset it |
 | `suzu detective` | Full fact dump per device, ending in a draft `signature.yaml` for a new board class |
 | `suzu serve` | The Resident: watcher, sessions, moments, host sensing, publishing, supervised domains |
 | `suzu screenshot [port]` | In-band frame grab from every firefly — no reboot — one manifest-decoded PNG per face |
@@ -102,6 +108,25 @@ The whole vocabulary:
 
 | `suzu firmware <port>` | Migrate a harvested device to `suzu/1` in place, `device_id` preserved |
 | `suzu restore <port>` | Un-migrate from the per-device backup. Refuses without one |
+
+### Managing devices from a terminal
+
+`suzu list` is the Workbench's device ceremony in terminal form. It reads the
+Resident's same snapshot and legal-action vocabulary; neither surface opens a
+serial port or recreates lifecycle rules. In an interactive terminal, choose a
+device and the aggregate offers only actions valid for its current `NEW`,
+`LIVE`, or `PAUSED` state. Faceplate selection includes every declared mount
+variant, and maintenance steps remain attached until admission returns the
+device to `LIVE` or reports a failure.
+
+When output is redirected, `suzu list` prints once and exits. The explicit
+forms are useful to scripts, agents, and terminal testing:
+
+```text
+suzu list --plain          # one human-readable snapshot
+suzu list --json           # the shared Resident read model
+suzu list --interactive    # force the selection loop
+```
 
 ## The contract (`suzu/1`)
 

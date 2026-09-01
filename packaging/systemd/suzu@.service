@@ -1,0 +1,38 @@
+[Unit]
+Description=Suzu Resident (keeper %i)
+Documentation=https://github.com/sylin-org/suzu
+After=systemd-udevd.service
+
+[Service]
+Type=simple
+User=%i
+SupplementaryGroups=suzu-hw
+ExecStart=@SUZU_BINDIR@/suzu serve
+Restart=on-failure
+RestartSec=2s
+TimeoutStopSec=10s
+KillSignal=SIGTERM
+StandardInput=null
+Environment=SUZU_RESOURCE_DIR=@SUZU_RESOURCE_DIR@
+Environment=SUZU_STATE_DIR=/var/lib/suzu/%i
+Environment=SUZU_HARDWARE_DIR=@SUZU_RESOURCE_DIR@/hardware
+Environment=SUZU_CAPTURES_DIR=/var/lib/suzu/%i/captures
+StateDirectory=suzu/%i
+StateDirectoryMode=0750
+UMask=0077
+
+# The Resident needs real serial devices and loopback TCP/UDP. These
+# protections keep the rest of the host out of reach without hiding USB.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

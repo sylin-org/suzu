@@ -307,13 +307,12 @@ impl Catalog {
     /// crate dir). If nothing is found, return an empty catalog and let
     /// the built-in seed hints answer.
     pub fn load() -> Catalog {
-        let mut roots: Vec<PathBuf> = Vec::new();
-        if let Ok(dir) = std::env::var("SUZU_HARDWARE_DIR") {
-            roots.push(PathBuf::from(dir).join("classes"));
-        }
-        roots.push(PathBuf::from("hardware/classes"));
-        roots.push(PathBuf::from("../hardware/classes"));
-        roots.push(PathBuf::from("../../hardware/classes"));
+        let roots: Vec<PathBuf> = vec![
+            crate::paths::hardware_dir().join("classes"),
+            PathBuf::from("hardware/classes"),
+            PathBuf::from("../hardware/classes"),
+            PathBuf::from("../../hardware/classes"),
+        ];
 
         for root in &roots {
             let Ok(entries) = std::fs::read_dir(root) else {
@@ -543,4 +542,3 @@ pub fn seed_class_for(vid: u16, pid: u16) -> Option<String> {
         _ => None,
     }
 }
-

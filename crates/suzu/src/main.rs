@@ -3,6 +3,7 @@
 //! Subcommands:
 //!   (none)     watch USB serial ports; identify on hotplug; service
 //!   scan       one-shot identification of every connected port
+//!   list       list and manage the Resident's compatible devices
 //!   detective  full fact dump per USB device — the harvest instrument
 //!   serve      the Resident: watcher · devices · moments · sensor,
 //!              talking to each other in the open
@@ -13,7 +14,9 @@
 mod catalog;
 mod control;
 mod gif;
+mod house_cli;
 mod mpush;
+mod paths;
 mod prepare;
 mod probe;
 mod resident;
@@ -535,11 +538,14 @@ fn watch(catalog: &Arc<Catalog>) {
 async fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let catalog = Arc::new(catalog::Catalog::load());
-    println!("catalog: {}", catalog.source);
+    if args.get(1).map(String::as_str) != Some("list") {
+        println!("catalog: {}", catalog.source);
+    }
 
     match args.get(1).map(|s| s.as_str()) {
         Some("scan") => scan_once(&catalog),
         Some("detective") => detective(&catalog),
+        Some("list") => house_cli::run(&args[2..]).await?,
         Some("serve") => resident::run(catalog).await?,
         Some("screenshot") => screenshot(&catalog, args.get(2).map(|s| s.as_str())),
         Some("prepare") => prepare::run(&catalog)?,

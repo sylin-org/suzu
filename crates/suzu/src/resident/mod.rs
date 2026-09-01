@@ -11,6 +11,7 @@
 
 pub mod admission;
 pub mod api;
+pub mod device;
 pub mod devices;
 pub mod events;
 pub mod gpu;
@@ -100,6 +101,22 @@ impl House {
 fn line(domain: &str, text: &str) {
     println!("[{domain}] {text}");
     let _ = io::stdout().flush();
+}
+
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("install SIGTERM handler");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = terminate.recv() => {}
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
 }
 
 fn house_line(ev: &HouseEvent, journal: &Journal) {
@@ -564,8 +581,14 @@ pub async fn run(catalog: Arc<Catalog>) -> anyhow::Result<()> {
 
     let mut ev_rx = events.subscribe();
     let mut last_ground_line = Option::<std::time::Instant>::None;
+    let shutdown = shutdown_signal();
+    tokio::pin!(shutdown);
     loop {
         tokio::select! {
+            _ = &mut shutdown => {
+                line("house", "shutdown requested — releasing the companions");
+                break;
+            },
             ev = ev_rx.recv() => match ev {
                 Ok(ev) => {
                     // Ground drifts silently — log it at most every 10 s
@@ -624,6 +647,10 @@ pub async fn run(catalog: Arc<Catalog>) -> anyhow::Result<()> {
                 }
             }
         }
+    }
+    let (reply, mut report) = mpsc::channel(1);
+    if house.devices_door().send(DevicesCmd::Pause { reply }).await.is_ok() {
+        let _ = tokio::time::timeout(Duration::from_secs(3), report.recv()).await;
     }
     println!("the resident rests — the garden keeps breathing.");
     Ok(())

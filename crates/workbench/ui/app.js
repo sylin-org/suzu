@@ -62,6 +62,10 @@
       return {};
     }
   }
+  function deviceAction(port, action, body = {}) {
+    const verb = action === "factory_reset" ? "factory-reset" : action;
+    return postOrToast(`/api/device/${port}/${verb}`, body);
+  }
 
   function toast(text) {
     el.toast.textContent = text;
@@ -304,26 +308,21 @@
     const stale = lc === "new" && currencyStep && !currencyStep.ok;
     if (stale) line = escapeHtml(currencyStep.detail);
 
-    const streamButton = lc === "live"
-      ? `<button class="ghost-button" data-action="pause" ${lock}>Pause</button>`
-      : lc === "paused"
-        ? `<button class="ghost-button" data-action="resume" ${lock}>Resume</button>`
-        : stale
-          ? `<button class="ghost-button" data-action="update" ${lock}>Update Dress</button>`
-          : `<button class="ghost-button" data-action="install" ${lock}>Install Firmware</button>`;
-    const reinstall = `<button class="ghost-button" data-action="install" ${lock}>Reinstall Firmware</button>`;
-    // A live face may change its dress in place: files and a nudge,
-    // no bootloader — and the exam re-proves it before LIVE.
-    const identify = lc === "live"
-      ? `<button class="ghost-button" data-action="identify">Identify</button>`
-      : "";
-    const swap = lc === "live"
-      ? `<button class="ghost-button" data-action="faceplate">Faceplate…</button>`
-      : "";
-    const factory = `<button class="danger-button" data-action="factory" ${lock}>Factory Reset</button>`;
-    const tools = lc === "new"
-      ? streamButton + factory
-      : streamButton + identify + swap + reinstall + factory;
+    // The aggregate publishes its legal verbs. This view chooses labels
+    // and order; it does not recreate lifecycle law in JavaScript.
+    const allows = (action) => (row.actions ?? []).includes(action);
+    const tools = [
+      allows("pause") ? `<button class="ghost-button" data-action="pause" ${lock}>Pause</button>` : "",
+      allows("resume") ? `<button class="ghost-button" data-action="resume" ${lock}>Resume</button>` : "",
+      allows("identify") ? `<button class="ghost-button" data-action="identify" ${lock}>Identify</button>` : "",
+      allows("update") && lc === "new"
+        ? `<button class="ghost-button" data-action="update" ${lock}>Update Dress</button>`
+        : allows("update")
+          ? `<button class="ghost-button" data-action="faceplate" ${lock}>Faceplate…</button>` : "",
+      allows("install")
+        ? `<button class="ghost-button" data-action="install" ${lock}>${lc === "new" ? "Install Firmware" : "Reinstall Firmware"}</button>` : "",
+      allows("factory_reset") ? `<button class="danger-button" data-action="factory" ${lock}>Factory Reset</button>` : "",
+    ].join("");
 
     // Class photos come straight from the resident (img display is
     // not CORS-gated): one URL per class, remembered; a class with no
@@ -381,12 +380,8 @@
 
     if (action === "pause" || action === "resume") {
       button.disabled = true;
-      await postOrToast(`/api/device/${port}/${action}`, {});
+      await deviceAction(port, action);
     } else if (action === "install") {
-      const ok = await confirmChange(
-        `Install firmware on ${port}?`,
-        "The face files return to ship state (its identity is kept), the face restarts, and it is tested before it goes live again. If the board is not running CircuitPython yet, the saga waits for you to hold BOOTSEL and replug \u2014 every step appears in the Log.",
-      );
       const row = Store.state.devices.get(port);
       await fetchFaceplates(row?.class);
       const c = await ceremony(
@@ -395,18 +390,16 @@
         "The face files return to ship state (its identity is kept), the face restarts, and it is tested before it goes live again. If the board is not running CircuitPython yet, the saga waits for you to hold BOOTSEL and replug — every step appears in the Log.",
       );
       if (!c.ok) return;
-      const body = { kind: "install" };
+      const body = {};
       if (c.faceplate) body.faceplate = c.faceplate;
-      const d = await postOrToast(`/api/maintenance/${port}`, body);
+      const d = await deviceAction(port, "install", body);
       if (d.message) toast(d.message);
     } else if (action === "identify") {
       button.disabled = true;
       // the utterance is the request: identify device COM24
       try {
-        const r = await call("GET", `/api/device/identify/${port}`);
-        const d = r.json();
+        const d = await deviceAction(port, "identify");
         if (d.message) toast(d.message);
-        else if (!r.ok) toast(`identify failed (${r.status})`);
       } finally {
         // Identify changes no row — no devices fact will follow to
         // re-render the card, so the ask itself must hand the
@@ -417,7 +410,7 @@
       button.disabled = true;
       // the held face already runs MicroPython: a dress update, not
       // an install — files and a nudge, the exam decides the rest.
-      const d = await postOrToast(`/api/maintenance/${port}`, { kind: "soft" });
+      const d = await deviceAction(port, "update");
       if (d.message) toast(d.message);
     } else if (action === "faceplate") {
       const row = Store.state.devices.get(port);
@@ -428,9 +421,9 @@
         "The face files are rewritten in place and the face re-enters its exam — about a minute, no bootloader. The stream returns only when the tests pass.",
       );
       if (!c.ok) return;
-      const body = { kind: "soft" };
+      const body = {};
       if (c.faceplate) body.faceplate = c.faceplate;
-      const d = await postOrToast(`/api/maintenance/${port}`, body);
+      const d = await deviceAction(port, "update", body);
       if (d.message) toast(d.message);
     } else if (action === "factory") {
       const ok = await confirmChange(
@@ -439,7 +432,7 @@
       );
       if (ok) {
         button.disabled = true;
-        await postOrToast(`/api/maintenance/${port}`, { kind: "factory" });
+        await deviceAction(port, "factory_reset");
         toast(`${port}: factory reset began - follow the steps here`);
       }
     }

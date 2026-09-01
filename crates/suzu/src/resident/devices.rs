@@ -16,6 +16,7 @@
 //! client's slice.
 
 use super::admission;
+use super::device::{Device, DeviceAction, DeviceOrder, DeviceState, MaintenanceOrder};
 use super::events::{DeviceFacts, DeviceRow, FrameFacts, HouseEvent};
 use super::jobs::{Job, Jobs};
 use super::roster::Roster;
@@ -139,13 +140,6 @@ impl Mailslot {
     }
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
-pub enum DeviceState {
-    Accepted,
-    #[allow(dead_code)] // used by the servicing engine (unplug mid-pipeline)
-    Disposed,
-}
-
 /// The ring dialect this session's face declared (ADR-0006): the
 /// instance degrades every say to it before a byte reaches the wire.
 #[derive(Debug, Clone, Copy)]
@@ -160,35 +154,6 @@ impl RingDialect {
             qualifiers: self.qualifiers,
             text: self.text,
         }
-    }
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct Device {
-    pub facts: DeviceFacts,
-    pub state: DeviceState,
-    pub minded_at: String,
-    /// The session mailbox — this device's consumer. Bounded: a full
-    /// mailbox is a stuck session, not a queue to grow forever.
-    #[serde(skip)]
-    pub mailslot: Option<Arc<Mailslot>>,
-    /// The roster's gate, mirrored here for the session thread to read
-    /// at wire speed. The roster is the truth; this is the echo.
-    #[serde(skip)]
-    pub streaming: Arc<AtomicBool>,
-    /// When the face last heard from the house — the honest aliveness
-    /// signal ("spoke 4s ago") beats any checklist.
-    #[serde(skip)]
-    pub last_fed: Arc<Mutex<Option<Instant>>>,
-    /// Whether this face's session can blink frames at all (suzu wire,
-    /// frame law declared) — the watched-lane count's denominator.
-    #[serde(skip)]
-    pub blinks: bool,
-}
-
-impl Device {
-    pub fn device_id(&self) -> Option<&str> {
-        self.facts.device_id.as_deref()
     }
 }
 
@@ -368,15 +333,12 @@ pub enum DevicesCmd {
         text: Option<String>,
         reply: mpsc::Sender<anyhow::Result<()>>,
     },
-    PauseDevice { port: String, reply: mpsc::Sender<anyhow::Result<()>> },
-    ResumeDevice { port: String, reply: mpsc::Sender<anyhow::Result<()>> },
-    /// Hand the individual to a maintenance saga: the session closes,
-    /// the port goes to the saga, the stream returns only after the
-    /// saga's admission test passes. `faceplate` names the dress for
-    /// classes that declare them (ADR-0005); None keeps the default.
-    MaintenanceStart {
+    /// One keeper vocabulary for every presentation. The minded-device
+    /// aggregate decides whether the action is legal and returns an
+    /// order; this actor only enacts it.
+    Act {
         port: String,
-        kind: String,
+        action: DeviceAction,
         faceplate: Option<String>,
         reply: mpsc::Sender<anyhow::Result<()>>,
     },
@@ -429,7 +391,10 @@ pub struct Devices {
 }
 
 struct SessionHandle {
+    slot: Arc<Mailslot>,
     close: Arc<AtomicBool>,
+    streaming: Arc<AtomicBool>,
+    blinks: bool,
     join: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -506,16 +471,8 @@ impl Devices {
                             let res = self.say_to(&port, &signal, text.as_deref());
                             let _ = reply.send(res).await;
                         }
-                        DevicesCmd::PauseDevice { port, reply } => {
-                            let res = self.pause_device(&port);
-                            let _ = reply.send(res).await;
-                        }
-                        DevicesCmd::ResumeDevice { port, reply } => {
-                            let res = self.resume_device(&port);
-                            let _ = reply.send(res).await;
-                        }
-                        DevicesCmd::MaintenanceStart { port, kind, faceplate, reply } => {
-                            let res = self.maintenance_begin(&port, &kind, faceplate);
+                        DevicesCmd::Act { port, action, faceplate, reply } => {
+                            let res = self.act(&port, action, faceplate);
                             let _ = reply.send(res).await;
                         }
                         DevicesCmd::MaintenanceFinished { port, device_id, ok, fresh } => {
@@ -527,14 +484,14 @@ impl Devices {
                     match ev {
                         Ok(HouseEvent::StreamAttached { port, .. }) => {
                             self.auto_dress.remove(&port);
-                            if let Some(d) = self.devices.get_mut(&port) {
-                                d.streaming.store(true, Ordering::Relaxed);
+                            if let Some(session) = self.sessions.get(&port) {
+                                session.streaming.store(true, Ordering::Relaxed);
                                 self.rows_dirty = true;
                             }
                         }
                         Ok(HouseEvent::StreamDetached { port, .. }) => {
-                            if let Some(d) = self.devices.get_mut(&port) {
-                                d.streaming.store(false, Ordering::Relaxed);
+                            if let Some(session) = self.sessions.get(&port) {
+                                session.streaming.store(false, Ordering::Relaxed);
                                 self.rows_dirty = true;
                             }
                         }
@@ -593,7 +550,11 @@ impl Devices {
                                 println!(
                                     "[house] {port}: dress {dress_id} is stale — updating it (the house keeps its own current)"
                                 );
-                                let _ = self.maintenance_begin(&port, "soft", Some(dress_id));
+                                let _ = self.act(
+                                    &port,
+                                    DeviceAction::Update,
+                                    Some(dress_id),
+                                );
                             }
                         }
                         Ok(_) => {}
@@ -690,22 +651,17 @@ impl Devices {
                 )
             })
             .ok();
-        self.sessions
-            .insert(facts.port.clone(), SessionHandle { close, join });
-        if let Some(device) = self.devices.get_mut(&facts.port) {
-            device.mailslot = Some(Arc::clone(&slot));
-            device.streaming = streaming;
-            device.blinks = blinks;
-        }
+        self.sessions.insert(
+            facts.port.clone(),
+            SessionHandle { slot, close, streaming, blinks, join },
+        );
         self.rows_dirty = true;
     }
 
     fn close_session(&mut self, port: &str) -> Option<std::thread::JoinHandle<()>> {
         let mut handle = self.sessions.remove(port)?;
         handle.close.store(true, Ordering::Relaxed);
-        if let Some(device) = self.devices.get_mut(port) {
-            device.streaming.store(false, Ordering::Relaxed);
-        }
+        handle.streaming.store(false, Ordering::Relaxed);
         self.frames.remove(port);
         handle.join.take()
     }
@@ -714,8 +670,9 @@ impl Devices {
     /// happened. The frame carries the moment's words after the seq.
     fn ring(&mut self, signal: &str, label: &str, urgency: u8) {
         let words: Vec<String> = label.split_whitespace().map(|s| s.to_string()).collect();
-        for device in self.devices.values_mut() {
-            if let Some(slot) = &device.mailslot {
+        for session in self.sessions.values() {
+            if session.streaming.load(Ordering::Relaxed) {
+                let slot = &session.slot;
                 slot.slap(Ask::Ring {
                     signal: signal.to_string(),
                     words: words.clone(),
@@ -736,9 +693,9 @@ impl Devices {
         WatchReport {
             changed,
             blinking: self
-                .devices
+                .sessions
                 .values()
-                .filter(|d| d.blinks && d.streaming.load(Ordering::Relaxed))
+                .filter(|s| s.blinks && s.streaming.load(Ordering::Relaxed))
                 .count(),
         }
     }
@@ -754,9 +711,6 @@ impl Devices {
         let ports: Vec<String> = self.devices.keys().cloned().collect();
         for port in &ports {
             self.close_session(port);
-            if let Some(device) = self.devices.get_mut(port) {
-                device.mailslot = None;
-            }
         }
         self.rows_dirty = true;
         let _ = self.events.send(HouseEvent::Paused { paused: true });
@@ -824,18 +778,8 @@ impl Devices {
             }
         }
 
-        self.devices.insert(
-            facts.port.clone(),
-            Device {
-                facts: facts.clone(),
-                state,
-                minded_at: now(),
-                mailslot: None,
-                streaming: Arc::new(AtomicBool::new(false)),
-                last_fed: Arc::new(Mutex::new(None)),
-                blinks: false,
-            },
-        );
+        self.devices
+            .insert(facts.port.clone(), Device::new(facts.clone(), now()));
         self.rows_dirty = true;
         // A paused house stays silent: the session spawns on resume.
         if !self.paused {
@@ -845,9 +789,8 @@ impl Devices {
     }
 
     fn gone(&mut self, port: &str) {
-        if let Some(mut device) = self.devices.remove(port) {
+        if let Some(device) = self.devices.remove(port) {
             self.close_session(port);
-            device.mailslot = None;
             self.rows_dirty = true;
             let _ = self.events.send(HouseEvent::DeviceReleased {
                 port: port.to_string(),
@@ -925,17 +868,14 @@ impl Devices {
     /// moments budget — the keeper or an application aimed here, and
     /// the latest ask replaces whatever is showing.
     fn say_to(&mut self, port: &str, signal: &str, text: Option<&str>) -> anyhow::Result<()> {
-        let device = self
-            .devices
+        let session = self
+            .sessions
             .get(port)
-            .ok_or_else(|| anyhow::anyhow!("{port}: no minded device"))?;
-        if !device.streaming.load(Ordering::Relaxed) {
+            .ok_or_else(|| anyhow::anyhow!("{port}: no live session"))?;
+        if !session.streaming.load(Ordering::Relaxed) {
             anyhow::bail!("{port}: is not on the stream — only a live face hears its name");
         }
-        let Some(slot) = &device.mailslot else {
-            anyhow::bail!("{port}: no live session");
-        };
-        slot.slap(Ask::Ring {
+        session.slot.slap(Ask::Ring {
             signal: signal.to_string(),
             words: text
                 .unwrap_or("")
@@ -947,94 +887,110 @@ impl Devices {
         Ok(())
     }
 
-    /// Per-device pause: withdraw the subscription but keep the
-    /// session — resume is instant and the port is never churned.
-    /// The face, hearing nothing, honestly falls to its garden.
-    fn pause_device(&mut self, port: &str) -> anyhow::Result<()> {
-        let device_id = self
-            .devices
-            .get(port)
-            .and_then(|d| d.device_id().map(|s| s.to_string()))
-            .ok_or_else(|| anyhow::anyhow!("{port}: no minded device"))?;
-        {
-            let mut roster = self
-                .roster
-                .write()
-                .map_err(|_| anyhow::anyhow!("roster lock poisoned"))?;
-            let current = roster
-                .individual(&device_id)
-                .map(|i| format!("{:?}", i.lifecycle).to_lowercase());
-            roster.pause(&device_id).map_err(|e| {
-                anyhow::anyhow!("{port}: cannot pause — {}", match e {
-                    super::roster::Refusal::NotFrom(from) => format!(
-                        "that move is only from {from} (this face is {})",
-                        current.as_deref().unwrap_or("unknown")
-                    ),
-                    super::roster::Refusal::Unknown => {
-                        "the roster holds no such individual".to_string()
-                    }
-                })
-            })?;
-        }
-        if let Some(d) = self.devices.get_mut(port) {
-            d.streaming.store(false, Ordering::Relaxed);
-        }
-        self.rows_dirty = true;
-        let _ = self.events.send(HouseEvent::StreamDetached {
-            device_id,
-            port: port.to_string(),
-            reason: "paused by the keeper".into(),
-        });
-        Ok(())
+    /// Ask one minded device to decide a keeper verb, then enact the
+    /// resulting order. Lifecycle and dress rules live on `Device`;
+    /// this actor owns only infrastructure and event publication.
+    fn act(
+        &mut self,
+        port: &str,
+        action: DeviceAction,
+        faceplate: Option<String>,
+    ) -> anyhow::Result<()> {
+        let order = {
+            let device = self
+                .devices
+                .get(port)
+                .ok_or_else(|| anyhow::anyhow!("{port}: no minded device"))?;
+            let in_maintenance = self.in_maintenance.contains_key(port);
+            match action {
+                DeviceAction::Pause => {
+                    let mut roster = self
+                        .roster
+                        .write()
+                        .map_err(|_| anyhow::anyhow!("roster lock poisoned"))?;
+                    device.pause(&mut roster)?
+                }
+                DeviceAction::Resume => {
+                    let mut roster = self
+                        .roster
+                        .write()
+                        .map_err(|_| anyhow::anyhow!("roster lock poisoned"))?;
+                    device.resume(&mut roster)?
+                }
+                DeviceAction::Identify => {
+                    let roster = self
+                        .roster
+                        .read()
+                        .map_err(|_| anyhow::anyhow!("roster lock poisoned"))?;
+                    let individual = device.device_id().and_then(|id| roster.individual(id));
+                    device.identify(individual)?
+                }
+                DeviceAction::Install => {
+                    let roster = self
+                        .roster
+                        .read()
+                        .map_err(|_| anyhow::anyhow!("roster lock poisoned"))?;
+                    let individual = device.device_id().and_then(|id| roster.individual(id));
+                    device.install(&self.catalog, faceplate, individual, in_maintenance)?
+                }
+                DeviceAction::Update => {
+                    let roster = self
+                        .roster
+                        .read()
+                        .map_err(|_| anyhow::anyhow!("roster lock poisoned"))?;
+                    let individual = device.device_id().and_then(|id| roster.individual(id));
+                    device.update(&self.catalog, faceplate, individual, in_maintenance)?
+                }
+                DeviceAction::FactoryReset => {
+                    let roster = self
+                        .roster
+                        .read()
+                        .map_err(|_| anyhow::anyhow!("roster lock poisoned"))?;
+                    let individual = device.device_id().and_then(|id| roster.individual(id));
+                    device.factory_reset(&self.catalog, individual, in_maintenance)?
+                }
+            }
+        };
+        self.enact(port, order)
     }
 
-    fn resume_device(&mut self, port: &str) -> anyhow::Result<()> {
-        let device_id = self
-            .devices
-            .get(port)
-            .and_then(|d| d.device_id().map(|s| s.to_string()))
-            .ok_or_else(|| anyhow::anyhow!("{port}: no minded device"))?;
-        {
-            let mut roster = self
-                .roster
-                .write()
-                .map_err(|_| anyhow::anyhow!("roster lock poisoned"))?;
-            let current = roster
-                .individual(&device_id)
-                .map(|i| format!("{:?}", i.lifecycle).to_lowercase());
-            roster.resume(&device_id).map_err(|e| {
-                anyhow::anyhow!("{port}: cannot resume — {}", match e {
-                    super::roster::Refusal::NotFrom(from) => format!(
-                        "that move is only from {from} (this face is {})",
-                        current.as_deref().unwrap_or("unknown")
-                    ),
-                    super::roster::Refusal::Unknown => {
-                        "the roster holds no such individual".to_string()
-                    }
-                })
-            })?;
+    fn enact(&mut self, port: &str, order: DeviceOrder) -> anyhow::Result<()> {
+        match order {
+            DeviceOrder::Pause { device_id } => {
+                if let Some(session) = self.sessions.get(port) {
+                    session.streaming.store(false, Ordering::Relaxed);
+                }
+                self.rows_dirty = true;
+                let _ = self.events.send(HouseEvent::StreamDetached {
+                    device_id,
+                    port: port.to_string(),
+                    reason: "paused by the keeper".into(),
+                });
+            }
+            DeviceOrder::Resume { device_id } => {
+                if let Some(session) = self.sessions.get(port) {
+                    session.streaming.store(true, Ordering::Relaxed);
+                }
+                self.rows_dirty = true;
+                let _ = self.events.send(HouseEvent::StreamAttached {
+                    device_id,
+                    port: port.to_string(),
+                });
+            }
+            DeviceOrder::Identify => {
+                self.say_to(port, "info", Some(&format!("Hello from {port}!")))?;
+            }
+            DeviceOrder::Maintenance(order) => self.maintenance_begin(port, order)?,
         }
-        if let Some(d) = self.devices.get_mut(port) {
-            d.streaming.store(true, Ordering::Relaxed);
-        }
-        self.rows_dirty = true;
-        let _ = self.events.send(HouseEvent::StreamAttached {
-            device_id,
-            port: port.to_string(),
-        });
         Ok(())
     }
 
     fn send_to_session(&self, port: &str, ask: Ask) -> anyhow::Result<()> {
-        let device = self
-            .devices
+        let session = self
+            .sessions
             .get(port)
-            .ok_or_else(|| anyhow::anyhow!("{port}: no minded device"))?;
-        let slot = device
-            .mailslot
-            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("{port}: no live session — is the stream paused?"))?;
-        slot.slap(ask);
+        session.slot.slap(ask);
         Ok(())
     }
 
@@ -1044,13 +1000,12 @@ impl Devices {
     /// its admission exam is the gate back into the stream. The command
     /// acks as soon as the saga *begins*; its progress arrives as
     /// MaintenanceStep events and its end as MaintenanceFinished.
-    fn maintenance_begin(
-        &mut self,
-        port: &str,
-        kind: &str,
-        faceplate: Option<String>,
-    ) -> anyhow::Result<()> {
-        // The keeper's verb is "install"; the saga depends on what the
+    fn maintenance_begin(&mut self, port: &str, order: MaintenanceOrder) -> anyhow::Result<()> {
+        // The order ships the caller's resolved intent (the house door,
+        // ADR-0007); the live facts below remain the authority.
+        let MaintenanceOrder { kind, faceplate, .. } = order;
+        let kind = kind.as_str();
+// The keeper's verb is "install"; the saga depends on what the
         // face speaks today - an unknown board needs the full install, a
         // suzu face just its files back.
         let speaks_suzu = self
@@ -1127,9 +1082,6 @@ impl Devices {
         // thread before the tools open the port — on the saga's own
         // task, never on this loop.
         let joining = self.close_session(port);
-        if let Some(d) = self.devices.get_mut(port) {
-            d.mailslot = None;
-        }
         self.in_maintenance
             .insert(port.to_string(), (kind.to_string(), faceplate.clone()));
         held_ports().lock().unwrap().insert(port.to_string());
@@ -1217,8 +1169,8 @@ impl Devices {
         });
         self.in_maintenance.remove(port);
         held_ports().lock().unwrap().remove(port);
-        if let Some(d) = self.devices.get_mut(port) {
-            d.streaming.store(false, Ordering::Relaxed);
+        if let Some(session) = self.sessions.get(port) {
+            session.streaming.store(false, Ordering::Relaxed);
         }
         self.rows_dirty = true;
         match fresh {
@@ -1255,7 +1207,12 @@ impl Devices {
         let roster = self.roster.read().ok();
         self.devices
             .values()
-            .map(|d| DeviceRow {
+            .map(|d| {
+                let individual = roster.as_ref().and_then(|r| {
+                    d.device_id().and_then(|id| r.individual(id))
+                });
+                let session = self.sessions.get(&d.facts.port);
+                DeviceRow {
                 port: d.facts.port.clone(),
                 class: d.facts.class.clone(),
                 family: d.facts.family.clone(),
@@ -1264,19 +1221,19 @@ impl Devices {
                 proto: d.facts.proto.clone(),
                 device_id: d.facts.device_id.clone(),
                 state: d.state.clone(),
-                lifecycle: roster
-                    .as_ref()
-                    .and_then(|r| {
-                        d.device_id().and_then(|id| r.individual(id).map(|i| i.lifecycle))
-                    })
+                actions: d.available_actions(
+                    individual,
+                    self.in_maintenance.contains_key(&d.facts.port),
+                ),
+                faceplate: d.facts.faceplate.clone(),
+                mount: d.facts.mount.clone(),
+                lifecycle: individual
+                    .map(|i| i.lifecycle)
                     .map(|l| format!("{l:?}").to_lowercase()),
-                streaming: d.streaming.load(Ordering::Relaxed),
-                last_data_s: d
-                    .last_fed
-                    .lock()
-                    .ok()
-                    .and_then(|t| *t)
-                    .map(|t| t.elapsed().as_secs()),
+                streaming: session
+                    .is_some_and(|s| s.streaming.load(Ordering::Relaxed)),
+                last_data_s: None,
+            }
             })
             .collect()
     }
@@ -1300,7 +1257,7 @@ impl Devices {
 /// The captures folder: `SUZU_CAPTURES_DIR`, or `captures/` beside the
 /// resident. One name, one place.
 fn captures_dir() -> String {
-    std::env::var("SUZU_CAPTURES_DIR").unwrap_or_else(|_| "captures".into())
+    crate::paths::captures_dir().to_string_lossy().into_owned()
 }
 
 // ── the session — one thread per device, one master of the port ────

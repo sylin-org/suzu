@@ -7,7 +7,7 @@
 //! from the registry to whoever asks. Nothing long-running happens
 //! anywhere else; nothing blocks on a job to know how it is going.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use tokio::sync::broadcast::Sender;
@@ -17,7 +17,7 @@ use super::events::HouseEvent;
 /// One job, in full. Its progress and verdict travel as Job facts on
 /// the house wire; while a record runs, the frames the GIF takes ride
 /// the frame lane (recording subsumes the preview).
-#[derive(Debug, Clone, Serialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Job {
     pub id: String,
     pub kind: String,

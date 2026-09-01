@@ -23,9 +23,6 @@ use tokio::sync::broadcast::Sender;
 
 use super::events::HouseEvent;
 
-const ARTIFACTS: &str = "firmware/artifacts";
-const RP2040_FIRMWARE: &str = "firmware/suzu-d/rp2040-matrix";
-
 /// The saga runner: announces numbered steps as they begin, and tells
 /// the truth when one fails.
 ///
@@ -234,7 +231,7 @@ fn find_circuitpy_drive() -> Option<String> {
 }
 
 fn copy_uf2(artifact: &str, mount: &str) -> Result<()> {
-    let src = Path::new(ARTIFACTS).join(artifact);
+    let src = crate::paths::firmware_dir().join("artifacts").join(artifact);
     if !src.exists() {
         bail!(
             "artifact {} is missing — factory reset works offline, so it must be vendored first",
@@ -258,7 +255,7 @@ fn copy_uf2(artifact: &str, mount: &str) -> Result<()> {
 
 fn backup_drive_identity(drive: &str, device_id: &str) -> Result<()> {
     let stamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
-    let dest = Path::new("backups").join(format!("{}-{stamp}", drive.trim_end_matches(':')));
+    let dest = crate::paths::backups_dir().join(format!("{}-{stamp}", drive.trim_end_matches(':')));
     std::fs::create_dir_all(&dest)?;
     for name in ["code.py", "suzu.json", "label.txt"] {
         let p = format!("{drive}/{name}");
@@ -274,8 +271,9 @@ fn backup_drive_identity(drive: &str, device_id: &str) -> Result<()> {
 
 /// The face files, with the individual's identity restored.
 fn write_face_files(drive: &str, device_id: &str) -> Result<()> {
-    let code = std::fs::read(format!("{RP2040_FIRMWARE}/code.py"))?;
-    let template = std::fs::read_to_string(format!("{RP2040_FIRMWARE}/suzu.json"))
+    let firmware = crate::paths::firmware_dir().join("suzu-d/rp2040-matrix");
+    let code = std::fs::read(firmware.join("code.py"))?;
+    let template = std::fs::read_to_string(firmware.join("suzu.json"))
         .unwrap_or_else(|_| "{\"proto\":\"suzu/1\"}".into());
     let mut suzu: serde_json::Value = serde_json::from_str(&template)
         .map_err(|e| anyhow!("suzu.json template: {e}"))?;
@@ -625,7 +623,7 @@ fn esp8266_factory(
     saga.step("Erasing the flash", |voice| {
         esptool(voice, port, &["esp8266", "erase_flash"]).map(|_| ())
     })?;
-    let bin = Path::new(ARTIFACTS).join("micropython-esp8266-1mib.bin");
+    let bin = crate::paths::firmware_dir().join("artifacts/micropython-esp8266-1mib.bin");
     if !bin.exists() {
         bail!("artifact {} is missing — vendor it before factory", bin.display());
     }

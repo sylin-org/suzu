@@ -13,7 +13,7 @@
 //! and produced three timers racing one stream; whole slices and one
 //! store are the repair.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct DeviceFacts {
@@ -41,7 +41,7 @@ pub struct DeviceFacts {
 
 /// One minded device, as the wire carries it — a copy, taken by the
 /// owning domain, replaced whole in every client (ADR-0004).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceRow {
     pub port: String,
     pub class: Option<String>,
@@ -50,7 +50,15 @@ pub struct DeviceRow {
     pub version: Option<String>,
     pub proto: Option<String>,
     pub device_id: Option<String>,
-    pub state: super::devices::DeviceState,
+    pub state: super::device::DeviceState,
+    /// The aggregate's currently legal keeper verbs. Workbench and CLI
+    /// render this vocabulary instead of re-deriving lifecycle rules.
+    #[serde(default)]
+    pub actions: Vec<super::device::DeviceAction>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub faceplate: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mount: Option<String>,
     /// The roster's lifecycle verdict for this individual, if known.
     pub lifecycle: Option<String>,
     /// Whether the stream currently flows to this device.
@@ -60,7 +68,7 @@ pub struct DeviceRow {
 }
 
 /// One journal line — what the house heard, in the house's voice.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JournalLine {
     pub ts: String,
     pub domain: String,
@@ -68,7 +76,7 @@ pub struct JournalLine {
 }
 
 /// The service's own facts — the pill in the workbench's lampband.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceFacts {
     pub name: String,
     pub version: String,
@@ -77,7 +85,7 @@ pub struct ServiceFacts {
 }
 
 /// A face's latest frame: PNG bytes, base64 — the media lane.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FrameFacts {
     pub port: String,
     pub png: String,
@@ -85,7 +93,7 @@ pub struct FrameFacts {
 
 /// The connection-opening fact: the whole house in one object
 /// (ADR-0004). Everything after it on the wire is a delta.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HouseSnapshot {
     pub service: ServiceFacts,
     pub devices: Vec<DeviceRow>,
@@ -214,7 +222,7 @@ pub enum HouseEvent {
 }
 
 /// One admission-test step's shape — cheap, serializable, honest.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdmissionStep {
     pub name: String,
     pub ok: bool,

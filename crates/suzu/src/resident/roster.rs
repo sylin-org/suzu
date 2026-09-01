@@ -23,11 +23,11 @@
 //! events; the workbench renders the snapshot.
 
 use super::events::AdmissionStep;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 /// The lifecycle of an individual, in the keeper's own words.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Lifecycle {
     /// Present, not on the stream. Install firmware or factory reset.
@@ -41,7 +41,7 @@ pub enum Lifecycle {
 }
 
 /// An admission test's stored verdict.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdmissionRecord {
     pub passed: bool,
     pub at: String,
@@ -49,7 +49,7 @@ pub struct AdmissionRecord {
 }
 
 /// One step of a maintenance saga's journal.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SagaStep {
     pub index: u32,
     pub total: u32,
@@ -59,7 +59,7 @@ pub struct SagaStep {
 }
 
 /// A maintenance saga's read model.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SagaState {
     pub kind: String,
     pub state: String, // running · done · failed
@@ -68,7 +68,7 @@ pub struct SagaState {
 
 /// The individual — the aggregate root. Identity survives wipes,
 /// replugs, and ports; nothing here is keyed on a COM number.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Individual {
     pub device_id: String,
     pub label: Option<String>,

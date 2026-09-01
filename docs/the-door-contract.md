@@ -70,8 +70,11 @@ for transports and curl scripts; the body is for humans and logs.
 |------|-----|--------------|
 | `/api/ui` | `{"watch_media":"on"\|"off"}` | `"watch_media"` |
 | `/api/control` | `{"verb":"pause"\|"resume"}` | `"verb"` |
-| `/api/device/P/pause` · `/resume` | — | `"stream"`: `"off"`\|`"on"` |
-| `/api/maintenance/P` | `{"kind":…}` | `"maintenance"`: the kind |
+| `/api/device/P/pause` · `/resume` | — | `"pause"`: `"off"` · `"resume"`: `"on"` |
+| `/api/device/P/identify` | — | `"identify"`: the port |
+| `/api/device/P/install` | `{"faceplate":…}` (optional) | `"install"`: the chosen faceplate |
+| `/api/device/P/update` | `{"faceplate":…}` (optional) | `"update"`: the chosen faceplate |
+| `/api/device/P/factory-reset` | — | `"factory_reset"`: `true` |
 | `/api/admission/P` | — | `"admission"`: `"retry"` |
 | `/api/record/P` | `{"secs":…,"fps":…}` | `"record"`: `{"secs","fps"}` |
 | `/api/capture/P/save` | — | `"saved"`: the path |
@@ -79,9 +82,14 @@ for transports and curl scripts; the body is for humans and logs.
 | `/api/shutdown` | — | `"stopping"`: `true` |
 
 Read doors (`/api/events`, `/api/log`, `/api/destinations`,
-`/api/device-image`, `/api/shot`) are not command doors: the stream is
+`/api/device-image`, `/api/faceplates`, `/api/shot`) are not command doors: the stream is
 the whole truth and the reads are curl-only conveniences or assets.
 They keep their own shapes.
+
+The older `/api/maintenance/P` and `GET /api/device/identify/P` shapes
+remain compatibility adapters. They
+translate immediately into the device aggregate's same typed methods;
+new clients use the device-member doors above.
 
 ## 5 · The law behind it
 

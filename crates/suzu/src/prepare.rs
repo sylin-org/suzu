@@ -22,8 +22,8 @@ struct FaceplateDecl {
 fn faceplates_for(class: &str) -> Vec<FaceplateDecl> {
     let mut out = Vec::new();
     // A class owns its dresses: hardware/classes/<class>/faceplates/*/
-    let root = std::path::Path::new("hardware/classes");
-    let Ok(entries) = std::fs::read_dir(root) else {
+    let root = crate::paths::hardware_dir().join("classes");
+    let Ok(entries) = std::fs::read_dir(&root) else {
         return out;
     };
     for dir in entries.flatten() {
@@ -249,12 +249,12 @@ fn install_rp2040(drive: &str, _class: &str) -> anyhow::Result<()> {
 #[allow(unused_variables)]
 fn install_rp2040_once(drive: &str) -> anyhow::Result<()> {
     wait_drive(drive, 10)?;
-    let src = std::path::Path::new("firmware/suzu-d/rp2040-matrix");
+    let src = crate::paths::firmware_dir().join("suzu-d/rp2040-matrix");
     // Rule zero: backup what the drive holds before writing.
     let stamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
     // a drive letter brings a colon: invalid in a Windows path component
     let safe_drive = drive.trim_end_matches(':');
-    let dest = std::path::PathBuf::from(format!("backups/{safe_drive}-{stamp}"));
+    let dest = crate::paths::backups_dir().join(format!("{safe_drive}-{stamp}"));
     std::fs::create_dir_all(&dest)
         .map_err(|e| anyhow::anyhow!("create_dir_all {}: {e}", dest.display()))?;
     for name in ["code.py", "suzu.json", "zen-garden.json"] {

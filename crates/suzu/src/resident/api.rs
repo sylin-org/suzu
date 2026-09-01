@@ -17,6 +17,7 @@
 //! the trust boundary is the machine itself (ADR-0002: local-first,
 //! same machine as the faces).
 
+use super::device::DeviceAction;
 use super::devices::{DevicesCmd, DevicesSnapshot};
 use super::events::{HouseEvent, HouseSnapshot, JournalLine, ServiceFacts};
 use super::jobs::Job;
@@ -494,6 +495,13 @@ async fn route(ctx: &Ctx, method: &str, path: &str, body: &str) -> (u16, &'stati
                 None => no_such("no such port on this machine"),
             }
         }
+        ("POST", p) if p.starts_with("/api/device/") && p.ends_with("/identify") => {
+            let target = p.trim_start_matches("/api/device/").trim_end_matches("/identify");
+            match resolve_target(ctx, target) {
+                Some(port) => device_action(ctx, &port, DeviceAction::Identify, None).await,
+                None => no_such("no such device on the roster"),
+            }
+        }
         ("POST", p) if p.starts_with("/api/device/") && p.ends_with("/pause") => {
             let target = p.trim_start_matches("/api/device/").trim_end_matches("/pause");
             match resolve_target(ctx, target) {
@@ -505,6 +513,27 @@ async fn route(ctx: &Ctx, method: &str, path: &str, body: &str) -> (u16, &'stati
             let target = p.trim_start_matches("/api/device/").trim_end_matches("/resume");
             match resolve_target(ctx, target) {
                 Some(port) => device_stream_toggle(ctx, &port, true).await,
+                None => no_such("no such device on the roster"),
+            }
+        }
+        ("POST", p) if p.starts_with("/api/device/") && p.ends_with("/install") => {
+            let target = p.trim_start_matches("/api/device/").trim_end_matches("/install");
+            match resolve_target(ctx, target) {
+                Some(port) => device_action(ctx, &port, DeviceAction::Install, faceplate_from(body)).await,
+                None => no_such("no such device on the roster"),
+            }
+        }
+        ("POST", p) if p.starts_with("/api/device/") && p.ends_with("/update") => {
+            let target = p.trim_start_matches("/api/device/").trim_end_matches("/update");
+            match resolve_target(ctx, target) {
+                Some(port) => device_action(ctx, &port, DeviceAction::Update, faceplate_from(body)).await,
+                None => no_such("no such device on the roster"),
+            }
+        }
+        ("POST", p) if p.starts_with("/api/device/") && p.ends_with("/factory-reset") => {
+            let target = p.trim_start_matches("/api/device/").trim_end_matches("/factory-reset");
+            match resolve_target(ctx, target) {
+                Some(port) => device_action(ctx, &port, DeviceAction::FactoryReset, None).await,
                 None => no_such("no such device on the roster"),
             }
         }
@@ -637,51 +666,17 @@ async fn admission(ctx: &Ctx, port: &str) -> (u16, &'static str, Vec<u8>) {
 /// name (the port), so twins on a desk can be told apart and the say
 /// cycle proves itself end to end.
 async fn identify(ctx: &Ctx, port: &str) -> (u16, &'static str, Vec<u8>) {
-    match door(&ctx.devices, |reply| DevicesCmd::Say {
-        port: port.to_string(),
-        signal: "info".to_string(),
-        text: Some(format!("Hello from {port}!")),
-        reply,
-    })
-    .await
-    {
-        Ok(Ok(())) => (
-            200,
-            "application/json",
-            serde_json::to_vec(&serde_json::json!({
-                "confirmed": true,
-                "identify": port,
-                "message": format!("{port} takes the stage — it rings its name for a moment"),
-            }))
-            .unwrap_or_default(),
-        ),
-        Ok(Err(e)) => envelope(false, format!("{e:#}")),
-        Err(e) => envelope(false, e),
-    }
+    device_action(ctx, port, DeviceAction::Identify, None).await
 }
 
 async fn device_stream_toggle(ctx: &Ctx, port: &str, resume: bool) -> (u16, &'static str, Vec<u8>) {
-    let asked = |reply| {
-        if resume {
-            DevicesCmd::ResumeDevice { port: port.to_string(), reply }
-        } else {
-            DevicesCmd::PauseDevice { port: port.to_string(), reply }
-        }
-    };
-    match door(&ctx.devices, asked).await {
-        Ok(Ok(())) => (
-            200,
-            "application/json",
-            serde_json::to_vec(&serde_json::json!({
-                "confirmed": true,
-                "stream": if resume { "on" } else { "off" },
-                "message": format!("{port} {}", if resume { "back on the stream — no re-test needed" } else { "lifted off the stream — the face rests" }),
-            }))
-            .unwrap_or_default(),
-        ),
-        Ok(Err(e)) => envelope(false, format!("{e:#}")),
-        Err(e) => envelope(false, e),
-    }
+    device_action(
+        ctx,
+        port,
+        if resume { DeviceAction::Resume } else { DeviceAction::Pause },
+        None,
+    )
+    .await
 }
 
 async fn maintenance(ctx: &Ctx, port: &str, body: &str) -> (u16, &'static str, Vec<u8>) {
@@ -691,26 +686,75 @@ async fn maintenance(ctx: &Ctx, port: &str, body: &str) -> (u16, &'static str, V
         .get("faceplate")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
-    match door(&ctx.devices, |reply| DevicesCmd::MaintenanceStart {
+    let action = match kind.as_str() {
+        "install" | "adopt" => DeviceAction::Install,
+        "soft" => DeviceAction::Update,
+        "factory" => DeviceAction::FactoryReset,
+        _ => return envelope(false, format!("unknown maintenance kind {kind:?}")),
+    };
+    device_action(ctx, port, action, faceplate).await
+}
+
+fn faceplate_from(body: &str) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v.get("faceplate").and_then(|v| v.as_str()).map(str::to_string))
+}
+
+async fn device_action(
+    ctx: &Ctx,
+    port: &str,
+    action: DeviceAction,
+    faceplate: Option<String>,
+) -> (u16, &'static str, Vec<u8>) {
+    match door(&ctx.devices, |reply| DevicesCmd::Act {
         port: port.to_string(),
-        kind: kind.clone(),
+        action,
         faceplate: faceplate.clone(),
         reply,
     })
     .await {
-        Ok(Ok(())) => (
-            200,
-            "application/json",
-            serde_json::to_vec(&serde_json::json!({
+        Ok(Ok(())) => {
+            let mut response = serde_json::json!({
                 "confirmed": true,
-                "maintenance": kind,
-                "faceplate": faceplate,
-                "message": format!("the {kind} saga owns {port} — its steps arrive on the log"),
-            }))
-            .unwrap_or_default(),
-        ),
+                "message": action_message(port, action),
+            });
+            response[action.as_str()] = action_echo(port, action, faceplate.as_deref());
+            (200, "application/json", serde_json::to_vec(&response).unwrap_or_default())
+        }
         Ok(Err(e)) => envelope(false, format!("{e:#}")),
         Err(e) => envelope(false, e),
+    }
+}
+
+fn action_echo(port: &str, action: DeviceAction, faceplate: Option<&str>) -> serde_json::Value {
+    match action {
+        DeviceAction::Pause => serde_json::json!("off"),
+        DeviceAction::Resume => serde_json::json!("on"),
+        DeviceAction::Identify => serde_json::json!(port),
+        DeviceAction::Install | DeviceAction::Update => {
+            serde_json::json!({ "faceplate": faceplate })
+        }
+        DeviceAction::FactoryReset => serde_json::json!(true),
+    }
+}
+
+fn action_message(port: &str, action: DeviceAction) -> String {
+    match action {
+        DeviceAction::Pause => format!("{port} lifted off the stream — the face rests"),
+        DeviceAction::Resume => format!("{port} back on the stream — no re-test needed"),
+        DeviceAction::Identify => {
+            format!("{port} takes the stage — it rings its name for a moment")
+        }
+        DeviceAction::Install => {
+            format!("the install saga owns {port} — its steps arrive on the log")
+        }
+        DeviceAction::Update => {
+            format!("the update saga owns {port} — its steps arrive on the log")
+        }
+        DeviceAction::FactoryReset => {
+            format!("the factory reset owns {port} — its steps arrive on the log")
+        }
     }
 }
 

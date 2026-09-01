@@ -12,7 +12,7 @@ const FACEPLATE_MAIN: &str =
     include_str!("../../../hardware/classes/esp8266-oled/faceplates/numerals/down-mount/main.py");
 
 fn backup_dir(device_id: &str) -> PathBuf {
-    PathBuf::from("backups").join(device_id)
+    crate::paths::backups_dir().join(device_id)
 }
 
 pub fn identify(port: &str) -> Result<serde_json::Value> {
