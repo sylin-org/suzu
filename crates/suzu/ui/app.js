@@ -21,8 +21,11 @@
     el[id.replaceAll("-", "_")] = document.getElementById(id);
   }
 
-  const API = "http://127.0.0.1:7899";
   const tauri = window.__TAURI__;
+  // Served by the Resident, the UI speaks to its own origin; inside the
+  // desktop shell, the shell makes the calls. One UI, two homes.
+  const IN_SHELL = !!tauri?.core?.invoke;
+  const API = IN_SHELL ? "http://127.0.0.1:7899" : "";
 
   let activeView = "status";
   let serviceBusy = false; // declared UI state: a start/stop is in flight
@@ -39,11 +42,19 @@
   async function call(method, path, body) {
     const payload = body == null ? null
       : typeof body === "string" ? body : JSON.stringify(body);
-    const r = await tauri.core.invoke("api", { method, path, body: payload });
+    if (IN_SHELL) {
+      const r = await tauri.core.invoke("api", { method, path, body: payload });
+      return {
+        status: r.status,
+        ok: r.status > 0 && r.status < 400,
+        json() { try { return JSON.parse(r.body || "{}"); } catch { return {}; } },
+      };
+    }
+    const r = await fetch(API + path, { method, body: payload });
     return {
       status: r.status,
-      ok: r.status > 0 && r.status < 400,
-      json() { try { return JSON.parse(r.body || "{}"); } catch { return {}; } },
+      ok: r.ok,
+      async json() { try { return await r.json(); } catch { return {}; } },
     };
   }
   async function getJSON(path) {
@@ -239,6 +250,8 @@
     postOrToast("/api/control", { verb });
     // The paused event updates the button through the store.
   });
+
+  if (!IN_SHELL) el.service.hidden = true; // no shell to start — the browser IS the guest
 
   el.service.addEventListener("click", async () => {
     if (serviceBusy) return;
@@ -552,8 +565,12 @@
   el.about_links.addEventListener("click", (event) => {
     const button = event.target.closest("button.about-link");
     if (!button) return;
-    tauri?.core?.invoke("open_destination", { url: button.dataset.url })
-      ?.catch((e) => toast(`refused: ${e}`));
+    if (IN_SHELL) {
+      tauri.core.invoke("open_destination", { url: button.dataset.url })
+        .catch((e) => toast(`refused: ${e}`));
+    } else {
+      window.open(button.dataset.url, "_blank", "noopener");
+    }
   });
 
   // ── confirm dialog ───────────────────────────────────────────────

@@ -226,6 +226,12 @@ tools, plus a previewer that runs the face against a fake framebuffer.
 - `suzu install`: the Resident deploys itself on Linux — binary,
   resources, udev, and the service definition for systemd or OpenRC —
   proven across the three test platforms (ADR-0008).
+- The workbench served by the Resident itself: any browser on the host
+  opens the family window at `http://127.0.0.1:7899` — the same UI the
+  desktop shell wraps.
+- The bell rope: `POST /api/say` (gated by `SUZU_API_TOKEN` when set)
+  rings the fleet from CI runners and hooks — see
+  [`.github/actions/bell`](.github/actions/bell/action.yml).
 
 **Next:**
 
@@ -244,8 +250,9 @@ tools, plus a previewer that runs the face against a fake framebuffer.
 
 - Transports beyond serial: SSE, web API, MCP, and stdio are specified, not
   built.
-- The `suzu-a` ember tier, the YAML procedure engine, and the `suzu-fit`
-  conformance suite.
+- The `suzu-a` ember tier and the `suzu-fit` conformance suite. (The YAML
+  procedure engine is retired: ADR-0008's promote-to-native lifecycle is
+  the procedure story now — `procedure.yaml` declares, Rust executes.)
 - Portability: the bench is Windows; the host is plain Rust and builds with a
   stable toolchain, but only Windows has been exercised.
 

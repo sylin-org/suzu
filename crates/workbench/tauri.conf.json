@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "identifier": "org.sylin.suzu",
   "build": {
-    "frontendDist": "ui"
+    "frontendDist": "../suzu/ui"
   },
   "app": {
     "withGlobalTauri": true,

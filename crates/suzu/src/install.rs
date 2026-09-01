@@ -405,7 +405,8 @@ fn install(opts: &Options) -> Result<()> {
     })?;
 
     verify_plan(&plan, opts.start)?;
-    println!("done — `suzu list` watches the fleet, `journalctl -u {unit}` (or the OpenRC log) reads the Resident");
+    println!("done — the workbench is at http://127.0.0.1:7899 (any browser on the host)");
+    println!("      `suzu list` watches the fleet; `journalctl -u {unit}` (or the OpenRC log) reads the Resident");
     Ok(())
 }
 

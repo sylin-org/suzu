@@ -98,6 +98,35 @@ const DESTINATIONS: &[(&str, &str, &str, &str, &str)] = &[
         "https://github.com/sylin-org/suzu/blob/dev/docs/adr/0001-the-lake.md"),
 ];
 
+static UI: include_dir::Dir<'_> = ::include_dir::include_dir!("$CARGO_MANIFEST_DIR/ui");
+
+/// The content type for one embedded UI file. The UI ships five kinds
+/// of file; anything else is served as data (browsers sniff nothing
+/// here — the CSP-minded set is explicit).
+fn ui_content_type(path: &str) -> &'static str {
+    match path.rsplit('.').next().unwrap_or("") {
+        "html" => "text/html; charset=utf-8",
+        "js" => "text/javascript; charset=utf-8",
+        "css" => "text/css; charset=utf-8",
+        "png" => "image/png",
+        "svg" => "image/svg+xml",
+        "ico" => "image/x-icon",
+        "json" => "application/json",
+        _ => "application/octet-stream",
+    }
+}
+
+/// Serve one embedded workbench file, or the index for `/`.
+fn ui_file(path: &str) -> Option<(u16, &'static str, Vec<u8>)> {
+    let rel = path.trim_start_matches('/');
+    let (rel, file) = if rel.is_empty() {
+        ("index.html", UI.get_file("index.html")?)
+    } else {
+        (rel, UI.get_file(rel)?)
+    };
+    Some((200, ui_content_type(rel), file.contents().to_vec()))
+}
+
 pub struct Ctx {
     pub catalog: Arc<crate::Catalog>,
     pub jobs: Arc<Jobs>,
@@ -162,9 +191,13 @@ async fn serve_one(mut stream: TcpStream, ctx: Arc<Ctx>) -> Result<()> {
         .unwrap_or("/")
         .to_string();
     let mut content_length = 0usize;
+    let mut authorization = String::new();
     for line in lines {
-        if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+        let lower = line.to_ascii_lowercase();
+        if let Some(v) = lower.strip_prefix("content-length:") {
             content_length = v.trim().parse().unwrap_or(0);
+        } else if let Some(v) = lower.strip_prefix("authorization:") {
+            authorization = v.trim().to_string();
         }
     }
     let mut body = buf[header_end..].to_vec();
@@ -182,6 +215,16 @@ async fn serve_one(mut stream: TcpStream, ctx: Arc<Ctx>) -> Result<()> {
         return events_stream(ctx, stream).await;
     }
 
+    // The bell (POST /api/say) is the one endpoint wired for outside
+    // callers; when SUZU_API_TOKEN is set it must arrive as a bearer.
+    if method == "POST" && path == "/api/say"
+        && let Some(token) = std::env::var("SUZU_API_TOKEN").ok().filter(|t| !t.is_empty())
+        && authorization != format!("bearer {token}")
+    {
+        write_response(&mut stream, 401, "application/json",
+            br#"{"error":"the bell needs its token"}"#.to_vec()).await?;
+        return Ok(());
+    }
     let started = Instant::now();
     let (status, content_type, payload) = route(&ctx, &method, &path, &body).await;
     if method == "POST" {
@@ -376,6 +419,15 @@ fn no_such(msg: &'static str) -> (u16, &'static str, Vec<u8>) {
 async fn route(ctx: &Ctx, method: &str, path: &str, body: &str) -> (u16, &'static str, Vec<u8>) {
     let json = |v: serde_json::Value| (200u16, "application/json", serde_json::to_vec(&v).unwrap_or_default());
     match (method, path) {
+        // The workbench UI, served by the Resident itself: any browser
+        // on the host is the family window (the desktop shell wraps the
+        // same files).
+        ("GET", "/") | ("GET", "/index.html") => {
+            ui_file("/").unwrap_or_else(|| no_such("no workbench UI in this build"))
+        }
+        ("GET", p) if !p.starts_with("/api/") => ui_file(p)
+            .unwrap_or_else(|| no_such("no such page")),
+
         // Debug endpoint for the in-memory journal.
         ("GET", "/api/log") => json(serde_json::json!(ctx.journal.tail(300))),
         ("GET", "/api/destinations") => json(serde_json::json!(
@@ -854,11 +906,21 @@ async fn control(ctx: &Ctx, body: &str) -> (u16, &'static str, Vec<u8>) {
     }
 }
 
+/// The bell rope (ADR-0006 grammar): the workbench posts `kind`, CI
+/// runners and hooks post `signal` — same rope, either hand. The
+/// display-event budget governs the ring; SUZU_API_TOKEN gates callers
+/// from beyond the loopback when the host sets one.
 async fn say(ctx: &Ctx, body: &str) -> (u16, &'static str, Vec<u8>) {
     let parsed: serde_json::Value = serde_json::from_str(body).unwrap_or(serde_json::json!({}));
-    let kind = parsed.get("kind").and_then(|v| v.as_str()).unwrap_or("transition").to_string();
+    let kind = parsed
+        .get("kind")
+        .or_else(|| parsed.get("signal"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("transition")
+        .to_string();
     let label = parsed
         .get("label")
+        .or_else(|| parsed.get("text"))
         .and_then(|v| v.as_str())
         .unwrap_or("from the workbench")
         .to_string();
@@ -897,4 +959,31 @@ async fn write_response(stream: &mut TcpStream, status: u16, content_type: &str,
     stream.write_all(&payload).await?;
     stream.flush().await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod ui_tests {
+    use super::*;
+
+    #[test]
+    fn the_workbench_ships_in_the_binary() {
+        let (status, ctype, body) = ui_file("/").expect("index");
+        assert_eq!(status, 200);
+        assert_eq!(ctype, "text/html; charset=utf-8");
+        assert!(String::from_utf8_lossy(&body).contains("<title>Suzu</title>"));
+        let (_, ctype, _) = ui_file("/app.js").expect("app.js");
+        assert_eq!(ctype, "text/javascript; charset=utf-8");
+        let (_, ctype, _) = ui_file("/styles.css").expect("styles");
+        assert_eq!(ctype, "text/css; charset=utf-8");
+        assert!(ui_file("/no-such-thing").is_none());
+    }
+
+    #[test]
+    fn content_types_cover_the_ui_vocabulary() {
+        assert_eq!(ui_content_type("x.html"), "text/html; charset=utf-8");
+        assert_eq!(ui_content_type("x.js"), "text/javascript; charset=utf-8");
+        assert_eq!(ui_content_type("x.css"), "text/css; charset=utf-8");
+        assert_eq!(ui_content_type("x.png"), "image/png");
+        assert_eq!(ui_content_type("x.weird"), "application/octet-stream");
+    }
 }
