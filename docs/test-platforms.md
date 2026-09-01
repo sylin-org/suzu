@@ -34,7 +34,9 @@ Per host, as the service user (historically `stone` on the template,
    then `sudo suzu install` — the Resident deploys itself: binary to
    `/usr/local/bin/suzu`, resources to `/usr/local/share/suzu`, udev rule
    `60-suzu.rules`, the `suzu-hw` group, and the service definition for
-   whichever init the host runs (systemd, or OpenRC on musl hosts).
+   whichever init the host runs (systemd, or OpenRC on musl hosts). The
+   binary carries its own manifests and payloads, so the install needs
+   no checkout at all — a relayed binary works from anywhere.
    `suzu install --verify` checks an installed host;
    `scripts/install-linux.sh` remains the ancestor reference for
    installing from a checkout without running the new binary first.
@@ -55,13 +57,13 @@ Credentials are disposable and live only in the maintainers' local
 - **test-02 (Bluefin, Fedora atomic)** cannot build natively yet:
   `libudev-sys` needs `libudev.h`, and `rpm-ostree install systemd-devel`
   refuses to apply because `/usr/local` is a symlink ("changed
-  directories are not supported yet"). The testbed therefore carries the
-  binary **built on test-01**, relayed and installed with
-  `sudo scripts/install-linux.sh --binary` — which doubles as the
-  cross-distro glibc portability test (it passes; resources land under
-  `/var/usrlocal/share/suzu`, the atomic image's `/usr/local`). Promoting
-  test-02 to a native build needs an unblocked layering path, kept as an
-  open item.
+  directories are not supported yet"). Since the binary carries its own
+  manifests and payloads, the testbed installs **checkout-free**: the
+  binary built on test-01 is relayed and `sudo ~/suzu-binary install`
+  runs from the home directory — resources land under
+  `/var/usrlocal/share/suzu`, the atomic image's `/usr/local`, and the
+  cross-distro glibc portability check passes. Promoting test-02 to a
+  native build needs an unblocked layering path, kept as an open item.
 
 ## What the testbeds are for
 
