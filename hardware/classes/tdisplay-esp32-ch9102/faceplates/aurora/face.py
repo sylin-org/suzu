@@ -707,8 +707,13 @@ def init_display():
     try:
         spi = SPI(2, baudrate=40000000, sck=Pin(18), mosi=Pin(19), miso=None)
         import st7789
+        # the constructor takes the NATIVE portrait panel (135x240,
+        # the harvested PoC's own numbers); rotation=1 turns it to the
+        # landscape the face composes in. Passing (240,135) here built
+        # the address window against a panel that doesn't exist — the
+        # mirror stayed true while the glass showed a slice.
         tft = st7789.ST7789(
-            spi, W, H,
+            spi, 135, 240,
             reset=Pin(23, Pin.OUT), cs=Pin(5, Pin.OUT), dc=Pin(16, Pin.OUT),
             backlight=Pin(4, Pin.OUT), rotation=1)
         tft.init()
