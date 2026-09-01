@@ -104,6 +104,7 @@ pub fn run(
         (Some("waveshare-rp2040-matrix"), "factory") => (6, rp2040_factory),
         (Some(c), kind) if c.contains("esp8266") => match kind {
             "install" | "provision" | "soft" => (2, esp8266_provision),
+            "factory" => (4, esp8266_factory),
             _ => bail!("unsupported maintenance kind {kind:?}"),
         },
         (Some(c), kind) if c.contains("tdisplay") => match kind {
@@ -415,7 +416,46 @@ fn default_faceplate<'a>(catalog: &'a Catalog, class: &str) -> &'a str {
         .unwrap_or("")
 }
 
+/// Save what the erase is about to destroy. The registry's device_id is
+/// the identity of record and is restored by the install step, so the
+/// file backup is belt-and-braces — skipped without complaint when the
+/// board has no interpreter to talk to (factory fresh).
+fn backup_esp8266_files(port: &str) -> Result<()> {
+    match crate::repl::Repl::open(port) {
+        Ok(mut repl) => {
+            let files = repl.list_files().unwrap_or_default();
+            repl.backup_files(&files, port)?;
+        }
+        Err(_) => println!("  board silent — no filesystem to back up"),
+    }
+    Ok(())
+}
+
+/// The true factory reset: back up, flash the vendored MicroPython runtime
+/// through the native ROM bootloader (erase included), and rebuild the
+/// faceplate on the fresh filesystem with the preserved device_id.
+fn esp8266_factory(
+    run: &mut MaintenanceRun,
+    port: &str,
+    class: &str,
+    device_id: &str,
+    catalog: &Catalog,
+    faceplate: Option<&str>,
+) -> Result<()> {
+    run.step("Backing up the device files", || backup_esp8266_files(port))?;
+    run.step("Flashing MicroPython", || {
+        crate::bootloader::flash_micropython(port)
+    })?;
+    let faceplate_id = faceplate.unwrap_or_else(|| default_faceplate(catalog, class));
+    run.step(&format!("Installing faceplate ({faceplate_id})"), || {
+        crate::prepare::install_esp8266(port, Some(device_id), Some(faceplate_id), class)
+    })?;
+    Ok(())
+}
+
 /// Install or update the application files while preserving identity.
+/// A board with no interpreter takes the runtime-flash path first —
+/// factory-fresh onboarding is the install procedure's first half.
 fn esp8266_provision(
     run: &mut MaintenanceRun,
     port: &str,

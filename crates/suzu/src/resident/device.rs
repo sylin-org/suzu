@@ -128,10 +128,13 @@ impl Device {
     }
 
     /// Offer a destructive reset only when the Resident implements the complete
-    /// recovery path. RP2040 recovery uses native drive I/O. ESP8266 recovery is
-    /// unavailable because the removed Python/esptool path has no native replacement.
+    /// recovery path: RP2040 through native drive I/O, ESP8266 through the
+    /// native ROM bootloader. Other classes declare no factory procedure yet.
     fn supports_native_factory_reset(&self) -> bool {
-        self.facts.class.as_deref() == Some("waveshare-rp2040-matrix")
+        matches!(
+            self.facts.class.as_deref(),
+            Some(c) if c == "waveshare-rp2040-matrix" || c.contains("esp8266")
+        )
     }
 
     pub fn pause(&self, registry: &mut DeviceRegistry) -> anyhow::Result<DeviceOrder> {
@@ -421,21 +424,32 @@ mod tests {
             .unwrap();
         assert_eq!(
             device.available_actions(registry.registered_device("device-1"), false),
-            vec![DeviceAction::Update]
+            // FactoryReset rides along: the esp8266 class has a native
+            // recovery path.
+            vec![DeviceAction::Update, DeviceAction::FactoryReset]
         );
     }
 
     #[test]
     fn factory_reset_is_only_offered_with_a_native_recovery_path() {
-        let esp = device(Some("suzu/1"));
         let registry = active_registry();
-        assert!(!esp
+        // ESP8266 recovery runs through the native ROM bootloader.
+        let esp = device(Some("suzu/1"));
+        assert!(esp
             .available_actions(registry.registered_device("device-1"), false)
             .contains(&DeviceAction::FactoryReset));
 
+        // RP2040 recovery runs through native drive I/O.
         let mut rp = device(Some("suzu/1"));
         rp.facts.class = Some("waveshare-rp2040-matrix".into());
         assert!(rp
+            .available_actions(registry.registered_device("device-1"), false)
+            .contains(&DeviceAction::FactoryReset));
+
+        // A class with no native recovery path never sees the button.
+        let mut td = device(Some("suzu/1"));
+        td.facts.class = Some("tdisplay-esp32-ch9102".into());
+        assert!(!td
             .available_actions(registry.registered_device("device-1"), false)
             .contains(&DeviceAction::FactoryReset));
     }

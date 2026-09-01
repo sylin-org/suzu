@@ -18,39 +18,49 @@ procedures:
       - verify-readback: { method: cat-file }   # read-back verify — cat the file, re-copy on mismatch
       - probe: { expect: suzu-d, timeout: 4s }
 
+  # Factory-fresh onboarding: no interpreter answers the REPL, so the
+  # Resident forces the ROM bootloader (the CH340's DTR/RTS circuit
+  # enters it — no button), syncs at the working baud (the ROM
+  # auto-bauds to the SYNC rate and latches), reads the flash chip's
+  # JEDEC ID and sets the image header's flash size to match (the
+  # ancestor's --flash_size=detect — skipping it boot-loops a 1 MiB
+  # image on larger chips), erases, and writes the vendored runtime
+  # image, then composes the shared push tail.
+  #
+  # Ancestor recipe, Python era (codified 2026-08-30, now native in
+  # crates/suzu/src/bootloader.rs): `esptool erase_flash` +
+  # `esptool write_flash --baud 460800 --flash_size=detect 0x0 <bin>`.
+  # Codify verbatim; no improvements — omitting --flash_size=detect or
+  # the 460800 baud once preceded a boot-loop state.
   install:
-    pre: "no MicroPython — bootloader path"
+    pre: "no MicroPython — the ROM loader answers even from a crash loop"
     steps:
-      - say: "Flashing MicroPython. The board will reset itself afterward."
-      - backend:
-          tool: esptool
-          args: ["--port {port}", "erase_flash"]
-      - backend:
-          tool: esptool
-          args: ["--port {port}", "--baud 460800", "write_flash", "--flash_size=detect", "0", "{micropython_bin}"]
+      - enter-download-mode: { via: native-rom-bootloader }
+      - flash-runtime: { artifact: micropython-esp8266-1mib.bin, offset: 0x0, baud: auto }  # first SYNC baud latches; bench: 115200
       - poll-repl: { command: "print('mpready')", expect: mpready, timeout: 30s }
       - use: upgrade                    # compose the shared push tail
 
-  # Files back to ship state: the proven push re-runs (it is backup-
-  # first inside the script); the MicroPython runtime is untouched.
+  # Files back to ship state: the native push re-runs (backup-first,
+  # per-file read-back verify, soft reboot).
   soft:
     pre: "device runs MicroPython and answers the handshake"
     steps:
-      - push-chunked: { via: scripts/push_firmware.py, fresh: false }
+      - push-chunked: { via: native-raw-repl, fresh: false }
       - admission-test: {}
 
-  # The true factory reset: the ROM bootloader erases every flash
-  # sector (the CH340's DTR/RTS circuit enters it - no button), the
-  # MicroPython runtime is re-flashed from the vendored artifact, and
-  # Install the faceplate with the preserved device_id.
+  # The true factory reset: back up the device files, erase every sector
+  # through the ROM bootloader (the CH340's DTR/RTS circuit enters it —
+  # no button), the MicroPython runtime is re-flashed from the vendored
+  # artifact, and the faceplate is installed with the preserved
+  # device_id. A factory-fresh board takes the same path; the backup
+  # step simply finds no filesystem and records that fact.
   factory:
-    pre: "device answers or auto-resets into the ROM bootloader; esptool on PATH"
+    pre: "device answers, or the ROM loader answers even from a crash loop"
     steps:
-      - backup-identity: { keep: [device_id] }
-      - backend: { tool: esptool, args: ["--port {port}", "--chip esp8266", "erase_flash"] }
-      - backend: { tool: esptool, args: ["--port {port}", "--chip esp8266", "write_flash",
-                                         "--flash_size=detect", "0", "{micropython_bin}"] }
-      - push-chunked: { via: scripts/push_firmware.py, fresh: true }
+      - backup-files: { via: native-raw-repl }   # no-op on a silent board
+      - enter-download-mode: { via: native-rom-bootloader }
+      - flash-runtime: { artifact: micropython-esp8266-1mib.bin, offset: 0x0, baud: auto }  # first SYNC baud latches; bench: 115200
+      - push-chunked: { via: native-raw-repl, fresh: true, with-identity: true }
       - admission-test: {}
 
   # Admission renders a known metrics pattern (G,report,88,77,66).

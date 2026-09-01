@@ -21,3 +21,6 @@ glass-fix.png
 right-now.png
 *-zoom.png
 strip-zoom.png
+
+# ZCode client session state
+.zcode/

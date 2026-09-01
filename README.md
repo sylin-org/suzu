@@ -267,9 +267,13 @@ provisioning uses the Resident's native Rust raw-REPL implementation:
 cargo run -- prepare <port> [faceplate]
 ```
 
-The service has no host-Python runtime dependency. MicroPython remains installed
-on supported devices. The scripts under `scripts/` are development references
-and are not invoked by the Resident. Send a display notification with:
+The service has no host-Python runtime dependency. A factory-fresh ESP8266 —
+or one left crash-looping by an interrupted write — onboards end to end
+through the Resident's own ROM-bootloader engine (`install`, or `factory`
+from the workbench); the vendored MicroPython runtime is erased, written,
+and provisioned with no other tooling. The scripts under `scripts/` are
+development references and are not invoked by the Resident. Send a display
+notification with:
 
 ```bash
 cargo run -- say completion A backup committed

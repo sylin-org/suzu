@@ -322,17 +322,9 @@ pub(crate) fn install_esp8266(
         resolve_faceplate_bundle(class, faceplate.unwrap_or("numerals"))?;
     println!("  faceplate bundle: {faceplate_name} v{faceplate_version}");
 
-    let mut repl = crate::repl::Repl::open(port)?;
-    let files = repl.list_files()?;
-    println!("device files: {files:?}");
-    if files.is_empty() {
-        // An unreadable filesystem is a diagnosis, not a blank check.
-        // (The esp8266 arrives here only after erase_flash + write_flash
-        // through its own recovery procedure — `--fresh` in spirit.)
-        println!("  fresh filesystem — installing the first faceplate");
-    }
-    repl.backup_files(&files, port)?;
-
+    // Read every source file before writing anything to the device — the
+    // runtime flash below erases the board, so a missing file must fail
+    // before that, not after.
     let (family, variant) = class_signature(class)?;
     let suzu = serde_json::json!({
         "proto": "suzu/1",
@@ -354,10 +346,6 @@ pub(crate) fn install_esp8266(
         }
         s
     };
-
-    // The class firmware ships with the tool. The faceplate bundle
-    // contains its bootstrap, bytecode, and assets. Read every source
-    // file before writing anything to the device.
     let fw = crate::paths::firmware_dir().join("suzu-d/esp8266-oled-v2");
     let mut payload: Vec<(String, Vec<u8>)> = Vec::new();
     for name in ["boot.py", "firefly_oled_v2.py", "icons.py", "profont_10.py"] {
@@ -378,6 +366,31 @@ pub(crate) fn install_esp8266(
     for art in bundle_bins(&faceplate_dir)? {
         payload.push((art.clone(), std::fs::read(faceplate_dir.join(&art))?));
     }
+
+    let mut repl = match crate::repl::Repl::open(port) {
+        Ok(repl) => repl,
+        Err(handshake) => {
+            // A port that will not open is a busy port — report it and
+            // touch nothing. A port that opens but never answers is a
+            // board with no interpreter (factory fresh, or a crash
+            // loop): the ROM bootloader is the door, and the flash is
+            // the recovery — both reach this same path.
+            if port_would_open(port).is_err() {
+                return Err(handshake);
+            }
+            println!("  no interpreter answering — flashing the MicroPython runtime");
+            crate::bootloader::flash_micropython(port)?;
+            crate::repl::Repl::open(port)?
+        }
+    };
+    let files = repl.list_files()?;
+    println!("device files: {files:?}");
+    if files.is_empty() {
+        // An unreadable filesystem is a diagnosis, not a blank check.
+        println!("  fresh filesystem — installing the first faceplate");
+    }
+    repl.backup_files(&files, port)?;
+
     for stale in ["main.mpy", "face.py"] {
         if files.iter().any(|f| f == stale) {
             println!("  removing stale {stale} ...");
@@ -391,6 +404,16 @@ pub(crate) fn install_esp8266(
     repl.soft_reboot()?;
     println!("rebooted into suzu — run `suzu scan` to verify the handshake");
     Ok(())
+}
+
+/// Prove the port itself is openable — the busy-port check that keeps the
+/// ROM fallback off devices another session is already talking to.
+fn port_would_open(port: &str) -> anyhow::Result<()> {
+    serialport::new(port, 115_200)
+        .timeout(std::time::Duration::from_millis(300))
+        .open()
+        .map(|_: Box<dyn serialport::SerialPort>| ())
+        .map_err(|e| anyhow::anyhow!("{port}: {e}"))
 }
 
 /// T-Display provisioning keeps the installed C display driver and replaces

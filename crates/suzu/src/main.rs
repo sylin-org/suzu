@@ -9,6 +9,7 @@
 //!
 //! Maintenance procedures are defined in the Resident maintenance module.
 
+mod bootloader;
 mod catalog;
 mod control;
 mod gif;
