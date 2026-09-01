@@ -27,3 +27,6 @@ strip-zoom.png
 
 # Local-only testbed access (disposable credentials, ADR-0008 test platforms)
 .ignore/
+
+# npm shim downloads
+packaging/npm/vendor/

@@ -1,0 +1,32 @@
+{
+  "name": "@sylin-org/suzu",
+  "version": "0.1.0",
+  "description": "A tiny bell for your machines — companion displays for software events",
+  "license": "MIT",
+  "homepage": "https://sylin.org/suzu/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sylin-org/suzu.git",
+    "directory": "packaging/npm"
+  },
+  "bugs": "https://github.com/sylin-org/suzu/issues",
+  "bin": {
+    "suzu": "bin/suzu.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "postinstall": "node bin/install.js"
+  },
+  "files": [
+    "bin/"
+  ],
+  "keywords": [
+    "hardware",
+    "serial",
+    "embedded",
+    "monitoring",
+    "companion"
+  ]
+}
