@@ -332,9 +332,14 @@ fn install(opts: &Options) -> Result<()> {
     })?;
     runner.step("Installing the binary", || {
         std::fs::create_dir_all(&bindir)?;
-        std::fs::copy(&exe, bindir.join("suzu"))
+        // Stage beside the destination and rename over it: the running
+        // Resident holds the old inode, so writing in place fails with
+        // ETXTBSY — and an atomic swap upgrades a live service cleanly.
+        let staged = bindir.join(".suzu.new");
+        std::fs::copy(&exe, &staged)
             .with_context(|| format!("copy {}", exe.display()))?;
-        set_file_mode(&bindir.join("suzu"), 0o755);
+        set_file_mode(&staged, 0o755);
+        std::fs::rename(&staged, bindir.join("suzu"))?;
         Ok(())
     })?;
     runner.step("Installing the resources", || {
