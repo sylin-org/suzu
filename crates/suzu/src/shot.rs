@@ -232,7 +232,7 @@ pub fn decode_frame(
                 bail!("rgb24: {} B is not a whole {w}x{h} frame", frame.len());
             }
             let mut rgba = Vec::with_capacity(w * h * 4);
-            for px in frame.chunks_exact(3) {
+            for px in frame.as_chunks::<3>().0 {
                 rgba.extend_from_slice(&[px[0], px[1], px[2], 255]);
             }
             Ok((w, h, rgba))
@@ -243,7 +243,7 @@ pub fn decode_frame(
             }
             // Big-endian per pixel (the family's blit convention).
             let mut rgba = Vec::with_capacity(w * h * 4);
-            for px in frame.chunks_exact(2) {
+            for px in frame.as_chunks::<2>().0 {
                 let v = ((px[0] as u16) << 8) | px[1] as u16;
                 let r = (((v >> 11) & 0x1F) * 255 / 31) as u8;
                 let g = (((v >> 5) & 0x3F) * 255 / 63) as u8;
@@ -358,7 +358,7 @@ pub fn render_png_bytes(
     frame: &[u8],
 ) -> Result<Vec<u8>> {
     let (w, h, rgba) = render_view(spec, zones, frame)?;
-    let rgb: Vec<[u8; 3]> = rgba.chunks_exact(4).map(|p| [p[0], p[1], p[2]]).collect();
+    let rgb: Vec<[u8; 3]> = rgba.as_chunks::<4>().0.iter().map(|p| [p[0], p[1], p[2]]).collect();
     png_bytes(w, h, &rgb)
 }
 

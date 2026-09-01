@@ -1525,7 +1525,7 @@ fn record_job(
             Ok(frame) => if let Ok((w, h, rgba)) = crate::shot::render_view(spec, zones, &frame) {
                 let png = {
                     let rgb: Vec<[u8; 3]> =
-                        rgba.chunks_exact(4).map(|p| [p[0], p[1], p[2]]).collect();
+                        rgba.as_chunks::<4>().0.iter().map(|p| [p[0], p[1], p[2]]).collect();
                     crate::shot::png_bytes(w, h, &rgb).unwrap_or_default()
                 };
                 vw = w;

@@ -239,7 +239,7 @@ fn display_check(
             crate::shot::dribble_line(serial, "R,completion.0,2,0,1,1,admission")?;
             std::thread::sleep(Duration::from_millis(300));
             let (w, _h, rgba) = view_of(serial, spec, zones)?;
-            let blue = rgba.chunks_exact(4).filter(|p| p[0] < 60 && p[1] > 50 && p[2] > 80).count();
+            let blue = rgba.as_chunks::<4>().0.iter().filter(|p| p[0] < 60 && p[1] > 50 && p[2] > 80).count();
             let _ = crate::shot::dribble_line(serial, "X"); // clear the test pattern
             if blue == 0 {
                 anyhow::bail!("no completion-blue pixel in the {w}px captured frame");
@@ -261,7 +261,7 @@ fn display_check(
             }
             std::thread::sleep(Duration::from_millis(400));
             let (_w, _h, rgba) = view_of(serial, spec, zones)?;
-            let field = rgba.chunks_exact(4).filter(|p| p[2] > 150).count();
+            let field = rgba.as_chunks::<4>().0.iter().filter(|p| p[2] > 150).count();
             // The view is 1:1 with the framebuffer: a three-digit
             // The pattern lights about 1040 pixels; idle content
             // ~40 — 500 separates them by an order of magnitude
