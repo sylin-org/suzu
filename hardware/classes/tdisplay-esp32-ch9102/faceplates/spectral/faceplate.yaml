@@ -1,0 +1,10 @@
+name: spectral
+class: tdisplay-esp32-ch9102
+display_name: Spectral
+blurb: The bench as an instrument — rainbow bars and a spectrum that hears the house
+version: "1.0.0"
+mount: usb-down
+
+# A single-type faceplate: one dress, bundled at this root. When the
+# face grows more hangs, add a variants: list and move the bundle
+# into per-mount directories (down-mount/ etc.) beside this manifest.

@@ -120,12 +120,13 @@ def _c(color):
 
 
 # rgb565 -> rgb332: 3-3-2 bits, a byte a pixel — this heap's honest
-# color. The mirror is 32.4 KB, not 64.8 (which does not fit); color
-# bands a little, words stay sharp. The 3 bits are each channel's
-# TOP bits (rrrrrggggggbbbbb → rrrgggbb): the bottom bits are noise,
-# and keeping them turned white into olive (measured on the bench).
+# color. The mirror is 32.4 KB, not 64.8 (which does not fit). The
+# bits are each channel's TOP bits (rrrrrggggggbbbbb → rrrgggbb):
+# r >> 13, g >> 8, b >> 3. A wrong shift reads a NEIGHBOR's bits —
+# the blue >> 5 read green's low bits and saturated blues drifted
+# (reproduced offline, pixel for pixel, on the Spectral bench).
 def to332(c):
-    return ((c >> 13) & 0x07) << 5 | ((c >> 8) & 0x07) << 2 | (c >> 5) & 0x03
+    return ((c >> 13) & 0x07) << 5 | ((c >> 8) & 0x07) << 2 | (c >> 3) & 0x03
 
 
 def m_set(x, y, c):
@@ -474,6 +475,9 @@ def cmd(line):
             for c in body:
                 x ^= ord(c)
             if "%02x" % x != hexsum:
+                # the wire contract: no request goes unanswered — a
+                # silent drop reads on the host as a dead face
+                r("ERR,checksum")
                 return
             line = body
     last_rx = time.ticks_ms()
@@ -789,11 +793,17 @@ def main():
                 else:
                     field_sweep_tick()
             events = poll.poll(0)
-            if events:
+            # the wire law: DRAIN, never sip. One line per tick let the
+            # input queue outgrow the RX ring on heavy draws — bytes
+            # vanish mid-line and every conversation in flight
+            # corrupts. The face owns the loop, so the face owns the
+            # queue: empty it before resting.
+            while events:
                 line = sys.stdin.readline()
                 if line:
                     cmd(line)
-            else:
+                events = poll.poll(0)
+            if not events:
                 time.sleep_ms(5)
             if idle_t % 100 == 0:
                 gc.collect()

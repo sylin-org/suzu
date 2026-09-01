@@ -32,8 +32,9 @@ BUNDLE_FILES = ["main.py", "face.mpy"]
 
 
 def main():
-    port = sys.argv[1]
-    device_id = sys.argv[2] if len(sys.argv) > 2 else None
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    port = args[0]
+    device_id = args[1] if len(args) > 1 else None
     faceplate = "aurora"
     if "--faceplate" in sys.argv:
         faceplate = sys.argv[sys.argv.index("--faceplate") + 1]
@@ -42,6 +43,10 @@ def main():
         resolve_dress_for(faceplate)
 
     repl = Repl(port)
+    # Opening the port pulses DTR and resets the board; the face needs
+    # its boot before it can answer a file read. Settle first — a read
+    # that races the boot comes back empty or stale.
+    repl.drain(3.0)
     files = repl.list_files()
     print("device files:", files)
     if not files and "--fresh" not in sys.argv:
@@ -63,17 +68,20 @@ def main():
         "adopted": time.strftime("%Y-%m-%d"),
     }
     if not device_id:
-        # never wipe a deed by silence: keep what the device carries
-        try:
-            existing = json.loads(
-                repl.exec(
-                    "print(open('suzu.json').read())"
-                ).decode(errors="replace").split('"device_id": "')[1].split('"')[0]
-            )
-            if existing:
-                device_id = existing
-        except Exception:
-            device_id = None
+        # never wipe a deed by silence: keep what the device carries.
+        # The file may be spaced (this script's json.dumps) or compact
+        # (the face's ujson) — match both, never a format guess.
+        import re as _re
+        raw = repl.exec(
+            "print(open('suzu.json').read())").decode(errors="replace")
+        m = _re.search(r'"device_id":\s*"([^"]+)"', raw)
+        if m:
+            device_id = m.group(1)
+        elif "suzu.json" in files:
+            raise SystemExit(
+                "suzu.json exists but gave no device_id — refusing to "
+                "write an idless dress over a known device (pass the id "
+                "explicitly, or --fresh after a real wipe)")
     if device_id:
         suzu["device_id"] = device_id
         print("identity preserved:", device_id)

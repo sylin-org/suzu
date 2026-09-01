@@ -44,6 +44,16 @@ pub fn capture_on(port: &mut Box<dyn SerialPort>, expected: usize) -> Result<Vec
     dribble_line(port, "J,{\"shot\":1}")?;
 
     let mut acc = Vec::new();
+    // The wire's evidence ledger (ADR-0004's law, kept on this lane at
+    // last): a failed shot must say what the wire HEARD — total bytes,
+    // completed lines, frame anchors, the face's own ERR words — so a
+    // silent face, a deaf face, and a thrashing face stop presenting
+    // as the same timeout. Three diseases, three sentences.
+    let mut heard = 0usize;
+    let mut lines = 0usize;
+    let mut anchors = 0usize;
+    let mut errs: Vec<String> = Vec::new();
+    let mut last_line = String::new();
     // The reply rides base64 (4/3 inflation) at the wire's honest
     // rate (11.5 k chars/s at 115200; budgeted at half that — the
     // bench measured a healthy 32.4 KB mirror at 4.9 s and a thrashing
@@ -55,19 +65,39 @@ pub fn capture_on(port: &mut Box<dyn SerialPort>, expected: usize) -> Result<Vec
         let mut scratch = [0u8; 512];
         match port.read(&mut scratch) {
             Ok(0) => {}
-            Ok(n) => acc.extend_from_slice(&scratch[..n]),
+            Ok(n) => {
+                heard += n;
+                acc.extend_from_slice(&scratch[..n]);
+            }
             Err(_) => {}
         }
         while let Some(pos) = acc.iter().position(|&b| b == b'\n') {
             let line: Vec<u8> = acc.drain(..=pos).collect();
             let s = String::from_utf8_lossy(&line[..line.len() - 1]).to_string();
+            lines += 1;
+            anchors += s.match_indices("OK,").count();
+            if s.contains("ERR,") && errs.len() < 3 {
+                errs.push(s.chars().filter(|c| c.is_ascii_graphic()).take(60).collect());
+            }
+            last_line = s.chars().rev().take(40).collect::<Vec<_>>()
+                .into_iter().rev().collect();
             if let Some(frame) = parse_reply(&s, expected) {
                 return Ok(frame);
             }
         }
         std::thread::sleep(Duration::from_millis(20));
     }
-    bail!("no whole-frame reply within {secs} s — face unreachable or mid-boot")
+    bail!(
+        "no whole-frame reply within {secs} s — heard {heard} B on \
+         {lines} lines, {anchors} frame anchors, {} ERR(s){}{}",
+        errs.len(),
+        (!errs.is_empty())
+            .then(|| format!(" — face said {:?}", errs))
+            .unwrap_or_default(),
+        (heard > 0 && lines == 0)
+            .then(|| format!(" — unterminated tail {:?}", last_line))
+            .unwrap_or_default(),
+    )
 }
 
 /// One in-band shot on a port by name (opens and settles it first).
