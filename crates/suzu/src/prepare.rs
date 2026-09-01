@@ -306,23 +306,343 @@ fn install_rp2040_once(drive: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn install_esp8266(port: &str, device_id: Option<&str>) -> anyhow::Result<()> {
-    // The proven installer, verbatim: backup-first, chunked writes,
-    // per-file verify, soft reboot. A Rust port lands with the push
-    // engine; until then the reliable path wins over the pretty one.
-    println!("  pushing via scripts/push_firmware.py (proven path) ...");
-    let id = device_id.unwrap_or("");
-    let status = std::process::Command::new("python")
-        .args(["scripts/push_firmware.py", port, id, "--fresh"])
-        .status()
-        .map_err(|e| anyhow::anyhow!("python not found: {e}"))?;
-    if !status.success() {
-        bail!("push reported failure — device untouched where possible");
+fn install_esp8266(
+    port: &str,
+    device_id: Option<&str>,
+    faceplate: Option<&str>,
+    class: &str,
+) -> anyhow::Result<()> {
+    // The proven installer, now native: backup-first, chunked writes,
+    // per-file verify, soft reboot — the raw-REPL engine the house
+    // speaks itself, no interpreter needed on the host.
+    let (dress_dir, dress_name, dress_mount, dress_version) =
+        resolve_dress(class, faceplate.unwrap_or("numerals"))?;
+    println!("  faceplate bundle: {dress_name} v{dress_version}");
+
+    let mut repl = crate::repl::Repl::open(port)?;
+    let files = repl.list_files()?;
+    println!("device files: {files:?}");
+    if files.is_empty() {
+        // An unreadable filesystem is a diagnosis, not a blank check.
+        // (The esp8266 arrives here only after erase_flash + write_flash
+        // through its own recovery procedure — `--fresh` in spirit.)
+        println!("  fresh filesystem — writing the first dress");
     }
+    repl.backup_files(&files, port)?;
+
+    let (family, variant) = class_signature(class)?;
+    let suzu = serde_json::json!({
+        "proto": "suzu/1",
+        "companion": "firefly",
+        "family": family,
+        "variant": variant,
+        "faceplate": dress_name,
+        "adopted": today(),
+        "dress_version": dress_version,
+    });
+    let suzu = {
+        let mut s = suzu;
+        if let Some(m) = &dress_mount {
+            s["mount"] = serde_json::Value::String(m.clone());
+        }
+        if let Some(id) = device_id.filter(|id| !id.is_empty()) {
+            println!("identity preserved: {id}");
+            s["device_id"] = serde_json::Value::String(id.to_string());
+        }
+        s
+    };
+
+    // The class's suzu-d firmware ships with the tool; the dress
+    // carries its own bootstrap, bytecode, and art. A missing file
+    // fails here, before any write — a dress that cannot be read is
+    // not a dress to push.
+    let fw = crate::paths::firmware_dir().join("suzu-d/esp8266-oled-v2");
+    let mut payload: Vec<(String, Vec<u8>)> = Vec::new();
+    for name in ["boot.py", "firefly_oled_v2.py", "icons.py", "profont_10.py"] {
+        payload.push((
+            name.to_string(),
+            std::fs::read(fw.join(name))
+                .map_err(|e| anyhow::anyhow!("read firmware {name}: {e}"))?,
+        ));
+    }
+    payload.push(("suzu.json".into(), serde_json::to_vec(&suzu)?));
+    for name in ["main.py", "face.mpy"] {
+        payload.push((
+            name.to_string(),
+            std::fs::read(dress_dir.join(name))
+                .map_err(|e| anyhow::anyhow!("read dress {name}: {e}"))?,
+        ));
+    }
+    for art in bundle_bins(&dress_dir)? {
+        payload.push((art.clone(), std::fs::read(dress_dir.join(&art))?));
+    }
+    for stale in ["main.mpy", "face.py"] {
+        if files.iter().any(|f| f == stale) {
+            println!("  removing stale {stale} ...");
+            repl.remove_file(stale)?;
+        }
+    }
+    println!("pushing {} files to {port} ...", payload.len());
+    for (name, data) in &payload {
+        repl.write_file(name, data)?;
+    }
+    repl.soft_reboot()?;
+    println!("rebooted into suzu — run `suzu scan` to verify the handshake");
     Ok(())
 }
 
-pub fn run(catalog: &Catalog) -> anyhow::Result<()> {
+/// The T-Display's own path: the C display driver stays frozen on the
+/// board; adoption replaces the application files (suzu.json, the
+/// bootstrap, the face's bytecode) and preserves the deed.
+fn install_tdisplay(
+    port: &str,
+    device_id: Option<&str>,
+    faceplate: Option<&str>,
+    class: &str,
+) -> anyhow::Result<()> {
+    let (dress_dir, dress_name, dress_mount, dress_version) =
+        resolve_dress(class, faceplate.unwrap_or("aurora"))?;
+    println!("  faceplate bundle: {dress_name} v{dress_version}");
+
+    let mut repl = crate::repl::Repl::open(port)?;
+    let files = repl.list_files()?;
+    println!("device files: {files:?}");
+    if files.is_empty() {
+        bail!(
+            "filesystem listing came back empty — refusing to write \
+             (recovery first: erase_flash + write_flash, never on a guess)"
+        );
+    }
+    repl.backup_files(&files, port)?;
+
+    // Never wipe a deed by silence: keep what the device carries. The
+    // file may be spaced (our own writes) or compact (the face's
+    // ujson) — serde handles both, never a format guess.
+    let existing = repl.read_file("suzu.json").ok();
+    let existing: Option<serde_json::Value> = existing
+        .as_deref()
+        .and_then(|b| std::str::from_utf8(b).ok())
+        .and_then(|s| serde_json::from_str(s).ok());
+    if existing.is_some() && device_id.is_none() && {
+        let id = existing.as_ref().and_then(|v| v.get("device_id"));
+        id.map(|v| v.as_str().unwrap_or_default().is_empty()).unwrap_or(true)
+    } {
+        bail!(
+            "suzu.json exists but gave no device_id — refusing to write \
+             an idless dress over a known device (pass the id explicitly)"
+        );
+    }
+    let device_id = device_id
+        .map(|s| s.to_string())
+        .or_else(|| {
+            existing
+                .as_ref()
+                .and_then(|v| v.get("device_id"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        });
+    if let Some(id) = &device_id {
+        println!("identity preserved: {id}");
+    }
+
+    let (family, variant) = class_signature(class)?;
+    let mut suzu = serde_json::json!({
+        "proto": "suzu/1",
+        "companion": "firefly",
+        "family": family,
+        "variant": variant,
+        "faceplate": dress_name,
+        "mount": dress_mount,
+        "dress_version": dress_version,
+        "adopted": today(),
+    });
+    if let Some(id) = &device_id {
+        suzu["device_id"] = serde_json::Value::String(id.clone());
+    }
+
+    let mut payload: Vec<(String, Vec<u8>)> =
+        vec![("suzu.json".into(), serde_json::to_vec(&suzu)?)];
+    for name in ["main.py", "face.mpy"] {
+        payload.push((
+            name.to_string(),
+            std::fs::read(dress_dir.join(name))
+                .map_err(|e| anyhow::anyhow!("read dress {name}: {e}"))?,
+        ));
+    }
+    // A leftover source from an older push would shadow the bytecode.
+    if files.iter().any(|f| f == "face.py") {
+        println!("  removing stale face.py ...");
+        repl.remove_file("face.py")?;
+    }
+    println!("pushing {} files to {port} ...", payload.len());
+    for (name, data) in &payload {
+        repl.write_file(name, data)?;
+    }
+    repl.soft_reboot()?;
+    println!("rebooted — the face should answer its HELLO on the bus");
+    Ok(())
+}
+
+/// A dress id -> (bundle directory, faceplate name, mount side, this
+/// hang's version), resolved from the class's own faceplate
+/// manifests. Variant-type faceplates declare their hangs in the
+/// manifest; single-type faceplates bundle at their own root.
+fn resolve_dress(
+    class: &str,
+    faceplate: &str,
+) -> anyhow::Result<(std::path::PathBuf, String, Option<String>, String)> {
+    #[derive(serde::Deserialize)]
+    struct Manifest {
+        name: String,
+        #[serde(default)]
+        version: Option<String>,
+        #[serde(default)]
+        mount: Option<String>,
+        #[serde(default)]
+        variants: Option<Vec<Variant>>,
+    }
+    #[derive(serde::Deserialize)]
+    struct Variant {
+        id: String,
+        mount: String,
+        #[serde(default)]
+        version: Option<String>,
+    }
+    let root = crate::paths::hardware_dir()
+        .join("classes")
+        .join(class)
+        .join("faceplates");
+    let mut undeclared = String::new();
+    for entry in std::fs::read_dir(&root)?.flatten() {
+        let mf = entry.path().join("faceplate.yaml");
+        let Ok(text) = std::fs::read_to_string(&mf) else {
+            continue;
+        };
+        let Ok(m) = serde_yaml::from_str::<Manifest>(&text) else {
+            continue;
+        };
+        for v in m.variants.iter().flatten() {
+            if v.id == faceplate {
+                let side = v
+                    .mount
+                    .strip_prefix("usb-")
+                    .unwrap_or(&v.mount)
+                    .to_string();
+                let version = v
+                    .version
+                    .clone()
+                    .or_else(|| m.version.clone())
+                    .unwrap_or_else(|| "0.0.0".into());
+                return Ok((entry.path().join(format!("{side}-mount")), m.name, Some(side), version));
+            }
+        }
+        if m.name == faceplate && m.variants.is_none() {
+            let mount = m
+                .mount
+                .as_deref()
+                .map(|s| s.strip_prefix("usb-").unwrap_or(s).to_string());
+            let version = m.version.unwrap_or_else(|| "0.0.0".into());
+            return Ok((entry.path(), m.name, mount, version));
+        }
+        undeclared.push_str(&m.name);
+        undeclared.push(' ');
+    }
+    bail!("faceplate {faceplate:?} is not declared for {class} — declared: {undeclared}")
+}
+
+/// The class's wire signature (family + variant), read from its own
+/// signature.yaml — the same words the descriptor must say.
+fn class_signature(class: &str) -> anyhow::Result<(String, String)> {
+    #[derive(serde::Deserialize)]
+    struct Sig {
+        family: String,
+        variant: String,
+    }
+    let path = crate::paths::hardware_dir()
+        .join("classes")
+        .join(class)
+        .join("signature.yaml");
+    let sig: Sig = serde_yaml::from_str(&std::fs::read_to_string(path)?)?;
+    Ok((sig.family, sig.variant))
+}
+
+fn bundle_bins(dir: &std::path::Path) -> anyhow::Result<Vec<String>> {
+    let mut out = Vec::new();
+    for entry in std::fs::read_dir(dir)?.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.ends_with(".bin") {
+            out.push(name);
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
+fn today() -> String {
+    chrono::Utc::now().format("%Y-%m-%d").to_string()
+}
+
+pub fn run(catalog: &Catalog, args: &[String]) -> anyhow::Result<()> {
+    // The scripted path: `suzu prepare PORT [FACEPLATE] [--id ID]` —
+    // how a fresh deployment adopts a face with no prompts and no
+    // interpreter on the host.
+    if let Some(port) = args.iter().find(|a| !a.starts_with('-')).cloned() {
+        return run_direct(catalog, &port, args);
+    }
+    run_interactive(catalog)
+}
+
+fn run_direct(catalog: &Catalog, port: &str, args: &[String]) -> anyhow::Result<()> {
+    let faceplate = args.iter().skip(1).find(|a| !a.starts_with('-')).cloned();
+    let device_id = args
+        .iter()
+        .position(|a| a == "--id")
+        .and_then(|i| args.get(i + 1).cloned());
+    let Some(e) = crate::enumerate().into_iter().find(|e| e.name == port) else {
+        bail!("{port} is not plugged in");
+    };
+    let Some(usb) = &e.usb else {
+        bail!("{port} has no USB identity to classify");
+    };
+    let Some(class) = catalog.class_id_for(usb.vid, usb.pid) else {
+        bail!("{port} is not a declared class");
+    };
+    let device_id = device_id.or_else(|| {
+        probe::probe_transcript(port)
+            .identity
+            .as_ref()
+            .and_then(|j| j.get("device_id"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    });
+    match class.as_str() {
+        "esp8266-oled" => {
+            install_esp8266(port, device_id.as_deref(), faceplate.as_deref(), &class)?
+        }
+        "tdisplay-esp32-ch9102" => {
+            install_tdisplay(port, device_id.as_deref(), faceplate.as_deref(), &class)?
+        }
+        other => bail!("no direct install path for {other:?} yet"),
+    }
+    verify_and_report(port);
+    Ok(())
+}
+
+fn verify_and_report(port: &str) {
+    println!("verifying ...");
+    let t = probe::probe_transcript(port);
+    match &t.identity {
+        Some(json) => println!(
+            "  verified: proto {} · version {} · device_id {}",
+            json.get("proto").and_then(|v| v.as_str()).unwrap_or("?"),
+            json.get("version").and_then(|v| v.as_str()).unwrap_or("?"),
+            json.get("device_id").and_then(|v| v.as_str()).unwrap_or("?")
+        ),
+        None => println!("  no identity yet — the face may need a moment; run `suzu scan`"),
+    }
+}
+
+fn run_interactive(catalog: &Catalog) -> anyhow::Result<()> {
     println!("suzu prepare — adopt a firefly");
     let mut candidates = drive_candidates();
     candidates.extend(serial_candidates(catalog));
@@ -403,23 +723,25 @@ pub fn run(catalog: &Catalog) -> anyhow::Result<()> {
             install_rp2040(&drive, &class)?;
         }
         Some("esp8266-oled") => {
-            install_esp8266(&cand.name, cand.device_id.as_deref())?;
+            install_esp8266(
+                &cand.name,
+                cand.device_id.as_deref(),
+                faceplate.as_deref(),
+                "esp8266-oled",
+            )?;
+        }
+        Some("tdisplay-esp32-ch9102") => {
+            install_tdisplay(
+                &cand.name,
+                cand.device_id.as_deref(),
+                faceplate.as_deref(),
+                "tdisplay-esp32-ch9102",
+            )?;
         }
         other => bail!("no install path for {other:?} yet — the class needs a procedure"),
     }
 
-    // Verify, then say so.
-    println!("verifying ...");
-    let t = probe::probe_transcript(&cand.name);
-    match &t.identity {
-        Some(json) => println!(
-            "  verified: proto {} · version {} · device_id {}",
-            json.get("proto").and_then(|v| v.as_str()).unwrap_or("?"),
-            json.get("version").and_then(|v| v.as_str()).unwrap_or("?"),
-            json.get("device_id").and_then(|v| v.as_str()).unwrap_or("?")
-        ),
-        None => println!("  no identity yet — the face may need a moment; run `suzu scan`"),
-    }
+    verify_and_report(&cand.name);
     println!("prepare complete.");
     Ok(())
 }

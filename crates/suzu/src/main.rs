@@ -18,6 +18,7 @@ mod house_cli;
 mod mpush;
 mod paths;
 mod prepare;
+mod repl;
 mod probe;
 mod resident;
 mod servicing;
@@ -548,7 +549,7 @@ async fn main() -> anyhow::Result<()> {
         Some("list") => house_cli::run(&args[2..]).await?,
         Some("serve") => resident::run(catalog).await?,
         Some("screenshot") => screenshot(&catalog, args.get(2).map(|s| s.as_str())),
-        Some("prepare") => prepare::run(&catalog)?,
+        Some("prepare") => prepare::run(&catalog, &args[2..])?,
         Some("record") => {
             // Reasonable limits, stated out loud when an ask exceeds
             // them: the wire caps fps, the host and GIF viewers cap
