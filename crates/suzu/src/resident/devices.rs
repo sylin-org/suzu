@@ -11,7 +11,7 @@
 
 use super::admission;
 use super::device::{Device, DeviceAction, DeviceOrder, DeviceState, MaintenanceOrder};
-use super::events::{DeviceFacts, DeviceRow, FrameFacts, ResidentEvent};
+use super::events::{AdmissionStep, DeviceFacts, DeviceRow, FrameFacts, ResidentEvent};
 use super::jobs::{Job, Jobs};
 use super::registry::DeviceRegistry;
 use super::sensor::HostMetrics;
@@ -484,30 +484,8 @@ impl Devices {
                             // failures still require a person's judgment.
                             let failed: Vec<_> =
                                 steps.iter().filter(|s| !s.ok).collect();
-                            let stale_declared = failed.len() == 1
-                                && failed[0].name == "faceplate-version"
-                                && failed[0].detail.contains("older than the declared");
-                            let undeclared_legacy = failed.len() == 1
-                                && failed[0].name == "faceplate-version"
-                                && failed[0].detail.contains("not declared for this class");
                             let faceplate_id = self.devices.get(&port).and_then(|d| {
-                                let class = d.facts.class.as_deref().unwrap_or_default();
-                                if stale_declared {
-                                    self.catalog
-                                        .installed_faceplate(
-                                            class,
-                                            d.facts.faceplate.as_deref().unwrap_or_default(),
-                                            d.facts.mount.as_deref(),
-                                        )
-                                        .map(|info| info.id.clone())
-                                } else if undeclared_legacy {
-                                    self.catalog
-                                        .faceplates_for_class(class)
-                                        .first()
-                                        .map(|info| info.id.clone())
-                                } else {
-                                    None
-                                }
+                                self.repair_faceplate_id(d, &failed)
                             });
                             if let Some(faceplate_id) = faceplate_id
                                 && !self.in_maintenance.contains_key(&port)
@@ -633,6 +611,50 @@ impl Devices {
     }
 
     /// Broadcast a display notification to every streaming session.
+    /// The faceplate id a failed admission can be auto-repaired to, if
+    /// any: a stale declared faceplate keeps its install id, and an
+    /// undeclared legacy faceplate is ported to the class's first
+    /// declared faceplate — honoring the device's mount when a variant
+    /// exists for it. Every other failure needs a person's judgment.
+    fn repair_faceplate_id(
+        &self,
+        device: &Device,
+        failed: &[&AdmissionStep],
+    ) -> Option<String> {
+        if failed.len() != 1 || failed[0].name != "faceplate-version" {
+            return None;
+        }
+        let class = device.facts.class.as_deref().unwrap_or_default();
+        let mount = device.facts.mount.as_deref();
+        if failed[0].detail.contains("older than the declared") {
+            self.catalog
+                .installed_faceplate(
+                    class,
+                    device.facts.faceplate.as_deref().unwrap_or_default(),
+                    mount,
+                )
+                .map(|info| info.id.clone())
+        } else if failed[0].detail.contains("not declared for this class") {
+            let first = self
+                .catalog
+                .faceplates_for_class(class)
+                .first()?
+                .faceplate
+                .clone();
+            self.catalog
+                .installed_faceplate(class, &first, mount)
+                .or_else(|| {
+                    self.catalog
+                        .faceplates_for_class(class)
+                        .first()
+                        .cloned()
+                })
+                .map(|info| info.id.clone())
+        } else {
+            None
+        }
+    }
+
     fn send_notification(&mut self, signal: &str, label: &str, urgency: u8) {
         let words: Vec<String> = label.split_whitespace().map(|s| s.to_string()).collect();
         for session in self.sessions.values() {
@@ -1648,5 +1670,109 @@ mod say_tests {
     fn a_unique_suffix_resolves() {
         let p = parse_say("ttyUSB0 INFO hi", &ports());
         assert_eq!(p.target, Some(Ok("/dev/ttyUSB0".into())));
+    }
+}
+
+#[cfg(test)]
+mod repair_tests {
+    use super::*;
+    use crate::resident::events::AdmissionStep;
+
+    fn devices() -> Devices {
+        let (events, _rx) = tokio::sync::broadcast::channel(16);
+        let (command_tx, _crx) = tokio::sync::mpsc::channel(8);
+        Devices::new(
+            events.clone(),
+            command_tx,
+            Arc::new(Catalog::load()),
+            Arc::new(std::sync::RwLock::new(DeviceRegistry::new())),
+            Arc::new(Jobs::new(events)),
+            Arc::new(HostStateCache::default()),
+        )
+    }
+
+    fn device_with(faceplate: &str, mount: Option<&str>) -> Device {
+        Device::new(
+            DeviceFacts {
+                port: "COM12".into(),
+                vid: 0x1a86,
+                pid: 0x7523,
+                class: Some("esp8266-oled".into()),
+                family: Some("esp8266-oled".into()),
+                variant: Some("oled-v2".into()),
+                version: Some("1.0.0".into()),
+                proto: Some("suzu/1".into()),
+                device_id: Some("device-1".into()),
+                faceplate: Some(faceplate.into()),
+                mount: mount.map(str::to_string),
+                legacy: false,
+            },
+            "now".into(),
+        )
+    }
+
+    fn failed_version_step(detail: &str) -> AdmissionStep {
+        AdmissionStep {
+            name: "faceplate-version".into(),
+            ok: false,
+            detail: detail.into(),
+        }
+    }
+
+    #[test]
+    fn an_undeclared_legacy_faceplate_ports_to_the_default_honoring_the_mount() {
+        let d = devices();
+        let device = device_with("portrait-numerals", Some("up"));
+        let step = failed_version_step(
+            "faceplate portrait-numerals is not declared for this class; install a declared faceplate",
+        );
+        let id = d
+            .repair_faceplate_id(&device, &[&step])
+            .expect("a legacy faceplate is repairable");
+        assert_eq!(id, "numerals-up");
+    }
+
+    #[test]
+    fn a_legacy_board_without_mount_lands_on_the_base_variant() {
+        let d = devices();
+        let device = device_with("portrait-numerals", None);
+        let step = failed_version_step(
+            "faceplate portrait-numerals is not declared for this class; install a declared faceplate",
+        );
+        let id = d.repair_faceplate_id(&device, &[&step]).unwrap();
+        assert_eq!(id, "numerals");
+    }
+
+    #[test]
+    fn a_stale_declared_faceplate_keeps_its_variant() {
+        let d = devices();
+        let device = device_with("slate", Some("left"));
+        let step = failed_version_step(
+            "faceplate slate 1.2.0 is older than the declared 1.2.1",
+        );
+        let id = d.repair_faceplate_id(&device, &[&step]).unwrap();
+        assert_eq!(id, "slate-left");
+    }
+
+    #[test]
+    fn anything_else_stays_for_a_person() {
+        let d = devices();
+        let device = device_with("numerals", Some("down"));
+        // Two failures are never auto-repaired.
+        let handshake = AdmissionStep {
+            name: "handshake".into(),
+            ok: false,
+            detail: "no answer".into(),
+        };
+        let version = failed_version_step(
+            "faceplate numerals is not declared for this class; install a declared faceplate",
+        );
+        assert_eq!(
+            d.repair_faceplate_id(&device, &[&handshake, &version]),
+            None
+        );
+        // An unrecognized single failure is not either.
+        let unknown = failed_version_step("handshake timed out");
+        assert_eq!(d.repair_faceplate_id(&device, &[&unknown]), None);
     }
 }
