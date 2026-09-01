@@ -4,6 +4,7 @@ schema: 1
 
 procedures:
   upgrade:
+    status: promoted      # ADR-0008 — resident-executable (repl.rs)
     pre: "device already runs MicroPython (the COM12 case)"
     steps:
       - open-serial: { baud: 115200 }
@@ -33,6 +34,7 @@ procedures:
   # Codify verbatim; no improvements — omitting --flash_size=detect or
   # the 460800 baud once preceded a boot-loop state.
   install:
+    status: promoted      # ADR-0008 — resident-executable (bootloader.rs)
     pre: "no MicroPython — the ROM loader answers even from a crash loop"
     steps:
       - enter-download-mode: { via: native-rom-bootloader }
@@ -43,6 +45,7 @@ procedures:
   # Files back to ship state: the native push re-runs (backup-first,
   # per-file read-back verify, soft reboot).
   soft:
+    status: promoted      # ADR-0008 — resident-executable (repl.rs)
     pre: "device runs MicroPython and answers the handshake"
     steps:
       - push-chunked: { via: native-raw-repl, fresh: false }
@@ -55,6 +58,7 @@ procedures:
   # device_id. A factory-fresh board takes the same path; the backup
   # step simply finds no filesystem and records that fact.
   factory:
+    status: promoted      # ADR-0008 — resident-executable (bootloader.rs), bench-proven 2026-09-01
     pre: "device answers, or the ROM loader answers even from a crash loop"
     steps:
       - backup-files: { via: native-raw-repl }   # no-op on a silent board

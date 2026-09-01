@@ -5,6 +5,7 @@ schema: 1
 
 procedures:
   install:
+    status: prototype     # ADR-0008 — via scripts/push_tdisplay.py + esptool; not resident-executable
     pre: "factory firmware — silent to I (observed COM13, 2026-08-28)"
     steps:
       - say: "Flashing MicroPython (russhughes st7789 build). The board will reset afterward."
@@ -15,6 +16,7 @@ procedures:
       - use: esp8266-oled-v2/upgrade
 
   upgrade:
+    status: promoted      # ADR-0008 — resident-executable (repl.rs file push)
     pre: "device already runs MicroPython"
     steps:
       - use: esp8266-oled-v2/upgrade

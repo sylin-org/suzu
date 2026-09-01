@@ -5,6 +5,7 @@ schema: 1
 
 procedures:
   install:
+    status: promoted      # ADR-0008 — resident-executable (maintenance.rs, drive copy)
     pre: "planned — BOOT during reset enters UF0 download mode"
     steps:
       - say: "Hold BOOT while plugging in."
@@ -16,6 +17,7 @@ procedures:
 
   # Files back to ship state; the CircuitPython runtime is untouched.
   soft:
+    status: promoted      # ADR-0008 — resident-executable (maintenance.rs)
     pre: "device is adopted and the CIRCUITPY drive is mounted"
     steps:
       - backup-identity: { keep: [device_id, hardware_id] }
@@ -29,6 +31,7 @@ procedures:
   # face are rebuilt. Identity is backed up first and restored after —
   # a factory reset never orphans an individual.
   factory:
+    status: promoted      # ADR-0008 — resident-executable (maintenance.rs)
     pre: "CIRCUITPY mounted (identity backup), a human at the box for the BOOTSEL gate"
     steps:
       - backup-identity: { keep: [device_id, hardware_id] }

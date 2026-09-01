@@ -232,6 +232,9 @@ tools, plus a previewer that runs the face against a fake framebuffer.
 - Bench proof for the raw-REPL migration path (`suzu firmware` /
   `suzu restore` are written and verify the handshake; the migration itself is
   not yet hardware-proven).
+- ESP32 factory-fresh onboarding for the T-Display — its runtime flash is
+  the first procedure to walk the onboarding lifecycle deliberately
+  (ADR-0008): prototype in Python, promote to native code.
 - Cricket — the audio companion exists as design and a proven ancestor PoC.
 
 **Not settled:**
@@ -271,9 +274,15 @@ The service has no host-Python runtime dependency. A factory-fresh ESP8266 —
 or one left crash-looping by an interrupted write — onboards end to end
 through the Resident's own ROM-bootloader engine (`install`, or `factory`
 from the workbench); the vendored MicroPython runtime is erased, written,
-and provisioned with no other tooling. The scripts under `scripts/` are
-development references and are not invoked by the Resident. Send a display
-notification with:
+and provisioned with no other tooling.
+
+New boards start as Python prototypes under [`scripts/`](scripts) — quick to
+write, quick to rewrite against real hardware — and are promoted into the
+Resident's native code once the bench has pinned the constants and seen the
+failure paths. The lifecycle (`prototype → verified → promoted`), the
+promotion bar, and the per-procedure `status:` declared in each class's
+`procedure.yaml` are ADR-0008. The scripts are development references and
+are never invoked by the Resident. Send a display notification with:
 
 ```bash
 cargo run -- say completion A backup committed
