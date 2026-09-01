@@ -4,7 +4,7 @@
 //! discovers `share/suzu` beside its prefix, while the systemd unit pins
 //! explicit resource and state roots for a predictable, writable service.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 fn env_path(name: &str) -> Option<PathBuf> {
     std::env::var_os(name).filter(|v| !v.is_empty()).map(PathBuf::from)
@@ -21,6 +21,18 @@ pub fn resource_dir() -> PathBuf {
         if installed.is_dir() {
             return installed;
         }
+    }
+    // A checkout keeps its familiar relative layout.
+    if Path::new("hardware/classes").is_dir() {
+        return PathBuf::from(".");
+    }
+    // A bare binary carries its resources inside; unpack once per
+    // version into the platform data dir. (Skipped under test so the
+    // suite never writes the developer's data directory.)
+    if !cfg!(test)
+        && let Some(dir) = crate::resources::ensure()
+    {
+        return dir;
     }
     PathBuf::from(".")
 }

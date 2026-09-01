@@ -129,9 +129,9 @@ trap 'rm -f -- "${SUZU_UNIT_TMP}"' EXIT
 sed \
     -e "s|@SUZU_BINDIR@|${SUZU_BINDIR}|g" \
     -e "s|@SUZU_RESOURCE_DIR@|${SUZU_RESOURCE_DIR}|g" \
-    "${SUZU_REPO_DIR}/packaging/systemd/suzu@.service" > "${SUZU_UNIT_TMP}"
+    "${SUZU_REPO_DIR}/crates/suzu/deploy/suzu@.service" > "${SUZU_UNIT_TMP}"
 install -m 0644 "${SUZU_UNIT_TMP}" "${SUZU_UNIT_FILE}"
-install -m 0644 "${SUZU_REPO_DIR}/packaging/udev/60-suzu.rules" "${SUZU_RULE_FILE}"
+install -m 0644 "${SUZU_REPO_DIR}/crates/suzu/deploy/60-suzu.rules" "${SUZU_RULE_FILE}"
 
 systemctl daemon-reload
 if command -v udevadm >/dev/null; then

@@ -51,7 +51,7 @@ Credentials are disposable and live only in the maintainers' local
   writable by the service user** — files created by an earlier root-run
   silently killed every dropped-privilege child with exit code 1. If an
   OpenRC service file graduates from testbed to standard, it moves to
-  `packaging/openrc/` with its own promotion note.
+  `crates/suzu/deploy/` with its own promotion note.
 - **test-02 (Bluefin, Fedora atomic)** cannot build natively yet:
   `libudev-sys` needs `libudev.h`, and `rpm-ostree install systemd-devel`
   refuses to apply because `/usr/local` is a symlink ("changed

@@ -173,7 +173,7 @@ contract:
 A native package owns `/usr/bin/suzu`, `/usr/share/suzu`, the unit under the
 distro's systemd unit directory, and the udev rule under its vendor rules
 directory. At package-build time replace `@SUZU_BINDIR@` and
-`@SUZU_RESOURCE_DIR@` in `packaging/systemd/suzu@.service` with `/usr/bin` and
+`@SUZU_RESOURCE_DIR@` in `crates/suzu/deploy/suzu@.service` with `/usr/bin` and
 `/usr/share/suzu`. Package scripts may create the `suzu-hw` system group and
 reload systemd/udev, but should follow distro policy about automatically
 enabling services. Enabling `suzu@KEEPER` remains the explicit machine-setup

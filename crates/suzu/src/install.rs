@@ -15,9 +15,9 @@
 use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
 
-const SYSTEMD_UNIT: &str = include_str!("../../../packaging/systemd/suzu@.service");
-const OPENRC_SCRIPT: &str = include_str!("../../../packaging/openrc/suzu");
-const UDEV_RULE: &str = include_str!("../../../packaging/udev/60-suzu.rules");
+const SYSTEMD_UNIT: &str = include_str!("../deploy/suzu@.service");
+const OPENRC_SCRIPT: &str = include_str!("../deploy/openrc-suzu");
+const UDEV_RULE: &str = include_str!("../deploy/60-suzu.rules");
 
 const HW_GROUP: &str = "suzu-hw";
 const STATE_ROOT: &str = "/var/lib/suzu";

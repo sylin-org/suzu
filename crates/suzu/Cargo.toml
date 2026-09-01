@@ -12,6 +12,7 @@ categories = ["hardware-support", "command-line-utilities"]
 readme = "../../README.md"
 
 [dependencies]
+include_dir = "0.7"
 anyhow = "1"
 chrono = { workspace = true }
 tokio = { workspace = true }

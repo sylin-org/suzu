@@ -22,6 +22,7 @@ mod mpush;
 mod paths;
 mod prepare;
 mod repl;
+mod resources;
 mod probe;
 mod resident;
 mod servicing;
