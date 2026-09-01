@@ -19,6 +19,7 @@ const STAMP_FILE: &str = ".suzu-embedded";
 /// hardware manifests that drive the catalog, and the firmware payloads
 /// (runtime artifacts included) that the install and factory-reset
 /// procedures vendored in the first place.
+#[cfg(test)]
 pub fn embedded() -> (&'static Dir<'static>, &'static Dir<'static>) {
     (&EMBEDDED_HARDWARE, &EMBEDDED_FIRMWARE)
 }
