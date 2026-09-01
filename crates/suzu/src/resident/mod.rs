@@ -1,13 +1,12 @@
-//! The Resident — the DDD monolith that runs the house.
+//! Resident process composition and domain supervision.
 //!
-//! Composition root: builds the House (event bus + domain inboxes),
-//! spawns every domain under supervision, and (in `suzu serve`) prints
-//! the conversation so the correct-way-of-talking is visible.
+//! Builds the shared event bus and command channels, then starts each
+//! domain under supervision.
 //!
-//! Communication law, enforced by these types:
-//! - commands: typed per-domain inboxes (`DevicesCmd`, `MomentsCmd`)
-//! - events: `HouseEvent` on one broadcast bus, past tense
-//! - cheap objects: `DeviceRow` snapshots via the command door
+//! Communication model:
+//! - commands: typed per-domain inboxes (`DevicesCmd`, `NotificationCmd`)
+//! - events: `ResidentEvent` on one broadcast bus, past tense
+//! - read models: `DeviceRow` snapshots via command channels
 
 pub mod admission;
 pub mod api;
@@ -17,16 +16,16 @@ pub mod events;
 pub mod gpu;
 pub mod jobs;
 pub mod maintenance;
-pub mod moments;
-pub mod roster;
+pub mod notifications;
+pub mod registry;
 pub mod sensor;
 pub mod watcher;
 
 use api::Journal;
-use devices::{Devices, DevicesCmd, DevicesSnapshot, Substrate};
-use events::HouseEvent;
-use moments::{Moments, MomentsCmd};
-use roster::{Roster, SagaStep};
+use devices::{Devices, DevicesCmd, DevicesSnapshot, HostStateCache};
+use events::ResidentEvent;
+use notifications::{Notifications, NotificationCmd};
+use registry::{DeviceRegistry, MaintenanceStep};
 use sensor::Sensor;
 use std::io::{self, Write};
 use std::sync::{Arc, RwLock};
@@ -35,65 +34,63 @@ use crate::Catalog;
 use jobs::Jobs;
 use tokio::sync::{broadcast, mpsc};
 
-/// The house wiring. Domains receive `Arc<House>` and may only use
-/// these doors.
-pub struct House {
-    events: broadcast::Sender<HouseEvent>,
+/// Shared event bus and replaceable domain command senders.
+pub struct RuntimeChannels {
+    events: broadcast::Sender<ResidentEvent>,
     devices: RwLock<mpsc::Sender<DevicesCmd>>,
-    moments: RwLock<mpsc::Sender<MomentsCmd>>,
+    notifications: RwLock<mpsc::Sender<NotificationCmd>>,
 }
 
-impl House {
-    fn new(events: broadcast::Sender<HouseEvent>) -> Self {
+impl RuntimeChannels {
+    fn new(events: broadcast::Sender<ResidentEvent>) -> Self {
         let (devices, _) = mpsc::channel(64);
-        let (moments, _) = mpsc::channel(64);
+        let (notifications, _) = mpsc::channel(64);
         Self {
             events,
             devices: RwLock::new(devices),
-            moments: RwLock::new(moments),
+            notifications: RwLock::new(notifications),
         }
     }
 
-    /// The devices door — the read API and the control chirps use it.
-    pub fn devices_door(&self) -> mpsc::Sender<DevicesCmd> {
-        self.devices.read().expect("house devices lock").clone()
+    /// Current devices-domain command sender.
+    pub fn devices_sender(&self) -> mpsc::Sender<DevicesCmd> {
+        self.devices.read().expect("devices sender lock").clone()
     }
 
     fn set_devices_tx(&self, tx: mpsc::Sender<DevicesCmd>) {
-        *self.devices.write().expect("house devices lock") = tx;
+        *self.devices.write().expect("devices sender lock") = tx;
     }
 
     /// The announcement wire — the bus every client subscribes to.
-    pub fn events_door(&self) -> broadcast::Sender<HouseEvent> {
+    pub fn events_sender(&self) -> broadcast::Sender<ResidentEvent> {
         self.events.clone()
     }
 
-    /// The moments door — visitors speak here.
-    pub fn moments_door(&self) -> mpsc::Sender<MomentsCmd> {
-        self.moments.read().expect("house moments lock").clone()
+    /// Current notifications-domain command sender.
+    pub fn notifications_sender(&self) -> mpsc::Sender<NotificationCmd> {
+        self.notifications.read().expect("notifications sender lock").clone()
     }
 
-    fn set_moments_tx(&self, tx: mpsc::Sender<MomentsCmd>) {
-        *self.moments.write().expect("house moments lock") = tx;
+    fn set_notifications_tx(&self, tx: mpsc::Sender<NotificationCmd>) {
+        *self.notifications.write().expect("notifications sender lock") = tx;
     }
 
-    /// The visitor door — one command, from any surface.
-    pub async fn tell(&self, moment: MomentsCmd) {
-        let _ = self.moments_door().send(moment).await;
+    /// Submit one display-notification command.
+    pub async fn submit_notification(&self, notification: NotificationCmd) {
+        let _ = self.notifications_sender().send(notification).await;
     }
 
-    /// Cheap snapshot: a copy, taken by the owning domain. The actor
-    /// routes instantly — this is bounded like every other door.
+    /// Request a bounded snapshot from the devices actor.
     pub async fn snapshot_devices(&self) -> anyhow::Result<DevicesSnapshot> {
         let (tx, mut rx) = mpsc::channel(1);
-        self.devices_door()
+        self.devices_sender()
             .send(DevicesCmd::Snapshot { reply: tx })
             .await
             .map_err(|_| anyhow::anyhow!("devices domain is not running"))?;
         match tokio::time::timeout(Duration::from_secs(5), rx.recv()).await {
             Ok(Some(snap)) => Ok(snap),
             Ok(None) => anyhow::bail!("devices domain dropped the snapshot"),
-            Err(_) => anyhow::bail!("the house did not answer within 5s"),
+            Err(_) => anyhow::bail!("the devices actor did not answer within 5s"),
         }
     }
 }
@@ -119,22 +116,21 @@ async fn shutdown_signal() {
     }
 }
 
-fn house_line(ev: &HouseEvent, journal: &Journal) {
-    let (domain, text) = format_house_event(ev);
+fn log_resident_event(ev: &ResidentEvent, journal: &Journal) {
+    let (domain, text) = format_resident_event(ev);
     if text.is_empty() {
-        return; // the fast lane is data, not news
+        return; // High-frequency data is not journaled.
     }
     line(domain, &text);
     journal.record(domain, &text);
 }
 
-/// The house's facts, in the house's voice — one formatting, shared by
-/// the console, the journal and the announcement wire.
-pub(crate) fn format_house_event(ev: &HouseEvent) -> (&'static str, String) {
+/// Format Resident events consistently for the console and journal.
+pub(crate) fn format_resident_event(ev: &ResidentEvent) -> (&'static str, String) {
     let say = |domain: &'static str, text: String| (domain, text);
     match ev {
-        HouseEvent::DeviceSensed { port } => say("watcher", format!("sensed {port}")),
-        HouseEvent::DeviceIdentified(f) => {
+        ResidentEvent::DeviceSensed { port } => say("watcher", format!("sensed {port}")),
+        ResidentEvent::DeviceIdentified(f) => {
             let version = f
                 .version
                 .as_deref()
@@ -152,12 +148,12 @@ pub(crate) fn format_house_event(ev: &HouseEvent) -> (&'static str, String) {
                 )
             )
         }
-        HouseEvent::DeviceGone { port } => say("watcher", format!("gone {port}")),
-        HouseEvent::PortBusy { port, reason } => say(
+        ResidentEvent::DeviceGone { port } => say("watcher", format!("gone {port}")),
+        ResidentEvent::PortBusy { port, reason } => say(
             "watcher",
-            format!("{port} is busy — not minding ({reason})"),
+            format!("{port} is busy — not tracking it ({reason})"),
         ),
-        HouseEvent::DeviceMinded {
+        ResidentEvent::DeviceTracked {
             port,
             device_id,
             class,
@@ -165,20 +161,20 @@ pub(crate) fn format_house_event(ev: &HouseEvent) -> (&'static str, String) {
         } => say(
             "devices",
             format!(
-                "minding {port} as {class:?} ({device_id:?}) — state {state}"
+                "tracking {port} as {class:?} ({device_id:?}) — state {state}"
             ),
         ),
-        HouseEvent::DeviceHomecoming { port, device_id } => say(
+        ResidentEvent::DeviceReconnected { port, device_id } => say(
             "devices",
-            format!("homecoming — {device_id} is back on {port}"),
+            format!("reconnected {device_id} on {port}"),
         ),
-        HouseEvent::DeviceReleased { port, device_id } => say(
+        ResidentEvent::DeviceReleased { port, device_id } => say(
             "devices",
             format!(
-                "released {port} ({device_id:?}) — the roster remembers them"
+                "released {port} ({device_id:?}) — the registry remembers them"
             ),
         ),
-        HouseEvent::GroundChanged {
+        ResidentEvent::HostMetricsChanged {
             name,
             uptime_s,
             cpu,
@@ -188,30 +184,30 @@ pub(crate) fn format_house_event(ev: &HouseEvent) -> (&'static str, String) {
         } => say(
             "sensor",
             format!(
-                "ground: {name} · cpu {cpu}% · gpu {} · mem {mem}% · disk {disk}% · up {uptime_s}s",
+                "metrics: {name} · cpu {cpu}% · gpu {} · mem {mem}% · disk {disk}% · up {uptime_s}s",
                 gpu.map_or_else(|| "—".to_string(), |v| format!("{v}%"))
             ),
         ),
-        HouseEvent::Ring { signal, label, urgency } => say(
-            "moments",
+        ResidentEvent::DisplayNotificationReady { signal, label, urgency } => say(
+            "notifications",
             format!("ring: [{signal}] {label} (urgency {urgency})"),
         ),
-        HouseEvent::Pulse { .. } => ("pulse", String::new()), // the fast lane is data, not news
-        HouseEvent::SplashDecided { decision, label } => {
-            say("moments", format!("splash: {decision} {}", label.as_deref().unwrap_or("")))
+        ResidentEvent::Pulse { .. } => ("pulse", String::new()), // High-frequency data is not journaled.
+        ResidentEvent::DisplayEventSelected { decision, label } => {
+            say("notifications", format!("display event: {decision} {}", label.as_deref().unwrap_or("")))
         }
-        HouseEvent::Degraded { domain, reason } => {
+        ResidentEvent::Degraded { domain, reason } => {
             say(domain, format!("!! degraded: {reason}"))
         }
-        HouseEvent::IndividualHeld { device_id, port, class } => say(
-            "roster",
+        ResidentEvent::DeviceRegistered { device_id, port, class } => say(
+            "registry",
             format!(
-                "held {device_id} on {port} ({}) — admission decides the stream",
+                "registered {device_id} on {port} ({}) — admission determines streaming access",
                 class.as_deref().unwrap_or("?")
             ),
         ),
-        HouseEvent::AdmissionReport { device_id, port, passed, steps } => say(
-            "roster",
+        ResidentEvent::AdmissionReport { device_id, port, passed, steps } => say(
+            "registry",
             format!(
                 "admission {} for {device_id} on {port} — {}",
                 if *passed { "PASSED" } else { "FAILED" },
@@ -222,26 +218,26 @@ pub(crate) fn format_house_event(ev: &HouseEvent) -> (&'static str, String) {
                     .join(", ")
             ),
         ),
-        HouseEvent::StreamAttached { device_id, port } => say(
-            "roster",
+        ResidentEvent::StreamAttached { device_id, port } => say(
+            "registry",
             format!("stream attached — {device_id} on {port}"),
         ),
-        HouseEvent::StreamDetached { device_id, port, reason } => say(
-            "roster",
+        ResidentEvent::StreamDetached { device_id, port, reason } => say(
+            "registry",
             format!("stream detached — {device_id} on {port} ({reason})"),
         ),
-        HouseEvent::MaintenanceStarted { device_id, port, kind } => say(
+        ResidentEvent::MaintenanceStarted { device_id, port, kind } => say(
             "maintenance",
-            format!("{kind} saga owns {device_id} on {port} — the stream is withdrawn"),
+            format!("{kind} maintenance started for {device_id} on {port}; streaming disabled"),
         ),
-        HouseEvent::MaintenanceStep { device_id, step, index, total, ok, detail } => say(
+        ResidentEvent::MaintenanceStep { device_id, step, index, total, ok, detail } => say(
             "maintenance",
             format!(
                 "{device_id} · step {index}/{total} — {step}{} {detail}",
                 if *ok { "" } else { " ✗" },
             ),
         ),
-        HouseEvent::Job { job } => say(
+        ResidentEvent::Job { job } => say(
             "jobs",
             format!(
                 "{} on {} → {} ({}{})",
@@ -252,52 +248,51 @@ pub(crate) fn format_house_event(ev: &HouseEvent) -> (&'static str, String) {
                 if job.index > 0 { format!(", {} frames", job.index) } else { String::new() }
             ),
         ),
-                HouseEvent::MaintenanceCompleted { device_id, kind, ok } => say(
+                ResidentEvent::MaintenanceCompleted { device_id, kind, ok } => say(
             "maintenance",
             format!(
-                "{kind} saga {} for {device_id} — admission decides the stream",
+                "{kind} maintenance {} for {device_id}; admission controls streaming",
                 if *ok { "done" } else { "failed" }
             ),
         ),
-        HouseEvent::Retired { device_id } => say(
-            "roster",
-            format!("{device_id} retired — the roster keeps the name, never the stream"),
+        ResidentEvent::Retired { device_id } => say(
+            "registry",
+            format!("{device_id} retired; its registry entry remains and streaming is disabled"),
         ),
-        // ── the wire vocabulary (ADR-0004): data, not news ──────────
-        HouseEvent::Devices { .. } => ("devices", String::new()),
-        HouseEvent::Roster { .. } => ("roster", String::new()),
-        HouseEvent::Frame { .. } => ("media", String::new()),
-        HouseEvent::Snapshot { .. } => ("house", String::new()),
-        HouseEvent::Paused { paused } => say(
+        // Client read-model events are not journaled.
+        ResidentEvent::Devices { .. } => ("devices", String::new()),
+        ResidentEvent::DeviceRegistry { .. } => ("registry", String::new()),
+        ResidentEvent::Frame { .. } => ("media", String::new()),
+        ResidentEvent::Snapshot { .. } => ("resident", String::new()),
+        ResidentEvent::Paused { paused } => say(
             "devices",
             if *paused {
-                "stream paused — the faces fall idle".to_string()
+                "device streaming paused".to_string()
             } else {
-                "stream resumed — the faces redress".to_string()
+                "device streaming resumed".to_string()
             },
         ),
-        HouseEvent::MediaWatched { watched } => say(
+        ResidentEvent::MediaWatched { watched } => say(
             "media",
             if *watched {
-                "the media lane is watched — the faces blink for the window".to_string()
+                "media capture enabled".to_string()
             } else {
-                "media unwatched — the faces rest their blinks".to_string()
+                "media capture disabled".to_string()
             },
         ),
     }
 }
 //
 // The supervised loop owns its domain's command channel: on restart it
-// creates a fresh channel and re-wires the house door, so every sender
-// (including the watcher's) lands on the living receiver again.
+// creates a fresh channel and replaces the shared sender.
 
 fn spawn_devices_supervised(
-    house: Arc<House>,
+    channels: Arc<RuntimeChannels>,
     rx: mpsc::Receiver<DevicesCmd>,
-    roster: Arc<RwLock<Roster>>,
+    registry: Arc<RwLock<DeviceRegistry>>,
     catalog: Arc<Catalog>,
     jobs: Arc<Jobs>,
-    substrate: Arc<Substrate>,
+    host_state: Arc<HostStateCache>,
 ) {
     tokio::spawn(async move {
         let mut rx = Some(rx);
@@ -306,15 +301,15 @@ fn spawn_devices_supervised(
             let Some(current) = rx.take() else {
                 return;
             };
-            let house2 = Arc::clone(&house);
-            let roster2 = Arc::clone(&roster);
+            let channels2 = Arc::clone(&channels);
+            let roster2 = Arc::clone(&registry);
             let catalog2 = Arc::clone(&catalog);
             let jobs2 = Arc::clone(&jobs);
-            let substrate2 = Arc::clone(&substrate);
-            let bus = house2.events.subscribe();
-            let door = house2.devices_door();
+            let host_state2 = Arc::clone(&host_state);
+            let bus = channels2.events.subscribe();
+            let command_tx = channels2.devices_sender();
             let handle = tokio::spawn(async move {
-                Devices::new(house2.events.clone(), door, catalog2, roster2, jobs2, substrate2)
+                Devices::new(channels2.events.clone(), command_tx, catalog2, roster2, jobs2, host_state2)
                     .run(current, bus)
                     .await
             });
@@ -322,14 +317,14 @@ fn spawn_devices_supervised(
                 Ok(()) => "command channel closed".to_string(),
                 Err(e) => format!("panic: {e}"),
             };
-            let _ = house.events.send(HouseEvent::Degraded {
+            let _ = channels.events.send(ResidentEvent::Degraded {
                 domain: "devices",
                 reason: reason.clone(),
             });
             line("devices", &format!("!! degraded: {reason} — restarting in {backoff}s"));
-            // A restart invalidates every old sender — re-wire the door.
+            // A restart invalidates every old sender; publish the replacement.
             let (tx, next) = mpsc::channel(64);
-            house.set_devices_tx(tx);
+            channels.set_devices_tx(tx);
             rx = Some(next);
             tokio::time::sleep(Duration::from_secs(backoff)).await;
             backoff = (backoff * 2).min(30);
@@ -337,7 +332,7 @@ fn spawn_devices_supervised(
     });
 }
 
-fn spawn_moments_supervised(house: Arc<House>, rx: mpsc::Receiver<MomentsCmd>) {
+fn spawn_notifications_supervised(channels: Arc<RuntimeChannels>, rx: mpsc::Receiver<NotificationCmd>) {
     tokio::spawn(async move {
         let mut rx = Some(rx);
         let mut backoff = 1u64;
@@ -345,9 +340,9 @@ fn spawn_moments_supervised(house: Arc<House>, rx: mpsc::Receiver<MomentsCmd>) {
             let Some(current) = rx.take() else {
                 return;
             };
-            let house2 = Arc::clone(&house);
+            let channels2 = Arc::clone(&channels);
             let handle = tokio::spawn(async move {
-                Moments::new(house2.events.clone(), house2.events.subscribe(), current)
+                Notifications::new(channels2.events.clone(), channels2.events.subscribe(), current)
                     .run()
                     .await
             });
@@ -355,13 +350,13 @@ fn spawn_moments_supervised(house: Arc<House>, rx: mpsc::Receiver<MomentsCmd>) {
                 Ok(()) => "command channel closed".to_string(),
                 Err(e) => format!("panic: {e}"),
             };
-            let _ = house.events.send(HouseEvent::Degraded {
-                domain: "moments",
+            let _ = channels.events.send(ResidentEvent::Degraded {
+                domain: "notifications",
                 reason: reason.clone(),
             });
-            line("moments", &format!("!! degraded: {reason} — restarting in {backoff}s"));
+            line("notifications", &format!("!! degraded: {reason} — restarting in {backoff}s"));
             let (tx, next) = mpsc::channel(64);
-            house.set_moments_tx(tx);
+            channels.set_notifications_tx(tx);
             rx = Some(next);
             tokio::time::sleep(Duration::from_secs(backoff)).await;
             backoff = (backoff * 2).min(30);
@@ -369,28 +364,26 @@ fn spawn_moments_supervised(house: Arc<House>, rx: mpsc::Receiver<MomentsCmd>) {
     });
 }
 
-/// The roster's task: it consumes the house's facts and answers with
-/// the lifecycle's verdicts. StreamAttached / StreamDetached are its
-/// words — the devices domain opens and closes its gates to them.
-/// Its read model rides the wire whole (ADR-0004): after every
-/// mutation, one `Roster` fact replaces every client's slice — the
-/// lifecycle's law lives here, once, never re-derived downstream.
-fn spawn_roster(house: Arc<House>, roster: Arc<RwLock<Roster>>) {
+/// The registry task consumes Resident events and publishes lifecycle state.
+/// After each mutation, publish the complete registry (ADR-0004).
+fn spawn_roster(channels: Arc<RuntimeChannels>, registry: Arc<RwLock<DeviceRegistry>>) {
     tokio::spawn(async move {
-        let mut bus = house.events.subscribe();
+        let mut bus = channels.events.subscribe();
         loop {
             match bus.recv().await {
                 Ok(ev) => {
-                    let (derived, changed) = process_roster_event(&roster, ev);
+                    let (derived, changed) = process_roster_event(&registry, ev);
                     if changed {
-                        let individuals = roster
+                        let registered_devices = registry
                             .read()
                             .map(|r| r.snapshot())
                             .unwrap_or_default();
-                        let _ = house.events.send(HouseEvent::Roster { individuals });
+                        let _ = channels
+                            .events
+                            .send(ResidentEvent::DeviceRegistry { registered_devices });
                     }
                     if let Some(d) = derived {
-                        let _ = house.events.send(d);
+                        let _ = channels.events.send(d);
                     }
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
@@ -400,31 +393,32 @@ fn spawn_roster(house: Arc<House>, roster: Arc<RwLock<Roster>>) {
     });
 }
 
-/// Returns the derived verdict event (if any) and whether the roster
+/// Returns the derived verdict event (if any) and whether the registry
 /// mutated — a mutation publishes the whole read model.
 fn process_roster_event(
-    roster: &Arc<RwLock<Roster>>,
-    ev: HouseEvent,
-) -> (Option<HouseEvent>, bool) {
-    let Ok(mut r) = roster.write() else {
+    registry: &Arc<RwLock<DeviceRegistry>>,
+    ev: ResidentEvent,
+) -> (Option<ResidentEvent>, bool) {
+    let Ok(mut r) = registry.write() else {
         return (None, false);
     };
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     match ev {
-        HouseEvent::DeviceMinded { port, device_id: Some(id), class, .. } => {
-            let changed = r.hold(&id, &port, class.as_deref(), &now).is_ok();
-            let derived = changed.then_some(HouseEvent::IndividualHeld { device_id: id, port, class });
+        ResidentEvent::DeviceTracked { port, device_id: Some(id), class, .. } => {
+            let changed = r.register(&id, &port, class.as_deref(), &now).is_ok();
+            let derived =
+                changed.then_some(ResidentEvent::DeviceRegistered { device_id: id, port, class });
             (derived, changed)
         }
-        HouseEvent::AdmissionReport { device_id, port, passed, steps } => {
-            let record = roster::AdmissionRecord { passed, at: now, steps };
+        ResidentEvent::AdmissionReport { device_id, port, passed, steps } => {
+            let record = registry::AdmissionRecord { passed, at: now, steps };
             match r.admission_result(&device_id, record) {
-                Ok(roster::Lifecycle::Live) => (
-                    Some(HouseEvent::StreamAttached { device_id, port }),
+                Ok(registry::Lifecycle::Live) => (
+                    Some(ResidentEvent::StreamAttached { device_id, port }),
                     true,
                 ),
                 Ok(_) => (
-                    Some(HouseEvent::StreamDetached {
+                    Some(ResidentEvent::StreamDetached {
                         device_id,
                         port,
                         reason: "admission failed".into(),
@@ -434,36 +428,36 @@ fn process_roster_event(
                 Err(_) => (None, false),
             }
         }
-        HouseEvent::DeviceReleased { port, device_id } => {
+        ResidentEvent::DeviceReleased { port, device_id } => {
             let id = device_id.or_else(|| {
                 r.by_port(&port).map(|i| i.device_id.clone())
             });
             let Some(id) = id else { return (None, false) };
             let was_streaming =
-                r.individual(&id).is_some_and(|i| i.lifecycle == roster::Lifecycle::Live);
+                r.registered_device(&id).is_some_and(|i| i.lifecycle == registry::Lifecycle::Live);
             if r.departed(&id).is_err() {
                 return (None, false);
             }
-            let derived = was_streaming.then(|| HouseEvent::StreamDetached {
+            let derived = was_streaming.then(|| ResidentEvent::StreamDetached {
                 device_id: id,
                 port,
                 reason: "departed".into(),
             });
             (derived, true)
         }
-        HouseEvent::MaintenanceStarted { device_id, kind, .. } => {
+        ResidentEvent::MaintenanceStarted { device_id, kind, .. } => {
             let changed = r.maintenance_started(&device_id, &kind).is_ok();
             (None, changed)
         }
-        HouseEvent::MaintenanceStep { device_id, step, index, total, ok, detail } => {
-            r.maintenance_step(&device_id, SagaStep { name: step, index, total, ok, detail });
+        ResidentEvent::MaintenanceStep { device_id, step, index, total, ok, detail } => {
+            r.maintenance_step(&device_id, MaintenanceStep { name: step, index, total, ok, detail });
             (None, true)
         }
-        HouseEvent::MaintenanceCompleted { device_id, ok, .. } => {
+        ResidentEvent::MaintenanceCompleted { device_id, ok, .. } => {
             let changed = r.maintenance_completed(&device_id, ok).is_ok();
             (None, changed)
         }
-        HouseEvent::Retired { device_id } => {
+        ResidentEvent::Retired { device_id } => {
             let changed = r.retire(&device_id).is_ok();
             (None, changed)
         }
@@ -471,20 +465,20 @@ fn process_roster_event(
     }
 }
 
-fn spawn_sensor_supervised(house: Arc<House>, substrate: Arc<Substrate>) {
+fn spawn_sensor_supervised(channels: Arc<RuntimeChannels>, host_state: Arc<HostStateCache>) {
     tokio::spawn(async move {
         let mut backoff = 1u64;
         loop {
-            let house2 = Arc::clone(&house);
-            let substrate2 = Arc::clone(&substrate);
+            let channels2 = Arc::clone(&channels);
+            let host_state2 = Arc::clone(&host_state);
             let handle = tokio::spawn(async move {
-                Sensor::new(house2.events.clone(), substrate2).run().await
+                Sensor::new(channels2.events.clone(), host_state2).run().await
             });
             let reason = match handle.await {
                 Ok(()) => "sensor loop ended".to_string(),
                 Err(e) => format!("panic: {e}"),
             };
-            let _ = house.events.send(HouseEvent::Degraded {
+            let _ = channels.events.send(ResidentEvent::Degraded {
                 domain: "sensor",
                 reason: reason.clone(),
             });
@@ -496,14 +490,12 @@ fn spawn_sensor_supervised(house: Arc<House>, substrate: Arc<Substrate>) {
 }
 
 pub async fn run(catalog: Arc<Catalog>) -> anyhow::Result<()> {
-    // The door first (ADR-0004): the resident binds 7899 before it
-    // touches any serial port, and a second claimant exits loudly with
-    // a reason — never doorless, never a zombie watching ports.
+    // Bind before opening serial ports so a second Resident fails early.
     let listener = match api::bind().await {
         Ok(l) => l,
         Err(e) => {
             let reason = format!(
-                "cannot claim the door 127.0.0.1:{} ({e}) — another suzu resident already owns the house",
+                "cannot bind 127.0.0.1:{} ({e}); another Suzu Resident may already be running",
                 api::API_PORT
             );
             println!("[api] !! {reason}");
@@ -511,53 +503,50 @@ pub async fn run(catalog: Arc<Catalog>) -> anyhow::Result<()> {
         }
     };
     let (events, _) = broadcast::channel(256);
-    let house = Arc::new(House::new(events.clone()));
-    let roster = Arc::new(RwLock::new(Roster::new()));
+    let channels = Arc::new(RuntimeChannels::new(events.clone()));
+    let registry = Arc::new(RwLock::new(DeviceRegistry::new()));
     let journal = Arc::new(Journal::new());
 
-    // Create the domain doors once; the supervised loops only recreate
-    // them on restart (and re-wire the house at that moment), so every
-    // sender — including the watcher's handoff — stays live.
+    // Create command channels once. Supervisors replace them after a restart.
     let (devices_tx, devices_rx) = mpsc::channel(64);
-    house.set_devices_tx(devices_tx);
-    let (moments_tx, moments_rx) = mpsc::channel(64);
-    house.set_moments_tx(moments_tx);
+    channels.set_devices_tx(devices_tx);
+    let (notifications_tx, notifications_rx) = mpsc::channel(64);
+    channels.set_notifications_tx(notifications_tx);
 
     // watcher
     {
         let watcher = watcher::Watcher {
             links: watcher::WatcherLinks {
-                events: house.events.clone(),
-                devices: house.devices_door(),
+                events: channels.events.clone(),
+                devices: channels.devices_sender(),
             },
             catalog: Arc::clone(&catalog),
         };
         tokio::spawn(watcher.run());
     }
-    let jobs = Arc::new(jobs::Jobs::new(house.events.clone()));
-    let substrate: Arc<Substrate> = Arc::default();
-    spawn_devices_supervised(Arc::clone(&house), devices_rx, Arc::clone(&roster), Arc::clone(&catalog), Arc::clone(&jobs), Arc::clone(&substrate));
-    spawn_moments_supervised(Arc::clone(&house), moments_rx);
-    spawn_sensor_supervised(Arc::clone(&house), Arc::clone(&substrate));
-    spawn_roster(Arc::clone(&house), Arc::clone(&roster));
+    let jobs = Arc::new(jobs::Jobs::new(channels.events.clone()));
+    let host_state: Arc<HostStateCache> = Arc::default();
+    spawn_devices_supervised(Arc::clone(&channels), devices_rx, Arc::clone(&registry), Arc::clone(&catalog), Arc::clone(&jobs), Arc::clone(&host_state));
+    spawn_notifications_supervised(Arc::clone(&channels), notifications_rx);
+    spawn_sensor_supervised(Arc::clone(&channels), Arc::clone(&host_state));
+    spawn_roster(Arc::clone(&channels), Arc::clone(&registry));
 
-    // the control chirp: `suzu pause` / `suzu resume` from any shell
-    tokio::spawn(crate::control::listen(house.devices_door(), house.moments_door()));
+    // Local control commands from `suzu pause` and `suzu resume`.
+    tokio::spawn(crate::control::listen(channels.devices_sender(), channels.notifications_sender()));
 
-    // the workbench's door: the loopback read API (ADR-0002), on the
-    // listener claimed before the house was built (ADR-0004)
+    // Workbench loopback API on the pre-bound listener.
     tokio::spawn(api::listen(Arc::new(api::Ctx {
         catalog: Arc::clone(&catalog),
         jobs: Arc::clone(&jobs),
-        events: house.events_door(),
-        devices: house.devices_door(),
-        moments: house.moments_door(),
-        roster: Arc::clone(&roster),
+        events: channels.events_sender(),
+        devices: channels.devices_sender(),
+        notifications: channels.notifications_sender(),
+        registry: Arc::clone(&registry),
         journal: Arc::clone(&journal),
         streams: std::sync::atomic::AtomicUsize::new(0),
     }), listener));
 
-    // the visitor door, by hand: `tell <label>`
+    // Interactive `tell <label>` input.
     let (stdin_tx, mut stdin_rx) = mpsc::channel::<String>(16);
     std::thread::spawn(move || {
         let stdin = io::stdin();
@@ -575,8 +564,8 @@ pub async fn run(catalog: Arc<Catalog>) -> anyhow::Result<()> {
         }
     });
 
-    println!("suzu resident is up — domains: watcher · devices · moments · sensor · roster");
-    println!("plug a device and watch the house talk. `tell <label>` rings the bell · `status` · `q` quits.");
+    println!("suzu resident is up — domains: watcher · devices · notifications · sensor · registry");
+    println!("plug in a device to monitor events. Commands: `tell <label>`, `status`, `q`.");
     println!("control: `suzu pause` / `suzu resume` stop and restart the stream to devices.");
 
     let mut ev_rx = events.subscribe();
@@ -586,26 +575,25 @@ pub async fn run(catalog: Arc<Catalog>) -> anyhow::Result<()> {
     loop {
         tokio::select! {
             _ = &mut shutdown => {
-                line("house", "shutdown requested — releasing the companions");
+                line("resident", "shutdown requested — closing device sessions");
                 break;
             },
             ev = ev_rx.recv() => match ev {
                 Ok(ev) => {
-                    // Ground drifts silently — log it at most every 10 s
-                    // so the conversation stays readable.
-                    let throttle = matches!(&ev, HouseEvent::GroundChanged { .. })
+                    // Rate-limit metrics logging to once every 10 seconds.
+                    let throttle = matches!(&ev, ResidentEvent::HostMetricsChanged { .. })
                         && last_ground_line
                             .map(|t| t.elapsed() < Duration::from_secs(10))
                             .unwrap_or(false);
-                    if matches!(&ev, HouseEvent::GroundChanged { .. }) {
+                    if matches!(&ev, ResidentEvent::HostMetricsChanged { .. }) {
                         last_ground_line = Some(std::time::Instant::now());
                     }
                     if !throttle {
-                        house_line(&ev, &journal);
+                        log_resident_event(&ev, &journal);
                     }
                 }
                 Err(broadcast::error::RecvError::Lagged(n)) => {
-                    line("house", &format!("lagged by {n} events"));
+                    line("resident", &format!("event receiver lagged by {n} events"));
                 }
                 Err(_) => break,
             },
@@ -614,11 +602,11 @@ pub async fn run(catalog: Arc<Catalog>) -> anyhow::Result<()> {
                 match input {
                     "q" | "quit" => break,
                     "" => {}
-                    "status" => match house.snapshot_devices().await {
+                    "status" => match channels.snapshot_devices().await {
                         Ok(snap) => {
                             println!(
-                                "  stream {} · {} minded device(s)",
-                                if snap.paused { "paused" } else { "flowing" },
+                                "  stream {} · {} tracked device(s)",
+                                if snap.paused { "paused" } else { "active" },
                                 snap.devices.len()
                             );
                             for r in snap.devices {
@@ -639,8 +627,8 @@ pub async fn run(catalog: Arc<Catalog>) -> anyhow::Result<()> {
                     },
                     _ if input.starts_with("tell ") => {
                         let label = input.trim_start_matches("tell ").trim();
-                        house
-                            .tell(MomentsCmd::tell("keeper", "transition", Some(label.to_string()), 1))
+                        channels
+                            .submit_notification(NotificationCmd::submit("console", "transition", Some(label.to_string()), 1))
                             .await;
                     }
                     _ => println!("  ? — tell <label> · status · q"),
@@ -649,9 +637,9 @@ pub async fn run(catalog: Arc<Catalog>) -> anyhow::Result<()> {
         }
     }
     let (reply, mut report) = mpsc::channel(1);
-    if house.devices_door().send(DevicesCmd::Pause { reply }).await.is_ok() {
+    if channels.devices_sender().send(DevicesCmd::Pause { reply }).await.is_ok() {
         let _ = tokio::time::timeout(Duration::from_secs(3), report.recv()).await;
     }
-    println!("the resident rests — the garden keeps breathing.");
+    println!("resident stopped");
     Ok(())
 }

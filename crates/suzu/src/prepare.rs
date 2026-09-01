@@ -1,10 +1,10 @@
-//! `suzu prepare` — the adoption front door.
+//! Interactive and scripted device provisioning.
 //!
-//! Lists every plugged candidate (serial faces and CircuitPython
-//! drives), shows its honest state (suzu / unknown / blank),
+//! Lists every connected candidate (serial devices and CircuitPython
+//! drives), reports its state (suzu / unknown / blank),
 //! offers the class's faceplates, and installs by the class's reliable
 //! path: CircuitPython drives get file copies with read-back verify;
-//! REPL faces get the proven push.
+//! REPL devices use native raw-REPL file transfer.
 
 use crate::catalog::Catalog;
 use crate::probe;
@@ -21,7 +21,7 @@ struct FaceplateDecl {
 /// The faceplates declared in the repo, keyed by class id.
 fn faceplates_for(class: &str) -> Vec<FaceplateDecl> {
     let mut out = Vec::new();
-    // A class owns its dresses: hardware/classes/<class>/faceplates/*/
+    // Faceplates are stored under hardware/classes/<class>/faceplates/*/.
     let root = crate::paths::hardware_dir().join("classes");
     let Ok(entries) = std::fs::read_dir(&root) else {
         return out;
@@ -80,7 +80,7 @@ pub(crate) fn mint_v7() -> String {
     )
 }
 
-/// Candidate kinds, in the Keeper's vocabulary.
+/// Supported candidate types.
 enum State {
     Suzu { version: String, faceplate: Option<String> },
     Firefly { version: Option<String> },
@@ -199,7 +199,7 @@ fn drive_candidates() -> Vec<Candidate> {
 
 /// CircuitPython reloads (and briefly dismounts the drive) when its
 /// CDC port is opened or a file changes — the install waits out the
-/// remount and retries writes. Getting stuck here is how drives die.
+/// remount and retries writes to avoid leaving a partially written drive.
 fn wait_drive(drive: &str, secs: u64) -> anyhow::Result<()> {
     let marker = std::path::PathBuf::from(format!("{drive}/boot_out.txt"));
     let end = std::time::Instant::now() + std::time::Duration::from_secs(secs);
@@ -281,10 +281,14 @@ fn install_rp2040_once(drive: &str) -> anyhow::Result<()> {
                 suzu["device_id"] = serde_json::Value::String(id.to_string());
                 println!("  identity preserved: {id}");
             }
-    if suzu.get("device_id").map(|v| v == "assigned at adoption (preserved from earlier provisioning when present)").unwrap_or(false) || suzu.get("device_id").is_none() {
+    let identity_is_placeholder = suzu
+        .get("device_id")
+        .and_then(|value| value.as_str())
+        .is_none_or(|id| id.starts_with("assigned "));
+    if identity_is_placeholder {
         let id = mint_v7();
         suzu["device_id"] = serde_json::Value::String(id.clone());
-        println!("  identity minted: {id}");
+        println!("  identity assigned: {id}");
     }
 
     // The class's suzu-d firmware ships with the tool.
@@ -302,22 +306,21 @@ fn install_rp2040_once(drive: &str) -> anyhow::Result<()> {
         }
         println!("  OK {name} ({} bytes verified)", back.len());
     }
-    println!("  CircuitPython reloads automatically — the face starts on its own");
+    println!("  CircuitPython reloads automatically and starts the faceplate");
     Ok(())
 }
 
-fn install_esp8266(
+pub(crate) fn install_esp8266(
     port: &str,
     device_id: Option<&str>,
     faceplate: Option<&str>,
     class: &str,
 ) -> anyhow::Result<()> {
     // The proven installer, now native: backup-first, chunked writes,
-    // per-file verify, soft reboot — the raw-REPL engine the house
-    // speaks itself, no interpreter needed on the host.
-    let (dress_dir, dress_name, dress_mount, dress_version) =
-        resolve_dress(class, faceplate.unwrap_or("numerals"))?;
-    println!("  faceplate bundle: {dress_name} v{dress_version}");
+    // per-file verification, and soft reboot using the native raw-REPL engine.
+    let (faceplate_dir, faceplate_name, faceplate_mount, faceplate_version) =
+        resolve_faceplate_bundle(class, faceplate.unwrap_or("numerals"))?;
+    println!("  faceplate bundle: {faceplate_name} v{faceplate_version}");
 
     let mut repl = crate::repl::Repl::open(port)?;
     let files = repl.list_files()?;
@@ -326,7 +329,7 @@ fn install_esp8266(
         // An unreadable filesystem is a diagnosis, not a blank check.
         // (The esp8266 arrives here only after erase_flash + write_flash
         // through its own recovery procedure — `--fresh` in spirit.)
-        println!("  fresh filesystem — writing the first dress");
+        println!("  fresh filesystem — installing the first faceplate");
     }
     repl.backup_files(&files, port)?;
 
@@ -336,13 +339,13 @@ fn install_esp8266(
         "companion": "firefly",
         "family": family,
         "variant": variant,
-        "faceplate": dress_name,
+        "faceplate": faceplate_name,
         "adopted": today(),
-        "dress_version": dress_version,
+        "dress_version": faceplate_version,
     });
     let suzu = {
         let mut s = suzu;
-        if let Some(m) = &dress_mount {
+        if let Some(m) = &faceplate_mount {
             s["mount"] = serde_json::Value::String(m.clone());
         }
         if let Some(id) = device_id.filter(|id| !id.is_empty()) {
@@ -352,10 +355,9 @@ fn install_esp8266(
         s
     };
 
-    // The class's suzu-d firmware ships with the tool; the dress
-    // carries its own bootstrap, bytecode, and art. A missing file
-    // fails here, before any write — a dress that cannot be read is
-    // not a dress to push.
+    // The class firmware ships with the tool. The faceplate bundle
+    // contains its bootstrap, bytecode, and assets. Read every source
+    // file before writing anything to the device.
     let fw = crate::paths::firmware_dir().join("suzu-d/esp8266-oled-v2");
     let mut payload: Vec<(String, Vec<u8>)> = Vec::new();
     for name in ["boot.py", "firefly_oled_v2.py", "icons.py", "profont_10.py"] {
@@ -369,12 +371,12 @@ fn install_esp8266(
     for name in ["main.py", "face.mpy"] {
         payload.push((
             name.to_string(),
-            std::fs::read(dress_dir.join(name))
-                .map_err(|e| anyhow::anyhow!("read dress {name}: {e}"))?,
+            std::fs::read(faceplate_dir.join(name))
+                .map_err(|e| anyhow::anyhow!("read faceplate file {name}: {e}"))?,
         ));
     }
-    for art in bundle_bins(&dress_dir)? {
-        payload.push((art.clone(), std::fs::read(dress_dir.join(&art))?));
+    for art in bundle_bins(&faceplate_dir)? {
+        payload.push((art.clone(), std::fs::read(faceplate_dir.join(&art))?));
     }
     for stale in ["main.mpy", "face.py"] {
         if files.iter().any(|f| f == stale) {
@@ -391,18 +393,18 @@ fn install_esp8266(
     Ok(())
 }
 
-/// The T-Display's own path: the C display driver stays frozen on the
-/// board; adoption replaces the application files (suzu.json, the
-/// bootstrap, the face's bytecode) and preserves the deed.
-fn install_tdisplay(
+/// T-Display provisioning keeps the installed C display driver and replaces
+/// the application files (suzu.json, the
+/// bootstrap, and faceplate bytecode) while preserving device identity.
+pub(crate) fn install_tdisplay(
     port: &str,
     device_id: Option<&str>,
     faceplate: Option<&str>,
     class: &str,
 ) -> anyhow::Result<()> {
-    let (dress_dir, dress_name, dress_mount, dress_version) =
-        resolve_dress(class, faceplate.unwrap_or("aurora"))?;
-    println!("  faceplate bundle: {dress_name} v{dress_version}");
+    let (faceplate_dir, faceplate_name, faceplate_mount, faceplate_version) =
+        resolve_faceplate_bundle(class, faceplate.unwrap_or("aurora"))?;
+    println!("  faceplate bundle: {faceplate_name} v{faceplate_version}");
 
     let mut repl = crate::repl::Repl::open(port)?;
     let files = repl.list_files()?;
@@ -415,9 +417,8 @@ fn install_tdisplay(
     }
     repl.backup_files(&files, port)?;
 
-    // Never wipe a deed by silence: keep what the device carries. The
-    // file may be spaced (our own writes) or compact (the face's
-    // ujson) — serde handles both, never a format guess.
+    // Preserve the device ID already stored on the device. serde handles
+    // both pretty-printed and compact JSON.
     let existing = repl.read_file("suzu.json").ok();
     let existing: Option<serde_json::Value> = existing
         .as_deref()
@@ -428,8 +429,7 @@ fn install_tdisplay(
         id.map(|v| v.as_str().unwrap_or_default().is_empty()).unwrap_or(true)
     } {
         bail!(
-            "suzu.json exists but gave no device_id — refusing to write \
-             an idless dress over a known device (pass the id explicitly)"
+            "suzu.json contains no device_id — pass the ID explicitly before installing"
         );
     }
     let device_id = device_id
@@ -451,9 +451,9 @@ fn install_tdisplay(
         "companion": "firefly",
         "family": family,
         "variant": variant,
-        "faceplate": dress_name,
-        "mount": dress_mount,
-        "dress_version": dress_version,
+        "faceplate": faceplate_name,
+        "mount": faceplate_mount,
+        "dress_version": faceplate_version,
         "adopted": today(),
     });
     if let Some(id) = &device_id {
@@ -465,8 +465,8 @@ fn install_tdisplay(
     for name in ["main.py", "face.mpy"] {
         payload.push((
             name.to_string(),
-            std::fs::read(dress_dir.join(name))
-                .map_err(|e| anyhow::anyhow!("read dress {name}: {e}"))?,
+            std::fs::read(faceplate_dir.join(name))
+                .map_err(|e| anyhow::anyhow!("read faceplate file {name}: {e}"))?,
         ));
     }
     // A leftover source from an older push would shadow the bytecode.
@@ -479,15 +479,14 @@ fn install_tdisplay(
         repl.write_file(name, data)?;
     }
     repl.soft_reboot()?;
-    println!("rebooted — the face should answer its HELLO on the bus");
+    println!("rebooted — waiting for the faceplate HELLO response");
     Ok(())
 }
 
-/// A dress id -> (bundle directory, faceplate name, mount side, this
-/// hang's version), resolved from the class's own faceplate
-/// manifests. Variant-type faceplates declare their hangs in the
+/// Resolve an install ID to its bundle directory, faceplate name,
+/// mount side, and version. Variant faceplates declare mounts in the
 /// manifest; single-type faceplates bundle at their own root.
-fn resolve_dress(
+fn resolve_faceplate_bundle(
     class: &str,
     faceplate: &str,
 ) -> anyhow::Result<(std::path::PathBuf, String, Option<String>, String)> {
@@ -584,8 +583,7 @@ fn today() -> String {
 
 pub fn run(catalog: &Catalog, args: &[String]) -> anyhow::Result<()> {
     // The scripted path: `suzu prepare PORT [FACEPLATE] [--id ID]` —
-    // how a fresh deployment adopts a face with no prompts and no
-    // interpreter on the host.
+    // provision a fresh device without prompts or a host interpreter.
     if let Some(port) = args.iter().find(|a| !a.starts_with('-')).cloned() {
         return run_direct(catalog, &port, args);
     }
@@ -638,16 +636,16 @@ fn verify_and_report(port: &str) {
             json.get("version").and_then(|v| v.as_str()).unwrap_or("?"),
             json.get("device_id").and_then(|v| v.as_str()).unwrap_or("?")
         ),
-        None => println!("  no identity yet — the face may need a moment; run `suzu scan`"),
+        None => println!("  no identity yet — the device may still be starting; run `suzu scan`"),
     }
 }
 
 fn run_interactive(catalog: &Catalog) -> anyhow::Result<()> {
-    println!("suzu prepare — adopt a firefly");
+    println!("suzu prepare — install device firmware");
     let mut candidates = drive_candidates();
     candidates.extend(serial_candidates(catalog));
     if candidates.is_empty() {
-        println!("  no candidates — plug a firefly in (data cable, not charge-only)");
+        println!("  no candidate devices; use a data-capable USB cable");
         return Ok(());
     }
     for (i, c) in candidates.iter().enumerate() {
@@ -673,7 +671,7 @@ fn run_interactive(catalog: &Catalog) -> anyhow::Result<()> {
 
     let plates = faceplates_for(&class);
     let faceplate = if plates.is_empty() {
-        println!("  no faceplates declared for {class} — the suzu-d firmware is the face");
+        println!("  no optional faceplates declared for {class}; using the suzu-d display");
         None
     } else if plates.len() == 1 {
         println!("  faceplate: {} (only one — selected)", plates[0].name);

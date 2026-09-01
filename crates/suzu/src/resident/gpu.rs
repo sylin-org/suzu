@@ -3,10 +3,10 @@
 //! Windows: the GPU Engine performance counters, the same source Task
 //! Manager reads — vendor-agnostic (NVIDIA, AMD, Intel, USB display
 //! adapters all publish here). The 3D engines are summed and clamped;
-//! that is the honest "how busy is the graphics silicon" number.
+//! that is the reported graphics processor utilization.
 //!
-//! No GPU, no counters, non-Windows: `None` — and the face draws a
-//! dash, because "not measured" and "zero" are different truths.
+//! No GPU, missing counters, or a non-Windows host returns `None`. The
+//! display renders this as a dash so it remains distinct from zero utilization.
 
 #[cfg(windows)]
 pub fn capture() -> Option<u8> {
@@ -36,7 +36,7 @@ mod pdh {
     }
 
     // The query lives for the process: performance counters need a
-    // collection interval between reads, which the ground cadence
+    // collection interval between reads, which the host-metrics interval
     // (~2 s) provides after the prime tick.
     static QUERY: OnceLock<Mutex<Option<Query>>> = OnceLock::new();
 
@@ -99,7 +99,7 @@ mod pdh {
             // Each item names an engine instance (WIDE strings):
             // pid_…_luid_…_phys_…_eng_…_engtype_3D. Sum the 3D engines
             // (the graphics work; copy/codec engines would double-count
-            // the same silicon) and clamp — the face is a percentage.
+            // the same silicon), then clamp the percentage to 100.
             let mut sum: f64 = 0.0;
             for i in 0..count as usize {
                 let item = &*items.add(i);

@@ -1,9 +1,9 @@
-//! Suzu workbench — the keeper's window.
+//! Suzu Workbench client interface.
 //!
-//! ADR-0004 is the law here: one store, views as pure functions from
+//! ADR-0004 defines one store and views as pure functions from
 //! store slices to DOM. No event handler writes state into the page;
-//! a handler only sends a command and lets the wire's own facts
-//! re-render the truth. Nothing is polled, nothing is patched in,
+//! a handler only sends a command and lets stream events
+//! re-render the interface. Nothing is polled or patched directly,
 //! nothing races a timer.
 
 (async () => {
@@ -32,10 +32,10 @@
     (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
-  // The Rust shell speaks to the Resident; the webview never makes a
+  // The Rust shell communicates with the Resident; the webview never makes a
   // cross-origin request, so CORS does not exist in this product.
-  // The shell's door takes the body as a string: JSON is written at
-  // this boundary, once, so every command may speak plain objects.
+  // The shell command accepts the body as a string. Serialize JSON at
+  // this boundary so callers can pass plain objects.
   async function call(method, path, body) {
     const payload = body == null ? null
       : typeof body === "string" ? body : JSON.stringify(body);
@@ -58,7 +58,7 @@
       if (!r.ok) toast(d.message ?? `${path} failed (${r.status})`);
       return d;
     } catch (e) {
-      toast(`the house did not answer: ${e.message ?? e}`);
+      toast(`the Resident did not respond: ${e.message ?? e}`);
       return {};
     }
   }
@@ -84,19 +84,19 @@
   }
 
   // ── the faceplate chooser (ADR-0005) ─────────────────────────────
-  // One ceremony for install/reinstall/swap: when the class declares
+  // One confirmation flow handles install, reinstall, and faceplate changes. When the class declares
   // faceplates, the dialog shows them — captured previews where they
   // exist, pictogram and words where they don't. When none are
   // declared, it is exactly the plain confirm it always was.
   const MOUNT_CAPTIONS = {
-    "usb-down": "hangs upwards — connector at the bottom",
-    "usb-up": "hangs downwards — connector at the top",
+    "usb-down": "display upright — connector at the bottom",
+    "usb-up": "display inverted — connector at the top",
     "usb-left": "left-mounted — connector at the left",
     "usb-right": "right-mounted — connector at the right",
   };
 
-  // Four truths, drawn once: the workbench renders the connector's
-  // edge from the declaration — no per-faceplate mounting art.
+  // Render the connector edge from the mount declaration instead of
+  // maintaining separate art for each faceplate.
   function mountPictogram(mount) {
     const stub = {
       "usb-down": '<rect x="26" y="27" width="12" height="3" rx="1"/>',
@@ -134,7 +134,7 @@
   let fpResolve = null;
   let fpChoice = null;
 
-  function ceremony(classId, title, detail) {
+  function confirmFaceplateChange(classId, title, detail) {
     const list = Store.state.faceplates.get(classId) ?? [];
     if (list.length === 0) {
       return confirmChange(title, detail).then((ok) => ({ ok, faceplate: null }));
@@ -164,12 +164,11 @@
     fpResolve = null;
   });
 
-  // ── the watched lane (ADR-0004 amendment) ────────────────────────
+  // ── media subscription (ADR-0004 amendment) ──────────────────────
   // Entering Media asserts the watch; leaving arms a 10-second
-  // linger — come back and nothing is sent, stay away and the faces
-  // rest their blinks. Repeats are free house-side, and a snapshot
-  // that says unwatched while Media is open re-asserts (resident
-  // restarts reset the flag; the window heals it).
+  // delay. Returning within the delay keeps the subscription active.
+  // If a Resident restart clears the flag while Media is open, the
+  // client subscribes again.
   const MEDIA_LINGER_MS = 10000;
   let mediaLinger = null;
 
@@ -185,7 +184,7 @@
     }, MEDIA_LINGER_MS);
   }
 
-  // ── navigation — client UI state, not house state ────────────────
+  // ── navigation: client-only UI state ──────────────────────────────
   function setView(name) {
     activeView = name;
     if (name === "media") {
@@ -209,16 +208,16 @@
     tab.addEventListener("click", () => setView(tab.dataset.view));
   });
 
-  // ── the lampband: stream health and the pause flag ───────────────
+  // ── header: stream health and pause state ─────────────────────────
   function renderChrome() {
     const { stream, service, devices } = Store.state;
     const connected = stream === "connected";
-    document.body.classList.toggle("runtime-held", connected && service.paused);
+    document.body.classList.toggle("runtime-paused", connected && service.paused);
     el.state_word.textContent = !connected
       ? (stream === "connecting" ? "Starting" : "Stopped")
       : service.paused ? "Paused" : "Running";
     el.state_facts.innerHTML = connected
-      ? `<b>${devices.size}</b> ${plural(devices.size, "face")} on the roster`
+      ? `<b>${devices.size}</b> connected ${plural(devices.size, "device")}`
       : "the Resident is not running";
     el.service.textContent = connected ? "Stop service" : "Start service";
     el.service.disabled = serviceBusy;
@@ -238,7 +237,7 @@
   el.wheel.addEventListener("click", () => {
     const verb = Store.state.service.paused ? "resume" : "pause";
     postOrToast("/api/control", { verb });
-    // the Paused fact re-renders the wheel — no local truth
+    // The paused event updates the button through the store.
   });
 
   el.service.addEventListener("click", async () => {
@@ -249,7 +248,7 @@
     try {
       if (connected) {
         const res = await tauri.core.invoke("stop_resident");
-        if (!res.stopped) toast(`the door is still held: ${res.reason}`);
+        if (!res.stopped) toast(`the Resident is still running: ${res.reason}`);
       } else {
         const msg = await tauri.core.invoke("start_resident");
         toast(msg);
@@ -261,31 +260,29 @@
     renderChrome();
   });
 
-  // ── status: the roster, pure from its slices ─────────────────────
+  // ── device status ─────────────────────────────────────────────────
   function sortedDevices() {
     return [...Store.state.devices.values()].sort((a, b) => a.port.localeCompare(b.port));
   }
 
   function deviceCard(row) {
     const rosterEntry = Store.state.roster.get(row.device_id ?? "");
-    // The keeper's formula: a device is LIVE, NEW, or PAUSED — and the
-    // buttons are exactly the ones its state offers, nothing else.
-    // INSTALLING is the roster's own word (a running saga); the window
-    // keeps no shadow of it — the house acks the command and
-    // announces the saga before a click could fade.
-    const saga = rosterEntry?.maintenance;
-    const sagaRunning = saga?.state === "running";
-    const lc = sagaRunning ? "installing" : (row.lifecycle ?? "new");
-    const pill = sagaRunning
+    // Display the lifecycle reported by the Resident and only the
+    // actions explicitly offered for that state. A running maintenance
+    // procedure temporarily displays INSTALLING.
+    const maintenance = rosterEntry?.maintenance;
+    const maintenanceRunning = maintenance?.state === "running";
+    const lc = maintenanceRunning ? "installing" : (row.lifecycle ?? "new");
+    const pill = maintenanceRunning
       ? "INSTALLING"
       : { live: "LIVE", new: "NEW", paused: "PAUSED" }[lc] ?? escapeHtml(lc.toUpperCase());
-    const pillTone = sagaRunning ? "warn" : ({ live: "good", new: "warn", paused: "info" }[lc] ?? "info");
-    const lock = sagaRunning ? "disabled" : "";
-    const currentStep = [...(saga?.steps ?? [])].pop();
-    const sagaLine = sagaRunning
-      ? `<div class="device-saga">installing \u2014 step ${currentStep ? `${currentStep.index} of ${currentStep.total}: ${escapeHtml(currentStep.name)}` : "starting\u2026"}</div>`
-      : saga?.state === "failed"
-        ? `<div class="device-saga">the last ${escapeHtml(saga?.kind ?? "saga")} failed \u2014 see the log, or try again</div>`
+    const pillTone = maintenanceRunning ? "warn" : ({ live: "good", new: "warn", paused: "info" }[lc] ?? "info");
+    const lock = maintenanceRunning ? "disabled" : "";
+    const currentStep = [...(maintenance?.steps ?? [])].pop();
+    const maintenanceLine = maintenanceRunning
+      ? `<div class="device-maintenance">installing \u2014 step ${currentStep ? `${currentStep.index} of ${currentStep.total}: ${escapeHtml(currentStep.name)}` : "starting\u2026"}</div>`
+      : maintenance?.state === "failed"
+        ? `<div class="device-maintenance">the last ${escapeHtml(maintenance?.kind ?? "maintenance procedure")} failed \u2014 see the log, or try again</div>`
         : "";
 
     let line = "";
@@ -294,29 +291,28 @@
         ? `on the stream \u00b7 last data ${row.last_data_s}s ago`
         : "on the stream";
     } else if (lc === "paused") {
-      line = "off the stream - the face rests";
+      line = "paused - not receiving updates";
     } else if (!row.proto) {
       line = `not installed - not on the stream`;
     } else {
       line = "installed - joining the stream\u2026";
     }
 
-    // The currency gate (ADR-0005, amended): a dress older than its
-    // declaration is held at the gate, the exam refusing by name —
-    // and the card offers the remedy, not a wall.
-    const currencyStep = rosterEntry?.admission?.steps?.find((s) => s.name === "currency");
-    const stale = lc === "new" && currencyStep && !currencyStep.ok;
-    if (stale) line = escapeHtml(currencyStep.detail);
+    // If the installed faceplate is older than the declaration, show
+    // the admission failure and offer an update.
+    const versionStep = rosterEntry?.admission?.steps?.find((s) => s.name === "faceplate-version");
+    const stale = lc === "new" && versionStep && !versionStep.ok;
+    if (stale) line = escapeHtml(versionStep.detail);
 
     // The aggregate publishes its legal verbs. This view chooses labels
-    // and order; it does not recreate lifecycle law in JavaScript.
+    // and order; lifecycle rules remain in the Resident.
     const allows = (action) => (row.actions ?? []).includes(action);
     const tools = [
       allows("pause") ? `<button class="ghost-button" data-action="pause" ${lock}>Pause</button>` : "",
       allows("resume") ? `<button class="ghost-button" data-action="resume" ${lock}>Resume</button>` : "",
       allows("identify") ? `<button class="ghost-button" data-action="identify" ${lock}>Identify</button>` : "",
       allows("update") && lc === "new"
-        ? `<button class="ghost-button" data-action="update" ${lock}>Update Dress</button>`
+        ? `<button class="ghost-button" data-action="update" ${lock}>Update Faceplate</button>`
         : allows("update")
           ? `<button class="ghost-button" data-action="faceplate" ${lock}>Faceplate…</button>` : "",
       allows("install")
@@ -347,7 +343,7 @@
         </div>
         <div class="device-facts mono">${escapeHtml(row.family ?? "?")}/${escapeHtml(row.variant ?? "?")} v${escapeHtml(row.version ?? "?")}</div>
         <div class="device-admission">${line}</div>
-        ${sagaLine}
+        ${maintenanceLine}
         <div class="device-actions">${tools}</div>
         </div>
       </article>`;
@@ -359,12 +355,11 @@
     el.status_count.textContent = plural(devices.length, "device");
     el.device_list.innerHTML = devices.map(deviceCard).join("")
       || (stream === "connecting"
-        ? '<div class="empty">Waiting for the house to speak\u2026</div>'
+        ? '<div class="empty">Waiting for the Resident\u2026</div>'
         : stream !== "connected"
           ? '<div class="empty">The Resident is not running \u2014 start the service above.</div>'
-          : '<div class="empty">No faces on the bench — plug one in (data cable, not charge-only).</div>');
-    // A photo that cannot load (no declared image, or the house was
-    // down) is remembered as null — the frame steps aside honestly.
+          : '<div class="empty">No devices connected. Use a data-capable USB cable.</div>');
+    // Cache failed class photos as null to avoid repeatedly loading a missing image.
     el.device_list.querySelectorAll("img.device-photo").forEach((img) => {
       img.onerror = () => Store.putPhoto(img.dataset.class, null);
     });
@@ -384,10 +379,10 @@
     } else if (action === "install") {
       const row = Store.state.devices.get(port);
       await fetchFaceplates(row?.class);
-      const c = await ceremony(
+      const c = await confirmFaceplateChange(
         row?.class,
         `Install firmware on ${port}?`,
-        "The face files return to ship state (its identity is kept), the face restarts, and it is tested before it goes live again. If the board is not running CircuitPython yet, the saga waits for you to hold BOOTSEL and replug — every step appears in the Log.",
+        "The device files are restored to the packaged state while preserving its identity. The device then restarts and runs admission tests. If CircuitPython is not installed, follow the BOOTSEL instructions shown in the Log.",
       );
       if (!c.ok) return;
       const body = {};
@@ -401,24 +396,21 @@
         const d = await deviceAction(port, "identify");
         if (d.message) toast(d.message);
       } finally {
-        // Identify changes no row — no devices fact will follow to
-        // re-render the card, so the ask itself must hand the
-        // button back.
+        // Identify does not change device state, so restore the button here.
         button.disabled = false;
       }
     } else if (action === "update") {
       button.disabled = true;
-      // the held face already runs MicroPython: a dress update, not
-      // an install — files and a nudge, the exam decides the rest.
+      // Update the faceplate files on the existing MicroPython installation.
       const d = await deviceAction(port, "update");
       if (d.message) toast(d.message);
     } else if (action === "faceplate") {
       const row = Store.state.devices.get(port);
       await fetchFaceplates(row?.class);
-      const c = await ceremony(
+      const c = await confirmFaceplateChange(
         row?.class,
-        `Change the dress on ${port}?`,
-        "The face files are rewritten in place and the face re-enters its exam — about a minute, no bootloader. The stream returns only when the tests pass.",
+        `Change the faceplate on ${port}?`,
+        "The faceplate files are rewritten in place, then the device restarts and runs admission tests. No bootloader step is required.",
       );
       if (!c.ok) return;
       const body = {};
@@ -428,19 +420,18 @@
     } else if (action === "factory") {
       const ok = await confirmChange(
         `Factory reset ${port}?`,
-        "Every flash cell is erased and the firmware is rebuilt from the vendored artifacts. The individual's identity is backed up first and restored after, and the face is tested before it goes live again.",
+        "The flash is erased and firmware is restored from packaged artifacts. Device identity is backed up first, restored afterward, and verified by admission tests.",
       );
       if (ok) {
         button.disabled = true;
         await deviceAction(port, "factory_reset");
-        toast(`${port}: factory reset began - follow the steps here`);
+        toast(`${port}: factory reset started; follow the Log for progress`);
       }
     }
   });
 
   // ── log: the journal, newest first ───────────────────────────────
-  // The house's own loudness, colored by the stylesheet's severities:
-  // degraded lines and failed steps are bad; a passed admission is good.
+  // Derive log severity from maintenance and admission result markers.
   const toneOf = (l) =>
     l.text.includes("!!") || l.text.includes("\u2717") ? "bad"
       : l.text.includes("PASSED") ? "good" : "";
@@ -455,20 +446,19 @@
         + `<span class="row-domain">${escapeHtml(l.domain)}</span>`
         + `<span class="line">${escapeHtml(l.text)}</span></div>`;
     }).join("")
-      || '<div class="empty">Nothing has happened yet. Say something.</div>';
+      || '<div class="empty">No events recorded.</div>';
   }
 
   // ── media: frames read from the store, never commanded ───────────
   function renderMedia() {
-    // Only faces the stream actually reaches get a tile: a New or
-    // paused face can never blink, so a pane for it would be a lie.
+    // Show previews only for devices currently streaming frames.
     const devices = sortedDevices().filter((row) => row.streaming);
     const { stream, service } = Store.state;
     el.media_grid.innerHTML = devices.map(mediaPane).join("")
       || (stream !== "connected"
-        ? '<div class="empty">The house is not speaking \u2014 start the service above.</div>'
+        ? '<div class="empty">The Resident is not running \u2014 start the service above.</div>'
         : service.paused
-          ? '<div class="empty">The stream is paused \u2014 resume it to watch the faces.</div>'
+          ? '<div class="empty">The stream is paused \u2014 resume it to view device updates.</div>'
           : '<div class="empty">No faces to watch.</div>');
     const recording = [...Store.state.jobs.values()]
       .filter((j) => j.kind === "record" && j.state === "recording");
@@ -490,8 +480,8 @@
     const age = frame
       ? `frame ${new Date(frame.at).toLocaleTimeString()}`
       : row.streaming
-        ? "waiting for the first blink\u2026"
-        : "the face is not on the stream";
+        ? "waiting for the first frame\u2026"
+        : "the device is not streaming";
     return `
       <article class="media-pane" data-port="${escapeHtml(row.port)}">
         <div class="device-head">
@@ -520,7 +510,7 @@
     }
   });
 
-  // ── about: the published card ────────────────────────────────────
+  // ── product information ───────────────────────────────────────────
   function renderAbout() {
     const { service, devices } = Store.state;
     const connected = Store.state.stream === "connected";
@@ -556,7 +546,7 @@
   async function fetchLinks() {
     try {
       Store.putLinks(await getJSON("/api/destinations"));
-    } catch { /* the card alone is enough when the house sleeps */ }
+    } catch { /* Keep the static product information when the Resident is unavailable. */ }
   }
 
   el.about_links.addEventListener("click", (event) => {
@@ -592,11 +582,11 @@
 
   Store.subscribe((slices) => {
     renderChrome();
-    // The house just answered: re-ask anything that needed it alive.
+    // Retry resources that require a running Resident after reconnecting.
     if (slices.includes("stream") && Store.state.stream === "connected") {
       Store.retryPhotos();
       if (!Store.state.links) fetchLinks();
-      Store.resetFaceplates(); // a fresh house may declare differently
+      Store.resetFaceplates(); // Reload declarations after reconnecting.
     }
     // A fresh snapshot that says unwatched while Media is open means
     // the flag was reset under us (resident restart) — assert again.
@@ -607,12 +597,11 @@
     if (slices.some((s) => routes.includes(s))) renderView();
   });
 
-  // ── first paint: the truth arrives on the wire ───────────────────
+  // ── initial render ────────────────────────────────────────────────
   setView("status");
   fetchLinks();
 
-  // Hidden to the tray is the same as leaving the tab: the faces rest
-  // after the linger unless the keeper comes back.
+  // When hidden to the tray, release the media subscription after the delay.
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) {
       if (activeView === "media" && Store.state.mediaWatched) armMediaLinger();
@@ -623,6 +612,6 @@
     }
   });
 
-  // the surface is up: let the shell show it
+  // Notify the shell that the initial UI is ready.
   tauri?.core?.invoke("ready")?.catch?.(() => {});
 })();

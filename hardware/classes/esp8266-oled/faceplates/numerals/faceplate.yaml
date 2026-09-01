@@ -2,46 +2,45 @@ name: numerals
 class: esp8266-oled
 display_name: BIG!
 blurb: Easy to read from a distance
-version: "2.0.0"                   # the stage grammar — currency-gates the stream (ADR-0005)
+version: "2.0.0"                   # minimum version required by admission (ADR-0005)
 status: beta                       # live on the bench since 2026-08-28
 
-# Ground "report" slots, in the order the face reads them.
+# Metrics reported by the host, in display order.
 # (255 / missing -> drawn as a dash: "not measured", not zero.)
 slots: [cpu, mem, gpu]
 
-# Fast-lane atoms the face consumes; the pulse dividers.
+# High-frequency input used by the pulse dividers.
 extras: [audio.level]
 
-# suzu/1 frames this face answers (see README).
+# suzu/1 frames supported by this faceplate (see README).
 frames: [I, K, G, A, J, S, X, R]
 
-# The ring voice (ADR-0006): what this face can speak. The instance
+# Ring protocol capabilities (ADR-0006). The Resident
 # degrades every say to this dialect before a byte reaches the wire.
 rings:
   qualifiers: true      # dotted signals arrive whole (WARN.disk)
   text: true            # a words channel exists (the band)
 
-# The hangs this face declares. Each variant is a bundle directory
-# beside this manifest, named for its mount; the id is what a dressed
-# face reports and what the currency gate reads; the blurb guides the
-# chooser. The build derives every non-parent hang from the parent's
+# Supported mounts. Each variant is a bundle directory
+# beside this manifest, named for its mount. The id is reported by the
+# device and used by the version check; the blurb is shown in the
+# selector. The build derives every non-parent mount from the parent's
 # source (tools/build_faceplates.py) — regenerate, never hand-edit.
 variants:
   - mount: usb-down
     id: numerals
-    blurb: hangs upwards — the connector sits at the bottom
+    blurb: upright display — connector at the bottom
   - mount: usb-up
     id: numerals-up
-    blurb: hangs downwards — the connector sits at the top
+    blurb: inverted display — connector at the top
 
-# The tool installs what the faceplate declares — files are pushed
-# verbatim, never interpreted. Art lives in the files, not in the tool.
+# The tool installs declared files verbatim without interpreting their contents.
 resources:
   install:
-    - { from: main.py, to: main.py }      # bootstrap: imports face
-    - { from: face.mpy, to: face.mpy }    # the face, as bytecode
+    - { from: main.py, to: main.py }      # bootstrap: imports face.mpy
+    - { from: face.mpy, to: face.mpy }    # faceplate bytecode
     - { from: digits_bebas.bin, to: digits_bebas.bin }
-    - { from: icons.bin, to: icons.bin }  # moment icons (8x8 sprites)
+    - { from: icons.bin, to: icons.bin }  # notification icons (8x8 sprites)
 
 # Font provenance (regenerate, never hand-edit the bin).
 font:

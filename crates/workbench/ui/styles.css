@@ -1,27 +1,20 @@
 /* ==========================================================================
-   Ghostlight workbench.
+   Suzu Workbench color, spacing, motion, and component styles.
 
-   Colour follows the sylin.org night-garden standard: the warm near-black
-   ground, the five-step ink ramp, hairline edges, and the per-project accent
-   carried as --a / --al / --argb so no rule hard-codes a hue. Suzu's accent
-   is the bell's own gold, the fireflies' amber.
-
-   The accent is a signal, not a theme: it means "Ghostlight is acting". At
-   rest the window is entirely neutral, so it brightens only when work is
-   really happening. The spring curve stays shared with the in-page renderer.
+   Project accent values are stored in --a / --al / --argb so component
+   rules do not hard-code the accent color. Neutral colors are used when the
+   service is idle; the accent indicates active work.
    ========================================================================== */
 
 :root {
   color-scheme: dark;
 
-  /* Suzu's published accent: the bell's gold, the fireflies' amber.
-     The single delta from Ghostlight's stylesheet; everything else is
-     the family system verbatim (the porting recipe, ADR-0002). */
+  /* Suzu accent colors. */
   --a: #f0b429;
   --al: #f7d488;
   --argb: 240, 180, 41;
 
-  /* Night-garden ground and ink ramp. */
+  /* Background and foreground color scale. */
   --bg: #0f0e12;
   --bg-2: #0d0c10;
   --ink: #f4f4f5;
@@ -32,7 +25,7 @@
   --line: rgba(255, 255, 255, .06);
   --line-2: rgba(255, 255, 255, .1);
 
-  /* Surfaces are washes over the ground, not boxes. */
+  /* Panel surfaces. */
   --panel: rgba(255, 255, 255, .022);
   --panel-2: rgba(255, 255, 255, .012);
 
@@ -43,34 +36,27 @@
   --cap-execute: #a78bfa;
 
   --amber: #fbbf24;
-  --held: #fbbf24;
+  --warning: #fbbf24;
   --danger: #f87171;
   --ok: #4ade80;
 
   --mono: 'Cascadia Code', 'JetBrains Mono', ui-monospace, Consolas, monospace;
   --sans: 'Segoe UI', system-ui, Arial, sans-serif;
 
-  /*
-   * Motion. The grammar is docs/design/visual-language.md: entrances settle on the spring,
-   * exits fade on ease-out, and only genuine ongoing state breathes.
-   *
-   * The beats are the in-page renderer's frozen visualIdentity, not new numbers. A treatment
-   * that means the same thing in the page and in this window keeps the same tempo, so the
-   * medallion a person sees floating over a page beats at the rate they see here.
-   */
+  /* Motion durations shared with the in-page renderer. */
   --spring: cubic-bezier(.22, 1, .36, 1);
   --calm: cubic-bezier(.4, 0, .2, 1);
 
-  --beat-glance: 150ms;    /* cursor_ms, and the stagger unit for a row of lights */
-  --beat-arrive: 320ms;    /* a signature fading in */
-  --beat-settle: 420ms;    /* a signature settling on the spring */
-  --beat-wait: 1050ms;     /* three waiting lights */
-  --beat-key: 1150ms;      /* the keyboard's illumination rhythm */
-  --beat-particle: 1300ms; /* the workwheel's light particles */
-  --beat-scan: 1450ms;     /* read_scan_ms */
-  --beat-capture: 1500ms;  /* screenshot_ms */
-  --beat-wheel: 2400ms;    /* the workwheel turning */
-  --beat-breathe: 4000ms;  /* border_breathe_ms; scope remains true */
+  --duration-glance: 150ms;    /* cursor_ms, and the stagger unit for a row of lights */
+  --duration-arrive: 320ms;    /* a signature fading in */
+  --duration-settle: 420ms;    /* a signature settling on the spring */
+  --duration-wait: 1050ms;     /* three waiting lights */
+  --duration-key: 1150ms;      /* the keyboard's illumination rhythm */
+  --duration-particle: 1300ms; /* the workwheel's light particles */
+  --duration-scan: 1450ms;     /* read_scan_ms */
+  --duration-capture: 1500ms;  /* screenshot_ms */
+  --duration-wheel: 2400ms;    /* the workwheel turning */
+  --duration-working: 4000ms;  /* active-state indicator cycle */
 
   --band: 58px;
 }
@@ -114,11 +100,11 @@ h1, h2, h3 { margin: 0; font-weight: 400; }
   background: rgb(var(--argb)); box-shadow: 0 0 9px rgba(var(--argb), .5);
   transition: background .9s var(--calm), box-shadow .9s var(--calm);
 }
-body.runtime-working .lamp-halo { opacity: 1; animation: halo-breathe var(--beat-breathe) ease-in-out infinite; }
+body.runtime-working .lamp-halo { opacity: 1; animation: halo-pulse var(--duration-working) ease-in-out infinite; }
 body.runtime-working .lamp-core { box-shadow: 0 0 16px rgba(var(--argb), .85); }
-@keyframes halo-breathe { 0%, 100% { opacity: .55; transform: scale(.9); } 50% { opacity: 1; transform: scale(1.1); } }
-body.runtime-held .lamp-halo { opacity: .9; background: radial-gradient(circle, rgba(251, 191, 36, .32), transparent 66%); }
-body.runtime-held .lamp-core { background: #fbbf24; box-shadow: 0 0 12px rgba(251, 191, 36, .55); }
+@keyframes halo-pulse { 0%, 100% { opacity: .55; transform: scale(.9); } 50% { opacity: 1; transform: scale(1.1); } }
+body.runtime-paused .lamp-halo { opacity: .9; background: radial-gradient(circle, rgba(251, 191, 36, .32), transparent 66%); }
+body.runtime-paused .lamp-core { background: #fbbf24; box-shadow: 0 0 12px rgba(251, 191, 36, .55); }
 body.runtime-attention .lamp-halo,
 body.runtime-blocked .lamp-halo { opacity: 1; background: radial-gradient(circle, rgba(248, 113, 113, .38), transparent 66%); }
 body.runtime-offline .lamp-halo { opacity: .12; background: radial-gradient(circle, rgba(113, 113, 122, .35), transparent 66%); }
@@ -129,7 +115,7 @@ body.runtime-offline .lamp-core { background: var(--faint); box-shadow: none; }
 .state { display: flex; min-width: 0; align-items: baseline; gap: 12px; }
 .state-word { flex: none; color: var(--ink); font-size: 15px; font-weight: 300; letter-spacing: -.01em; }
 body.runtime-working .state-word { color: var(--a); }
-body.runtime-held .state-word { color: var(--held); }
+body.runtime-paused .state-word { color: var(--warning); }
 body.runtime-attention .state-word, body.runtime-blocked .state-word { color: var(--danger); }
 body.runtime-offline .state-word { color: var(--muted); }
 .state-facts { min-width: 0; overflow: hidden; color: var(--muted); font: 400 11px/1 var(--mono); letter-spacing: .02em; text-overflow: ellipsis; white-space: nowrap; }
@@ -178,7 +164,7 @@ body.runtime-offline .state-word { color: var(--muted); }
 #main-content::-webkit-scrollbar { width: 10px; }
 #main-content::-webkit-scrollbar-thumb { border: 3px solid var(--bg); border-radius: 10px; background: #2a2830; }
 .view { display: none; width: min(1180px, 100%); margin: 0 auto; }
-.view.active { display: block; animation: view-in var(--beat-arrive) var(--spring) both; }
+.view.active { display: block; animation: view-in var(--duration-arrive) var(--spring) both; }
 @keyframes view-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 
 .kicker { color: var(--muted); font: 500 9px/1 var(--mono); letter-spacing: .18em; text-transform: uppercase; }
@@ -243,7 +229,7 @@ body.runtime-offline .state-word { color: var(--muted); }
 .outcome { margin-top: 7px; color: var(--muted); font: 500 9px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; }
 .hero.blocked .outcome { color: var(--danger); }
 
-.swap-in { animation: swap-in var(--beat-settle) var(--spring) both; }
+.swap-in { animation: swap-in var(--duration-settle) var(--spring) both; }
 @keyframes swap-in { from { opacity: 0; transform: translateY(-9px); } to { opacity: 1; transform: none; } }
 
 /* ------------------------------- the queue ------------------------------ */
@@ -275,8 +261,8 @@ body.runtime-offline .state-word { color: var(--muted); }
    the caution tone on its duration so the eye finds it while scrolling; the words stay in the
    activity cell for anyone who stops. */
 .row-dur.unsettled { color: var(--amber); }
-.row.landing { animation: land var(--beat-settle) var(--spring) both; }
-@keyframes land { from { height: 0; opacity: 0; transform: translateY(-10px); } to { height: 42px; opacity: 1; transform: none; } }
+.row.entering { animation: row-enter var(--duration-settle) var(--spring) both; }
+@keyframes row-enter { from { height: 0; opacity: 0; transform: translateY(-10px); } to { height: 42px; opacity: 1; transform: none; } }
 
 .empty { padding: 30px 4px; color: var(--muted); font-size: 12.5px; }
 
@@ -293,22 +279,22 @@ body.runtime-offline .state-word { color: var(--muted); }
 .row.blocked .med-mini svg { stroke: var(--danger); }
 
 /* Inner treatments animate only while the action is genuinely running. */
-.hero.live .spin { animation: spin var(--beat-wheel) linear infinite; transform-origin: 12px 12px; }
+.hero.live .spin { animation: spin var(--duration-wheel) linear infinite; transform-origin: 12px 12px; }
 @keyframes spin { to { transform: rotate(360deg); } }
-.hero.live .particle { animation: particle var(--beat-particle) ease-in-out infinite; }
+.hero.live .particle { animation: particle var(--duration-particle) ease-in-out infinite; }
 .hero.live .particle:nth-of-type(2) { animation-delay: 433ms; }
 .hero.live .particle:nth-of-type(3) { animation-delay: 866ms; }
 @keyframes particle { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
-.hero.live .keylight { animation: keylight var(--beat-key) ease-in-out infinite; }
-.hero.live .keylight:nth-of-type(2) { animation-delay: var(--beat-glance); }
+.hero.live .keylight { animation: keylight var(--duration-key) ease-in-out infinite; }
+.hero.live .keylight:nth-of-type(2) { animation-delay: var(--duration-glance); }
 .hero.live .keylight:nth-of-type(3) { animation-delay: 300ms; }
 @keyframes keylight { 0%, 100% { opacity: .28; } 45% { opacity: 1; } }
-.hero.live .scanline { animation: scan var(--beat-scan) ease-in-out infinite; }
+.hero.live .scanline { animation: scan var(--duration-scan) ease-in-out infinite; }
 @keyframes scan { 0% { opacity: 0; transform: translateY(-6px); } 25%, 75% { opacity: 1; } 100% { opacity: 0; transform: translateY(6px); } }
-.hero.live .glint { animation: glint var(--beat-capture) ease-in-out infinite; }
+.hero.live .glint { animation: glint var(--duration-capture) ease-in-out infinite; }
 @keyframes glint { 0%, 70%, 100% { opacity: 0; } 82% { opacity: 1; } }
-.hero.live .waitdot { animation: waitdot var(--beat-wait) ease-in-out infinite; }
-.hero.live .waitdot:nth-of-type(2) { animation-delay: var(--beat-glance); }
+.hero.live .waitdot { animation: waitdot var(--duration-wait) ease-in-out infinite; }
+.hero.live .waitdot:nth-of-type(2) { animation-delay: var(--duration-glance); }
 .hero.live .waitdot:nth-of-type(3) { animation-delay: 300ms; }
 @keyframes waitdot { 0%, 100% { opacity: .2; } 50% { opacity: 1; } }
 
@@ -318,7 +304,7 @@ body.runtime-offline .state-word { color: var(--muted); }
 }
 .integration-ready { --integration-tone: var(--ok); }
 .integration-available { --integration-tone: var(--cap-action); }
-.integration-needs-attention { --integration-tone: var(--held); }
+.integration-needs-attention { --integration-tone: var(--warning); }
 .integration-not-detected { --integration-tone: var(--muted); }
 .tile {
   position: relative; display: flex; min-width: 0; flex-direction: column; gap: 4px;
@@ -356,7 +342,7 @@ body.runtime-offline .state-word { color: var(--muted); }
 .manual-setup code { display: block; margin-top: 7px; color: var(--faint); font: 400 9.5px/1.4 var(--mono); word-break: break-all; }
 .manual-setup pre {
   max-height: 180px; overflow: auto; margin: 7px 0 0; padding: 8px;
-  border: 1px solid var(--line); border-radius: 6px; background: var(--ground);
+  border: 1px solid var(--line); border-radius: 6px; background: var(--bg);
   color: var(--ink-3); font: 400 9.5px/1.45 var(--mono); white-space: pre-wrap; word-break: break-word;
 }
 .integration-product-actions { margin-top: auto; padding-top: 2px; border-top: 1px solid var(--line); }
@@ -368,10 +354,10 @@ body.runtime-offline .state-word { color: var(--muted); }
 .severity { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font: 500 9px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; }
 .severity .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
 .severity.passing .dot { background: var(--ok); }
-.severity.warning .dot { background: var(--held); }
+.severity.warning .dot { background: var(--warning); }
 .severity.failing .dot { background: var(--danger); }
 .severity.passing { color: var(--ok); }
-.severity.warning { color: var(--held); }
+.severity.warning { color: var(--warning); }
 .severity.failing { color: var(--danger); }
 
 .strip { display: flex; align-items: center; justify-content: space-between; gap: 22px; margin-top: 22px; padding: 16px; border: 1px solid var(--line); border-radius: 11px; background: var(--panel-2); }
@@ -380,7 +366,7 @@ body.runtime-offline .state-word { color: var(--muted); }
 .colophon { margin: 22px 0 0; color: var(--faint); font: 400 10.5px/1.6 var(--mono); }
 
 /* ---------------------------- command palette --------------------------- */
-.palette-backdrop { position: fixed; inset: 0; z-index: 30; display: grid; padding: 14vh 20px 20px; background: rgba(9, 8, 11, .66); justify-items: center; align-items: start; backdrop-filter: blur(4px); animation: fade-in var(--beat-glance) ease-out both; }
+.palette-backdrop { position: fixed; inset: 0; z-index: 30; display: grid; padding: 14vh 20px 20px; background: rgba(9, 8, 11, .66); justify-items: center; align-items: start; backdrop-filter: blur(4px); animation: fade-in var(--duration-glance) ease-out both; }
 .palette-box { width: min(620px, 100%); overflow: hidden; border: 1px solid var(--line-2); border-radius: 12px; background: #17161b; box-shadow: 0 28px 80px rgba(0, 0, 0, .55); }
 .palette-input { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 0 14px; height: 46px; border-bottom: 1px solid var(--line); }
 .palette-input svg { width: 16px; height: 16px; fill: none; stroke: var(--muted); stroke-width: 1.8; }
@@ -397,10 +383,10 @@ kbd { padding: 2px 6px; border: 1px solid var(--line-2); border-radius: 4px; col
 .palette-empty { padding: 22px; color: var(--muted); font-size: 12.5px; text-align: center; }
 
 /* ------------------------------ toast, dialog --------------------------- */
-.toast { position: fixed; right: 18px; bottom: 18px; z-index: 40; max-width: 420px; padding: 11px 14px; border: 1px solid var(--line-2); border-radius: 9px; color: var(--ink-2); background: #17161b; box-shadow: 0 18px 50px rgba(0, 0, 0, .45); font-size: 12px; animation: toast-in var(--beat-arrive) var(--spring) both; }
+.toast { position: fixed; right: 18px; bottom: 18px; z-index: 40; max-width: 420px; padding: 11px 14px; border: 1px solid var(--line-2); border-radius: 9px; color: var(--ink-2); background: #17161b; box-shadow: 0 18px 50px rgba(0, 0, 0, .45); font-size: 12px; animation: toast-in var(--duration-arrive) var(--spring) both; }
 .toast.error { border-color: rgba(248, 113, 113, .45); color: #fecaca; background: #241419; }
 @keyframes toast-in { from { opacity: 0; transform: translateY(8px) scale(.98); } to { opacity: 1; transform: none; } }
-.dialog-backdrop { position: fixed; inset: 0; z-index: 50; display: grid; padding: 20px; background: rgba(9, 8, 11, .72); place-items: center; backdrop-filter: blur(4px); animation: fade-in var(--beat-glance) ease-out both; }
+.dialog-backdrop { position: fixed; inset: 0; z-index: 50; display: grid; padding: 20px; background: rgba(9, 8, 11, .72); place-items: center; backdrop-filter: blur(4px); animation: fade-in var(--duration-glance) ease-out both; }
 @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
 .confirm-dialog { width: min(420px, calc(100vw - 40px)); padding: 22px; border: 1px solid var(--line-2); border-radius: 14px; background: #17161b; box-shadow: 0 24px 80px rgba(0, 0, 0, .55); }
 .confirm-dialog h2 { margin: 8px 0 6px; color: var(--ink); font-size: 18px; font-weight: 300; letter-spacing: -.02em; }
@@ -537,7 +523,7 @@ kbd { padding: 2px 6px; border: 1px solid var(--line-2); border-radius: 4px; col
 .tcg .card-rules { margin: 0; font-size: 12px; line-height: 1.5; color: var(--ink-3); }
 .tcg .card-foot { border-top: 1px solid var(--line-2); padding: 7px 0 9px; display: flex; align-items: center; gap: 8px; }
 .tcg .card-foot .flavor { font-size: 9.5px; font-style: italic; color: #6a6f80; }
-/* Sheen and foil. Both ride --mx/--my/--holo, which the pointer sets and releases. */
+/* Pointer-driven card highlight layers use --mx, --my, and --holo. */
 .tcg .holo, .tcg .holo2 {
   position: absolute; inset: 0; z-index: 4; border-radius: 18px;
   pointer-events: none; transition: opacity .3s;
@@ -713,7 +699,7 @@ kbd { padding: 2px 6px; border: 1px solid var(--line-2); border-radius: 4px; col
 }
 .setting-choice:disabled { opacity: .75; }
 
-/* A real switch: track plus thumb, sibling to a visually-hidden input the label still owns. */
+/* Switch track and thumb beside a visually hidden labeled input. */
 .toggle { flex: none; position: relative; display: inline-flex; margin-top: 1px; cursor: pointer; }
 .toggle input {
   position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
@@ -754,7 +740,7 @@ kbd { padding: 2px 6px; border: 1px solid var(--line-2); border-radius: 4px; col
 .about-facts dd.down { color: var(--muted); }
 
 /* ── Discover pane deltas ── */
-/* The trailing auto column holds the .row-actions cell (passage + star). */
+/* The trailing auto column contains row actions. */
 .row.discover { grid-template-columns: 24px 150px minmax(0, 1fr) minmax(0, 1fr) 90px 90px auto; }
 @media (max-width: 820px) {
   .row.discover { grid-template-columns: 24px 120px minmax(0, 1fr) 90px auto; }
@@ -842,7 +828,7 @@ kbd { padding: 2px 6px; border: 1px solid var(--line-2); border-radius: 4px; col
 }
 .modal-backdrop[hidden] { display: none; }
 .modal {
-  background: var(--ground, #0f0e12); border: 1px solid rgba(96, 165, 250, 0.35);
+  background: var(--bg, #0f0e12); border: 1px solid rgba(96, 165, 250, 0.35);
   border-radius: 12px; padding: 22px 26px; max-width: 420px; text-align: center;
 }
 .modal h2 { margin: 0 0 10px 0; font-size: 18px; }
@@ -890,7 +876,7 @@ body.readonly .readonly-badge { display: inline-block; padding: 2px 10px;
 .action-note.verdict.warn { color: var(--attention, #fbbf24); }
 .action-note.verdict.bad { color: #f87171; }
 
-/* ── Trust pane (cycle 1 WP6): ceremony + audit ─────────────────────── */
+/* ── Trust configuration and audit log ──────────────────────────────── */
 .fp-compare { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 12px 0; }
 .fp-box { border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px;
   display: flex; flex-direction: column; gap: 8px; }
@@ -918,7 +904,7 @@ body.readonly #audit-refresh, body.readonly #invite-mint { display: none !import
   background: none; color: var(--dim, #8b8b94); padding: 0 2px; opacity: .6; }
 .row-star:hover, .row-star.pinned { opacity: 1; color: var(--a, var(--a)); }
 
-/* ── Honest glass (cycle 1 WP9) ─────────────────────────────────────── */
+/* ── Connection-status rows ─────────────────────────────────────────── */
 .row.glass-rung { grid-template-columns: 24px 120px minmax(0, 1fr) 90px; cursor: pointer; }
 .row.glass-rung.up { border-left-color: var(--ok, #4ade80); }
 .row.glass-rung.down { border-left-color: #f87171; }
@@ -932,10 +918,7 @@ body.readonly .trust-actions, body.readonly #form-create,
 body.readonly #form-join, body.readonly #form-unlock,
 body.readonly #form-destroy { display: none !important; }
 
-/* --------------------------------------------------------------------------
-   suzu: the roster, the trail camera. The family's tokens do the styling;
-   these rules only arrange them.
-   -------------------------------------------------------------------------- */
+/* Suzu device status and media layouts. */
 
 .queue-meta { font-size: 11.5px; color: var(--muted); letter-spacing: .02em; }
 
@@ -950,7 +933,7 @@ body.readonly #form-destroy { display: none !important; }
 .device-facts { font-size: 11.5px; color: var(--ink-3); }
 .device-facts b { color: var(--ink-2); font-weight: 500; }
 .device-admission { font-size: 11px; color: var(--muted); }
-.device-saga { font-size: 11px; color: var(--al); }
+.device-maintenance { font-size: 11px; color: var(--al); }
 .device-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
 .device-actions .ghost-button, .device-actions .danger-button { font-size: 11.5px; padding: 5px 10px; }
 
@@ -970,7 +953,7 @@ body.readonly #form-destroy { display: none !important; }
   display: flex; flex-direction: column; gap: 9px; align-items: flex-start;
 }
 .media-frame {
-  /* Each device owns a square tile; its frame streams at real size
+  /* Each device uses a square tile; its frame streams at real size
      and fits inside, pixel-crisp, however small or large it is. */
   width: 256px; height: 256px; object-fit: contain;
   image-rendering: pixelated; border-radius: 8px;
@@ -987,14 +970,10 @@ body.readonly #form-destroy { display: none !important; }
 
 .view-pad { padding: 26px 40px; }
 
-/* Suzu's card tint: the bell's gold, declared as a class so the CSP
-   never sees an inline style. */
+/* Suzu card tint, declared as a class to avoid inline styles. */
 .tcg-suzu { --argb: 240, 180, 41; }
 
-/* ── the faceplate chooser (ADR-0005) ──────────────────────────────
-   The dress and the hang: captured previews where they exist, the
-   connector pictogram drawn from the declared mount, the words that
-   carry the choice when nothing was captured yet. */
+/* Faceplate chooser (ADR-0005): previews, mount pictograms, and labels. */
 .fp-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; margin: 12px 0 4px; }
 .fp-card {
   text-align: left; padding: 10px; border-radius: 10px;

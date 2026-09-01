@@ -3,5 +3,5 @@
   "companion": "firefly",
   "family": "rp2040-matrix",
   "variant": "matrix",
-  "device_id": "assigned at adoption (preserved from pre-suzu provisioning when present)"
+  "device_id": "assigned during provisioning (preserved when already present)"
 }

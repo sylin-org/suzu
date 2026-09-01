@@ -1,7 +1,7 @@
 # boot.py - Firefly OLED v2 boot script
 # Runs before main.py
 #
-# Fireflies are USB-tethered by design: the host (suzu) sends all
+# These displays are USB-tethered: the host sends all
 # commands over serial. Disabling WiFi saves ~70mA and removes an unused
 # attack surface.
 import network

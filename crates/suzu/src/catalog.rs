@@ -35,8 +35,8 @@ pub struct DisplayZone {
 /// One display's zones: (y_from, y_to, phosphor) rows of the panel.
 pub type DisplayZones = Vec<(usize, usize, [u8; 3])>;
 
-/// A declared faceplate (ADR-0005): the wire id, the human side, the
-/// hang. `based_on` marks a derived bundle (regenerated, never
+/// A declared faceplate (ADR-0005): protocol ID, display metadata, and
+/// mount. `based_on` marks a derived bundle (regenerated, never
 /// hand-edited); `has_preview` says whether a captured preview ships.
 #[derive(Debug, Deserialize)]
 struct RingsDecl {
@@ -58,17 +58,15 @@ struct FaceplateDecl {
     display_name: Option<String>,
     #[serde(default)]
     blurb: Option<String>,
-    /// The dress version the family ships — what a face wearing any
-    /// hang of it reports in its descriptor. The currency gate
-    /// (ADR-0005) holds a face whose worn version is older.
+    /// The faceplate version reported by every mount variant. Admission
+    /// rejects devices that report an older version.
     #[serde(default)]
     version: Option<String>,
     #[serde(default)]
     rings: Option<RingsDecl>,
-    /// Present on a variant-type faceplate: one entry per hang, each
-    /// naming the mount, the wire id of the dressed face, and a blurb
-    /// that guides the chooser. Absent on a single-type faceplate —
-    /// one dress, bundled at the faceplate's own root.
+    /// Present on a variant faceplate: one entry per mount, each naming
+    /// its install ID and description. Absent on a single-variant
+    /// faceplate, whose bundle is stored at the faceplate root.
     #[serde(default)]
     variants: Option<Vec<VariantDecl>>,
 }
@@ -79,15 +77,14 @@ struct VariantDecl {
     id: String,
     #[serde(default)]
     blurb: Option<String>,
-    /// This hang's own version, when it diverges from the family's.
+    /// This mount variant's version, when it differs from the default.
     #[serde(default)]
     version: Option<String>,
 }
 
 /// Scan a faceplates root (`<repo>/faceplates/<class-dir>/<id>/`).
-/// A bundle without a parseable declaration is skipped with a word —
-/// the catalog never guesses.
-/// The bundle directory name for a mount: `usb-left` hangs from the
+/// A bundle without a parseable declaration is skipped with a diagnostic.
+/// Map mount `usb-left` to the
 /// `left-mount/` bundle beside the faceplate's manifest.
 fn mount_dir_name(mount: &str) -> String {
     let side = mount.strip_prefix("usb-").unwrap_or(mount);
@@ -95,7 +92,7 @@ fn mount_dir_name(mount: &str) -> String {
 }
 
 fn scan_faceplates(root: PathBuf) -> Vec<FaceplateInfo> {
-    // The root's own entries are the faces: <class>/faceplates/<face>/
+    // Root entries are faceplates: <class>/faceplates/<faceplate>/
     let mut out = Vec::new();
     let Ok(faces) = std::fs::read_dir(&root) else {
         return out;
@@ -114,7 +111,7 @@ fn scan_faceplates(root: PathBuf) -> Vec<FaceplateInfo> {
         };
         let display_name = decl.display_name.clone().unwrap_or_else(|| decl.name.clone());
         match decl.variants {
-            // Variant type: one dress per declared hang, bundled in
+            // Variant type: one bundle per declared mount, stored in
             // its own mount directory beside the manifest.
             Some(variants) if !variants.is_empty() => {
                 for v in &variants {
@@ -142,7 +139,7 @@ fn scan_faceplates(root: PathBuf) -> Vec<FaceplateInfo> {
                     });
                 }
             }
-            // Single type: one dress, bundled at the faceplate's root.
+            // Single type: one bundle at the faceplate root.
             _ => {
                 let has_preview = face_dir.join("preview.gif").exists()
                     || face_dir.join("preview.png").exists();
@@ -164,9 +161,7 @@ fn scan_faceplates(root: PathBuf) -> Vec<FaceplateInfo> {
     out
 }
 
-/// The ring voice a faceplate declares (ADR-0006): what the instance
-/// may say to this face, and whether it announces integration. A
-/// declaration that says nothing is heard whole.
+/// Ring protocol capabilities declared by a faceplate (ADR-0006).
 #[derive(Debug, Clone, Copy, serde::Serialize)]
 pub struct RingDialect {
     /// dotted signals arrive whole (WARN.disk)
@@ -184,8 +179,8 @@ impl Default for RingDialect {
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct FaceplateInfo {
     pub id: String,
-    /// The faceplate's own name — the identity a dressed face reports,
-    /// before the mount flattens it into an install id.
+    /// The faceplate name reported by the device, before the mount is
+    /// incorporated into the installation identifier.
     pub faceplate: String,
     pub class: String,
     pub display_name: String,
@@ -207,13 +202,12 @@ pub struct DisplaySpec {
     pub zones: Vec<DisplayZone>,
 }
 
-/// The parsed `frame:` section — what raw bytes a J shot carries and
-/// how the host turns them into pixels. This is the only per-device
-/// decoding knowledge in the whole tool: one generic decoder reads it,
-/// so a new face ships with a manifest entry, never a code change.
+/// The parsed `frame:` section defines the bytes returned by a J capture and
+/// how the host decodes them into pixels. Device-specific decoding belongs in
+/// the manifest so new faceplates do not require decoder code changes.
 #[derive(Debug, Clone, Deserialize)]
 pub struct FrameSpec {
-    /// Bytes on the wire — the whole-frame gate for the J ack.
+    /// Exact byte count required for a complete J response frame.
     pub size: usize,
     /// `mvlsb` (1-bit column bytes, 8 vertical px, D0 = top) | `rgb24`.
     pub format: String,
@@ -331,8 +325,7 @@ impl Catalog {
             let mut classes = Vec::new();
             let mut index: HashMap<u16, Vec<(Option<u16>, usize)>> = HashMap::new();
             let mut manifests: HashMap<String, ClassManifest> = HashMap::new();
-            // A class owns its dresses: each class directory carries
-            // its faceplates beside its manifest.
+            // Each class directory contains its faceplates beside its manifest.
             let mut faceplates = Vec::new();
             for dir in &class_dirs {
                 faceplates.extend(scan_faceplates(dir.join("faceplates")));
@@ -414,10 +407,9 @@ impl Catalog {
     }
 
     /// One declared faceplate of a class, by id.
-    /// The dress a face reports: its faceplate's name and its mount
-    /// (a single-type faceplate reports none). This is the currency
-    /// question's resolution — the flattened ids are for installs.
-    pub fn dress(
+    /// Resolve the faceplate name and mount reported by a device to an
+    /// installable faceplate variant ID.
+    pub fn installed_faceplate(
         &self,
         class_id: &str,
         faceplate: &str,
@@ -467,7 +459,7 @@ impl Catalog {
             .or_else(|| seed_class_for(vid, pid))
     }
 
-    /// The frame law of a class: what its J shot carries and how to
+    /// The frame format of a class: what its J capture carries and how to
     /// decode it.
     pub fn frame(&self, class_id: &str) -> Option<&FrameSpec> {
         self.manifests.get(class_id).and_then(|m| m.frame.as_ref())

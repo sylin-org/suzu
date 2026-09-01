@@ -1,26 +1,20 @@
-//! The devices domain — the manager of minded devices, and the
-//! consumers of published ground.
+//! Devices-domain state, serial sessions, and host-metrics publishing.
 //!
 //! Each live device owns a session thread that owns its port
-//! exclusively: stream translation, the frame lane, the trail-camera
-//! record, and the admission test all ride that one thread, because a
-//! serial port answers one master. Whether the stream *flows* is not
-//! this domain's decision — the roster grants the subscription
-//! (ADR-0003), and this domain merely obeys the gate.
+//! exclusively. Stream translation, capture, recording, and admission
+//! tests run on that thread because a serial port has one owner.
+//! The registry controls whether the session streams (ADR-0003).
 //!
-//! The actor's law (ADR-0004): **the loop only routes.** Nothing here
-//! waits on a face — a session answers through its mailbox, the frame
-//! lane publishes on the house's own cadence, and a stuck face
-//! degrades only that face. The read model rides the wire whole:
-//! whenever the rows change, one `Devices` fact replaces every
-//! client's slice.
+//! The actor loop only routes commands and events (ADR-0004). Blocking
+//! serial operations run in session threads. Whenever rows change, one
+//! `Devices` event replaces the client's device collection.
 
 use super::admission;
 use super::device::{Device, DeviceAction, DeviceOrder, DeviceState, MaintenanceOrder};
-use super::events::{DeviceFacts, DeviceRow, FrameFacts, HouseEvent};
+use super::events::{DeviceFacts, DeviceRow, FrameFacts, ResidentEvent};
 use super::jobs::{Job, Jobs};
-use super::roster::Roster;
-use super::sensor::MachineReport;
+use super::registry::DeviceRegistry;
+use super::sensor::HostMetrics;
 use crate::catalog::{Catalog, DisplayZones, FrameSpec, RingDialect};
 use serde::Serialize;
 use serialport::SerialPort;
@@ -32,68 +26,56 @@ use std::time::{Duration, Instant};
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::{broadcast::Sender, mpsc};
 
-/// The media lane's cadence, house-enforced: at most one capture in
-/// flight per face (the session thread is serial by construction) and
-/// one blink per `FRAME_PERIOD` — no client cadence can flood the wire
-/// because the client commands nothing about *how* the lane runs
-/// (ADR-0004). The lane is *watched* (the amendment): it blinks only
-/// while a window asserts the watch.
+/// Automatic capture interval. A session permits one capture at a time
+/// and captures only while a client requests media (ADR-0004).
 const FRAME_PERIOD: Duration = Duration::from_secs(2);
-/// A frame older than this is not a frame: the shot door fails
-/// honestly instead of serving a memory of the face.
+/// Frames older than this limit are rejected by the screenshot API.
 const MAX_FRAME_AGE: Duration = Duration::from_secs(5);
-/// The session mailbox is bounded: a session that cannot keep up is a
-/// stuck session, and a full mailbox disposes it loudly (law: every
-/// channel has capacity, every overload a journal line).
-/// The session's keepalive beat: a suzu face rests after 10 s of
-/// silence, the ancestor idles to its fireflies — a frame every 5 s
-/// holds either face.
+/// Keepalive interval. Firmware enters its idle state after 10 seconds
+/// without host data, so active sessions send at least every 5 seconds.
 const KEEPALIVE_PERIOD: Duration = Duration::from_secs(5);
-/// The session tick (~5 Hz): the mailslot is picked, the substrate
-/// pulled, then the loop naps — ending early the moment a new ask is
-/// slapped, so a say never waits for the beat.
+/// The session tick (~5 Hz): take a pending request, read current host
+/// state, then wait. A new request interrupts the wait.
 const TICK_PERIOD: Duration = Duration::from_millis(200);
 
-/// The substrate (ADR-0006): the machine's freshest state, shared.
-/// The sensor's facts land here as they land; sessions pull on their
-/// own tick and send whatever is newer than the last they sent. The
-/// substrate is never full and never delivered - it is only true.
+/// Shared cache of the latest host state (ADR-0006).
+/// Sensors update it and sessions send values newer than their last read.
 #[derive(Default)]
-pub struct Substrate {
-    ground: Mutex<Option<(u64, Arc<MachineReport>)>>,
+pub struct HostStateCache {
+    metrics: Mutex<Option<(u64, Arc<HostMetrics>)>>,
     pulse: Mutex<Option<(u64, String, u8)>>,
     next_gen: std::sync::atomic::AtomicU64,
 }
 
-impl Substrate {
-    pub fn set_ground(&self, g: Arc<MachineReport>) {
-        let ggen = self.next_gen.fetch_add(1, Ordering::Relaxed) + 1;
-        *self.ground.lock().expect("substrate lock") = Some((ggen, g));
+impl HostStateCache {
+    pub fn set_metrics(&self, metrics: Arc<HostMetrics>) {
+        let generation = self.next_gen.fetch_add(1, Ordering::Relaxed) + 1;
+        *self.metrics.lock().expect("host state lock") = Some((generation, metrics));
     }
 
     pub fn set_pulse(&self, axis: String, value: u8) {
-        let ggen = self.next_gen.fetch_add(1, Ordering::Relaxed) + 1;
-        *self.pulse.lock().expect("substrate lock") = Some((ggen, axis, value));
+        let generation = self.next_gen.fetch_add(1, Ordering::Relaxed) + 1;
+        *self.pulse.lock().expect("host state lock") = Some((generation, axis, value));
     }
 
-    /// The newest ground published after `sent` - stamps `sent` on the way out.
-    pub fn ground_since(&self, sent: &mut u64) -> Option<Arc<MachineReport>> {
-        let cell = self.ground.lock().expect("substrate lock");
-        let (ggen, g) = cell.as_ref()?;
-        if *ggen > *sent {
-            *sent = *ggen;
-            Some(Arc::clone(g))
+    /// Return host metrics newer than `sent`, updating `sent` when consumed.
+    pub fn metrics_since(&self, sent: &mut u64) -> Option<Arc<HostMetrics>> {
+        let cell = self.metrics.lock().expect("host state lock");
+        let (generation, metrics) = cell.as_ref()?;
+        if *generation > *sent {
+            *sent = *generation;
+            Some(Arc::clone(metrics))
         } else {
             None
         }
     }
 
-    /// The newest pulse published after `sent` - stamps `sent` on the way out.
+    /// Return the newest pulse after `sent`, updating `sent` when consumed.
     pub fn pulse_since(&self, sent: &mut u64) -> Option<(String, u8)> {
-        let cell = self.pulse.lock().expect("substrate lock");
-        let (ggen, axis, value) = cell.as_ref()?;
-        if *ggen > *sent {
-            *sent = *ggen;
+        let cell = self.pulse.lock().expect("host state lock");
+        let (generation, axis, value) = cell.as_ref()?;
+        if *generation > *sent {
+            *sent = *generation;
             Some((axis.clone(), *value))
         } else {
             None
@@ -101,38 +83,36 @@ impl Substrate {
     }
 }
 
-/// An ask: high-priority, sticky until the session picks it. A new ask
-/// replaces the one waiting - the newest wins.
+/// A high-priority session request. A new request replaces any pending request.
 #[derive(Debug)]
-pub enum Ask {
-    Ring { signal: String, words: Vec<String>, urgency: u8 },
+pub enum SessionRequest {
+    DisplayNotification { signal: String, words: Vec<String>, urgency: u8 },
     Record { job_id: String, secs: u32, fps: u32 },
     Admission,
 }
 
-/// The face's pickup slot (ADR-0006): slap an ask and leave - quick,
-/// never blocks, never full. The newest ask replaces whatever sat
-/// there; the session picks it on its tick. The substrate is not
-/// posted here at all: it is state the session pulls (see Substrate).
+/// Non-blocking single-item session mailbox (ADR-0006).
+/// The newest request replaces the pending request. Host state is read
+/// separately from `HostStateCache`.
 #[derive(Debug, Default)]
-pub struct Mailslot {
-    ask: Mutex<Option<Ask>>,
+pub struct SessionMailbox {
+    request: Mutex<Option<SessionRequest>>,
     wake: Condvar,
 }
 
-impl Mailslot {
-    pub fn slap(&self, ask: Ask) {
-        *self.ask.lock().expect("mailslot lock") = Some(ask);
+impl SessionMailbox {
+    pub fn submit(&self, request: SessionRequest) {
+        *self.request.lock().expect("session mailbox lock") = Some(request);
         self.wake.notify_one();
     }
 
-    pub fn pick(&self) -> Option<Ask> {
-        self.ask.lock().expect("mailslot lock").take()
+    pub fn take(&self) -> Option<SessionRequest> {
+        self.request.lock().expect("session mailbox lock").take()
     }
 
-    /// The tick's nap: ends early when a new ask is slapped.
-    pub fn nap(&self, timeout: Duration) {
-        let guard = self.ask.lock().expect("mailslot lock");
+    /// Wait for the next tick or until a request arrives.
+    pub fn wait(&self, timeout: Duration) {
+        let guard = self.request.lock().expect("session mailbox lock");
         if guard.is_some() {
             return;
         }
@@ -140,24 +120,23 @@ impl Mailslot {
     }
 }
 
-/// The ring dialect this session's face declared (ADR-0006): the
-/// instance degrades every say to it before a byte reaches the wire.
+/// Ring-protocol capabilities declared by the installed faceplate (ADR-0006).
 #[derive(Debug, Clone, Copy)]
-pub struct RingVoice {
+pub struct RingCapabilities {
     pub qualifiers: bool,
     pub text: bool,
 }
 
 impl RingDialect {
-    pub fn voice(&self) -> RingVoice {
-        RingVoice {
+    pub fn capabilities(&self) -> RingCapabilities {
+        RingCapabilities {
             qualifiers: self.qualifiers,
             text: self.text,
         }
     }
 }
 
-/// The devices read model plus the service facts the door needs — one
+/// Device read model and service state returned by the API.
 /// round trip for the snapshot fact (ADR-0004).
 #[derive(Debug, Clone, Serialize)]
 pub struct DevicesSnapshot {
@@ -167,16 +146,16 @@ pub struct DevicesSnapshot {
     pub frames: Vec<FrameFacts>,
 }
 
-/// The watched lane's verdict, for the door's reply: whether the flag
-/// moved, and how many faces are blinking now.
+/// Result of changing automatic media capture.
 #[derive(Debug, Clone, Serialize)]
 pub struct WatchReport {
     pub changed: bool,
-    pub blinking: usize,
+    #[serde(rename = "blinking")]
+    pub active_captures: usize,
 }
 
-/// The stream toggle's verdict, for the door's reply: whether the
-/// pause flag moved, and how many minded ports the stream touches.
+/// Result of changing global streaming: whether the pause flag changed
+/// and how many tracked ports are affected.
 #[derive(Debug, Clone, Serialize)]
 pub struct StreamReport {
     pub changed: bool,
@@ -297,43 +276,36 @@ pub fn parse_say(sentence: &str, ports: &[String]) -> SayParse {
 }
 
 pub enum DevicesCmd {
-    Mind(DeviceFacts),
+    Track(DeviceFacts),
     Gone { port: String },
     /// The read model, taken by the owning domain. Answers at once —
     /// the loop routes, it never waits.
     Snapshot { reply: mpsc::Sender<DevicesSnapshot> },
     /// The newest frame for a port, under the freshness bound. An
-    /// honest error when the face has not blinked lately.
+    /// error when no recent frame is available.
     LatestFrame { port: String, reply: mpsc::Sender<anyhow::Result<Vec<u8>>> },
     /// Save the newest frame into the captures folder; replies the path.
     CaptureSave { port: String, reply: mpsc::Sender<anyhow::Result<String>> },
-    /// The control chirp: stop streaming and release the ports (the
-    /// faces fall idle into their animations), then re-open and
-    /// re-publish. In-memory only — it dies with the process.
+    /// Stop streaming and release ports, or reopen them on resume.
+    /// This state resets when the process restarts.
     Pause { reply: mpsc::Sender<StreamReport> },
     Resume { reply: mpsc::Sender<StreamReport> },
-    /// The watched lane (ADR-0004 amendment): a window asserted (or
-    /// released) its watch on the media lane. The reply is optional —
-    /// the wire's own release on last-client-departure needs no ack.
+    /// Enable or disable automatic captures for media clients.
     WatchMedia { on: bool, reply: Option<mpsc::Sender<WatchReport>> },
-    /// The trail camera, on the owning session. Acks whether the
+    /// Request a saved screenshot from the owning session. Reports whether the
     /// session took the job; the verdict travels as Job facts.
     RecordStart { port: String, job_id: String, secs: u32, fps: u32, reply: mpsc::Sender<anyhow::Result<()>> },
-    /// Re-run the admission exam through the owning session.
+    /// Re-run admission tests through the owning session.
     AdmissionRetry { port: String, reply: mpsc::Sender<anyhow::Result<()>> },
-    /// The keeper lifted one device off the stream (per-device pause):
-    /// the gate closes, the session stays, the face falls to its
-    /// garden. Resume re-subscribes without a re-test.
-    /// A targeted say (ADR-0006): one face takes the stage. The
-    /// target arrives already resolved; the session degrades the
-    /// say to the face's declared dialect.
+    /// Send one targeted display message (ADR-0006), adjusted to the
+    /// faceplate's declared ring capabilities.
     Say {
         port: String,
         signal: String,
         text: Option<String>,
         reply: mpsc::Sender<anyhow::Result<()>>,
     },
-    /// One keeper vocabulary for every presentation. The minded-device
+    /// Shared device-action vocabulary for every client. The device
     /// aggregate decides whether the action is legal and returns an
     /// order; this actor only enacts it.
     Act {
@@ -342,9 +314,7 @@ pub enum DevicesCmd {
         faceplate: Option<String>,
         reply: mpsc::Sender<anyhow::Result<()>>,
     },
-    /// The saga's own end — it loops back through the door so the
-    /// devices domain (which owns the sessions) respawns the face.
-    /// The saga's task re-identifies off-loop and its facts ride in.
+    /// Return maintenance results and re-identified device facts.
     MaintenanceFinished {
         port: String,
         device_id: String,
@@ -353,85 +323,79 @@ pub enum DevicesCmd {
     },
 }
 
-/// Ports a maintenance saga currently owns. The watcher consults
-/// this before touching a port: a probe's DTR/RTS toggle mid-saga is
-/// a hard reset under the push — two masters on one port, the oldest
-/// disease on the bench (ADR-0002).
-pub(crate) fn held_ports() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
+/// Ports currently reserved by maintenance. The watcher skips them so
+/// probe DTR/RTS changes cannot reset a device during writes (ADR-0002).
+pub(crate) fn reserved_ports() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
     use std::sync::OnceLock;
-    static HELD: OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+    static RESERVED: OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
         OnceLock::new();
-    HELD.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
+    RESERVED.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
 }
 
 pub struct Devices {
-    events: Sender<HouseEvent>,
-    door: mpsc::Sender<DevicesCmd>,
-    roster: Arc<std::sync::RwLock<Roster>>,
+    events: Sender<ResidentEvent>,
+    command_tx: mpsc::Sender<DevicesCmd>,
+    registry: Arc<std::sync::RwLock<DeviceRegistry>>,
     catalog: Arc<Catalog>,
     devices: BTreeMap<String, Device>,
     sessions: BTreeMap<String, SessionHandle>,
     jobs: Arc<Jobs>,
-    /// The frame lane's cache: the newest frame per port, and when it
-    /// was taken. The shot doors read it; freshness is the truth test.
+    /// Newest captured frame and timestamp per port.
     frames: BTreeMap<String, (Instant, String)>,
-    /// port → (kind, faceplate) while a saga runs (ADR-0005).
+    /// port → (kind, faceplate) while maintenance runs (ADR-0005).
     in_maintenance: BTreeMap<String, (String, Option<String>)>,
-    /// Auto-dress attempts per port since the last successful attach:
-    /// a dress that will not bump must not loop the house (ADR-0005).
-    auto_dress: BTreeMap<String, u8>,
+    /// Automatic faceplate-update attempts per port since the last successful attach.
+    auto_faceplate_updates: BTreeMap<String, u8>,
     paused: bool,
-    /// The watched lane's echo (ADR-0004 amendment): the gate's flag,
-    /// read by the session threads at wire speed.
+    /// Whether a media client currently requests automatic captures.
     media_watched: Arc<AtomicBool>,
-    /// The machine's freshest state (ground + pulses) - sessions pull
-    /// it on their tick (ADR-0006).
-    substrate: Arc<Substrate>,
+    /// Latest host metrics and pulses read by sessions (ADR-0006).
+    host_state: Arc<HostStateCache>,
     rows_dirty: bool,
 }
 
 struct SessionHandle {
-    slot: Arc<Mailslot>,
+    mailbox: Arc<SessionMailbox>,
     close: Arc<AtomicBool>,
     streaming: Arc<AtomicBool>,
-    blinks: bool,
+    supports_capture: bool,
     join: Option<std::thread::JoinHandle<()>>,
 }
 
 impl Devices {
     pub fn new(
-        events: Sender<HouseEvent>,
-        door: mpsc::Sender<DevicesCmd>,
+        events: Sender<ResidentEvent>,
+        command_tx: mpsc::Sender<DevicesCmd>,
         catalog: Arc<Catalog>,
-        roster: Arc<std::sync::RwLock<Roster>>,
+        registry: Arc<std::sync::RwLock<DeviceRegistry>>,
         jobs: Arc<Jobs>,
-        substrate: Arc<Substrate>,
+        host_state: Arc<HostStateCache>,
     ) -> Self {
         Self {
             events,
-            door,
-            roster,
+            command_tx,
+            registry,
             catalog,
-            substrate,
+            host_state,
             devices: BTreeMap::new(),
             sessions: BTreeMap::new(),
             jobs,
             frames: BTreeMap::new(),
             in_maintenance: BTreeMap::new(),
-            auto_dress: BTreeMap::new(),
+            auto_faceplate_updates: BTreeMap::new(),
             paused: false,
             media_watched: Arc::new(AtomicBool::new(false)),
             rows_dirty: false,
         }
     }
 
-    pub async fn run(mut self, mut rx: mpsc::Receiver<DevicesCmd>, mut bus: Receiver<HouseEvent>) {
+    pub async fn run(mut self, mut rx: mpsc::Receiver<DevicesCmd>, mut bus: Receiver<ResidentEvent>) {
         loop {
             tokio::select! {
                 cmd = rx.recv() => {
                     let Some(cmd) = cmd else { break };
                     match cmd {
-                        DevicesCmd::Mind(facts) => self.mind(facts),
+                        DevicesCmd::Track(facts) => self.track(facts),
                         DevicesCmd::Gone { port } => self.gone(&port),
                         DevicesCmd::Snapshot { reply } => {
                             let snap = self.devices_snapshot();
@@ -482,40 +446,32 @@ impl Devices {
                 }
                 ev = bus.recv() => {
                     match ev {
-                        Ok(HouseEvent::StreamAttached { port, .. }) => {
-                            self.auto_dress.remove(&port);
+                        Ok(ResidentEvent::StreamAttached { port, .. }) => {
+                            self.auto_faceplate_updates.remove(&port);
                             if let Some(session) = self.sessions.get(&port) {
                                 session.streaming.store(true, Ordering::Relaxed);
                                 self.rows_dirty = true;
                             }
                         }
-                        Ok(HouseEvent::StreamDetached { port, .. }) => {
+                        Ok(ResidentEvent::StreamDetached { port, .. }) => {
                             if let Some(session) = self.sessions.get(&port) {
                                 session.streaming.store(false, Ordering::Relaxed);
                                 self.rows_dirty = true;
                             }
                         }
-                        // The frame lane loops back through the bus: the
-                        // session publishes, the actor caches for the
-                        // shot doors and the snapshot fact.
-                        Ok(HouseEvent::Frame { port, png }) => {
+                        // Cache session frames for capture requests and snapshots.
+                        Ok(ResidentEvent::Frame { port, png }) => {
                             self.frames.insert(port, (Instant::now(), png));
                         }
-                        // A broadcast ring (ADR-0006): one utterance,
-                        // every live face's mailslot. Targeted says
-                        // ride the Say command; the moments budget
-                        // rides the bus — both take the stage.
-                        Ok(HouseEvent::Ring { signal, label, urgency }) => {
+                        // Broadcast a display notification to every active session.
+                        Ok(ResidentEvent::DisplayNotificationReady { signal, label, urgency }) => {
                             if !self.paused {
-                                self.ring(&signal, &label, urgency);
+                                self.send_notification(&signal, &label, urgency);
                             }
                         }
-                        // The house keeps its own faces current (ADR-0005,
-                        // amended): a Suzu face whose declared dress is
-                        // merely older updates itself — the same dress,
-                        // newer files, the exam after. Ancestors, undeclared
-                        // dresses and factory resets keep their ceremony.
-                        Ok(HouseEvent::AdmissionReport {
+                        // Automatically update a faceplate whose reported
+                        // version is older than the catalog declaration.
+                        Ok(ResidentEvent::AdmissionReport {
                             port,
                             passed: false,
                             steps,
@@ -526,20 +482,20 @@ impl Devices {
                             let failed: Vec<_> =
                                 steps.iter().filter(|s| !s.ok).collect();
                             let stale_declared = failed.len() == 1
-                                && failed[0].name == "currency"
+                                && failed[0].name == "faceplate-version"
                                 && failed[0].detail.contains("older than the declared");
                             let attempts = self
-                                .auto_dress
+                                .auto_faceplate_updates
                                 .entry(port.clone())
                                 .and_modify(|n| *n += 1)
                                 .or_insert(1);
                             if stale_declared
                                 && !self.in_maintenance.contains_key(&port)
                                 && *attempts <= 2
-                                && let Some(dress_id) = self.devices.get(&port)
+                                && let Some(faceplate_id) = self.devices.get(&port)
                                     .and_then(|d| {
                                         self.catalog
-                                            .dress(
+                                            .installed_faceplate(
                                                 d.facts.class.as_deref().unwrap_or_default(),
                                                 d.facts.faceplate.as_deref().unwrap_or_default(),
                                                 d.facts.mount.as_deref(),
@@ -548,12 +504,12 @@ impl Devices {
                                     })
                             {
                                 println!(
-                                    "[house] {port}: dress {dress_id} is stale — updating it (the house keeps its own current)"
+                                    "[devices] {port}: faceplate {faceplate_id} is outdated; starting automatic update"
                                 );
                                 let _ = self.act(
                                     &port,
                                     DeviceAction::Update,
-                                    Some(dress_id),
+                                    Some(faceplate_id),
                                 );
                             }
                         }
@@ -563,12 +519,12 @@ impl Devices {
                     }
                 }
             }
-            // The read model rides the wire whole: one fact replaces
+            // One event replaces
             // every client's slice whenever the rows changed.
             if self.rows_dirty {
                 self.rows_dirty = false;
                 let rows = self.snapshot();
-                let _ = self.events.send(HouseEvent::Devices { rows });
+                let _ = self.events.send(ResidentEvent::Devices { rows });
             }
         }
     }
@@ -586,51 +542,45 @@ impl Devices {
         (spec, zones)
     }
     fn spawn_session(&mut self, facts: &DeviceFacts, identity_store: Option<String>) {
-        // It is a suzu face or it is not on the stream: boards that do
-        // not speak suzu/1 stay minded and New - the remedy is install,
-        // the same ceremony every face walks. No compat dialect exists.
+        // Only suzu/1 devices can stream. Other recognized devices remain
+        // tracked as New until provisioning completes.
         let suzu = facts.proto.as_deref() == Some("suzu/1");
         if !suzu {
             self.rows_dirty = true;
             return;
         }
-        let slot = Arc::new(Mailslot::default());
-        let thread_slot = Arc::clone(&slot);
+        let mailbox = Arc::new(SessionMailbox::default());
+        let thread_mailbox = Arc::clone(&mailbox);
         let (spec, zones) = self.frame_law_of(facts);
-        let blinks = suzu && spec.is_some();
-        // The dialect this face declared (absent or unknown: heard whole)
-        let voice = facts
+        let supports_capture = suzu && spec.is_some();
+        // Use the faceplate's declared ring-protocol capabilities.
+        let ring_capabilities = facts
             .faceplate
             .as_deref()
             .zip(facts.class.as_deref())
             .and_then(|(fp, class)| self.catalog.faceplate(class, fp))
-            .map(|f| f.rings.voice())
-            .unwrap_or(RingVoice { qualifiers: true, text: true });
+            .map(|f| f.rings.capabilities())
+            .unwrap_or(RingCapabilities { qualifiers: true, text: true });
         let streaming = Arc::new(AtomicBool::new(false));
         let close = Arc::new(AtomicBool::new(false));
         let port = facts.port.clone();
         let events = self.events.clone();
         let jobs = Arc::clone(&self.jobs);
         let media_watched = Arc::clone(&self.media_watched);
-        let substrate = Arc::clone(&self.substrate);
+        let host_state = Arc::clone(&self.host_state);
         let device_id = facts.device_id.clone();
         let class = facts.class.clone();
-        // The currency question (ADR-0005): what the face's descriptor
-        // says it wears, vs what the declaration ships. None when the
-        // declaration states no version — then the gate stays open.
-        // The currency question (ADR-0005): what the face's descriptor
-        // says it wears, vs what the declaration ships. A dress the
-        // class does not declare is held like a stale one — the
-        // remedy is the same. None only when the declaration states
-        // no version, or the class declares no faceplates at all.
-        let currency = match (&facts.faceplate, &facts.class) {
+        // Compare the reported faceplate version with the catalog version.
+        // Undeclared faceplates are treated as outdated. Classes with no
+        // faceplates or no declared version skip this admission check.
+        let faceplate_versions = match (&facts.faceplate, &facts.class) {
             (Some(fp), Some(class)) => {
                 let declared =
-                    self.catalog.dress(class, fp, facts.mount.as_deref());
+                    self.catalog.installed_faceplate(class, fp, facts.mount.as_deref());
                 if declared.is_none()
                     && !self.catalog.faceplates_for_class(class).is_empty()
                 {
-                    Some((fp.clone(), None)) // worn, undeclared
+                    Some((fp.clone(), None)) // reported but undeclared
                 } else {
                     declared
                         .and_then(|f| f.version.clone())
@@ -645,15 +595,15 @@ impl Devices {
             .name(format!("session:{port}"))
             .spawn(move || {
                 session_thread(
-                    port, thread_slot, substrate.clone(), close2, streaming2,
-                    suzu, spec, zones, events, jobs, media_watched, voice,
-                    device_id, class, identity_store, currency,
+                    port, thread_mailbox, host_state.clone(), close2, streaming2,
+                    suzu, spec, zones, events, jobs, media_watched, ring_capabilities,
+                    device_id, class, identity_store, faceplate_versions,
                 )
             })
             .ok();
         self.sessions.insert(
             facts.port.clone(),
-            SessionHandle { slot, close, streaming, blinks, join },
+            SessionHandle { mailbox, close, streaming, supports_capture, join },
         );
         self.rows_dirty = true;
     }
@@ -666,14 +616,13 @@ impl Devices {
         handle.join.take()
     }
 
-    /// A ring: every live session tells its face that something
-    /// happened. The frame carries the moment's words after the seq.
-    fn ring(&mut self, signal: &str, label: &str, urgency: u8) {
+    /// Broadcast a display notification to every streaming session.
+    fn send_notification(&mut self, signal: &str, label: &str, urgency: u8) {
         let words: Vec<String> = label.split_whitespace().map(|s| s.to_string()).collect();
         for session in self.sessions.values() {
             if session.streaming.load(Ordering::Relaxed) {
-                let slot = &session.slot;
-                slot.slap(Ask::Ring {
+                let mailbox = &session.mailbox;
+                mailbox.submit(SessionRequest::DisplayNotification {
                     signal: signal.to_string(),
                     words: words.clone(),
                     urgency,
@@ -682,27 +631,23 @@ impl Devices {
         }
     }
 
-    /// The watched lane's gate (ADR-0004 amendment): the window's
-    /// assertion arms the blink; the wire's liveness holds it. Idempotent
-    /// — every Media entry re-asserts, and repeats cost nothing.
+    /// Enable or disable automatic media capture. The operation is idempotent.
     fn watch_media(&mut self, on: bool) -> WatchReport {
         let changed = self.media_watched.swap(on, Ordering::Relaxed) != on;
         if changed {
-            let _ = self.events.send(HouseEvent::MediaWatched { watched: on });
+            let _ = self.events.send(ResidentEvent::MediaWatched { watched: on });
         }
         WatchReport {
             changed,
-            blinking: self
+            active_captures: self
                 .sessions
                 .values()
-                .filter(|s| s.blinks && s.streaming.load(Ordering::Relaxed))
+                .filter(|s| s.supports_capture && s.streaming.load(Ordering::Relaxed))
                 .count(),
         }
     }
 
-    /// Pause: sessions close, ports release, the ground stops. The
-    /// faces fall idle into their animations; the devices stay minded
-    /// so `resume` re-opens without replug.
+    /// Pause all sessions and release serial ports while retaining device state.
     fn pause_stream(&mut self) -> StreamReport {
         if self.paused {
             return StreamReport { changed: false, ports: self.devices.len() };
@@ -713,17 +658,15 @@ impl Devices {
             self.close_session(port);
         }
         self.rows_dirty = true;
-        let _ = self.events.send(HouseEvent::Paused { paused: true });
+        let _ = self.events.send(ResidentEvent::Paused { paused: true });
         println!(
-            "[devices] stream paused — {} port(s) released, faces fall idle (`suzu resume` to restart)",
+            "[devices] stream paused — {} serial port(s) released (`suzu resume` to restart)",
             self.devices.len()
         );
         StreamReport { changed: true, ports: self.devices.len() }
     }
 
-    /// Resume: sessions re-open (each re-taking its admission exam),
-    /// and the publisher republishes its last ground so admitted faces
-    /// redress at once.
+    /// Resume by reopening sessions and repeating admission tests.
     async fn resume_stream(&mut self) -> StreamReport {
         if !self.paused {
             return StreamReport { changed: false, ports: self.devices.len() };
@@ -734,42 +677,39 @@ impl Devices {
         for port in ports {
             let facts = self.devices[&port].facts.clone();
             self.spawn_session(&facts, None);
-            let _ = self.events.send(HouseEvent::DeviceMinded {
+            let _ = self.events.send(ResidentEvent::DeviceTracked {
                 port,
                 device_id: facts.device_id.clone(),
                 class: facts.class.clone(),
                 state: format!("{:?}", DeviceState::Accepted),
             });
         }
-        let _ = self.events.send(HouseEvent::Paused { paused: false });
+        let _ = self.events.send(ResidentEvent::Paused { paused: false });
         StreamReport { changed: true, ports: self.devices.len() }
     }
 
-    fn mind(&mut self, mut facts: DeviceFacts) {
+    fn track(&mut self, mut facts: DeviceFacts) {
         let state = DeviceState::Accepted;
-        // Adoption begins at first sight: a recognized class with no
-        // identity yet is minted one on the spot — and the deed is
-        // written to the face by its own session (below), so it
-        // survives every restart after (ADR-0003: identity is the
-        // name, not the silicon).
-        let minted = facts.class.is_some() && facts.device_id.is_none();
-        if minted {
+        // Assign an ID immediately when a recognized device has none.
+        // The session persists it to the device below.
+        let identity_assigned = facts.class.is_some() && facts.device_id.is_none();
+        if identity_assigned {
             facts.device_id = Some(crate::prepare::mint_v7());
             println!(
-                "[devices] {} minted identity {}",
+                "[devices] {} assigned identity {}",
                 facts.port,
                 facts.device_id.as_deref().unwrap_or("?")
             );
         }
         match self.devices.get(&facts.port) {
             Some(existing) if existing.device_id() == facts.device_id.as_deref() => {
-                let _ = self.events.send(HouseEvent::DeviceHomecoming {
+                let _ = self.events.send(ResidentEvent::DeviceReconnected {
                     port: facts.port.clone(),
                     device_id: facts.device_id.clone().unwrap_or_default(),
                 });
             }
             _ => {
-                let _ = self.events.send(HouseEvent::DeviceMinded {
+                let _ = self.events.send(ResidentEvent::DeviceTracked {
                     port: facts.port.clone(),
                     device_id: facts.device_id.clone(),
                     class: facts.class.clone(),
@@ -781,9 +721,9 @@ impl Devices {
         self.devices
             .insert(facts.port.clone(), Device::new(facts.clone(), now()));
         self.rows_dirty = true;
-        // A paused house stays silent: the session spawns on resume.
+        // Do not start a session while global streaming is paused.
         if !self.paused {
-            let identity_store = if minted { facts.device_id.clone() } else { None };
+            let identity_store = if identity_assigned { facts.device_id.clone() } else { None };
             self.spawn_session(&facts, identity_store);
         }
     }
@@ -792,39 +732,34 @@ impl Devices {
         if let Some(device) = self.devices.remove(port) {
             self.close_session(port);
             self.rows_dirty = true;
-            let _ = self.events.send(HouseEvent::DeviceReleased {
+            let _ = self.events.send(ResidentEvent::DeviceReleased {
                 port: port.to_string(),
                 device_id: device.device_id().map(|s| s.to_string()),
             });
-            // A dead session is not a departure. If the port is still
-            // enumerated, the individual is invited back after a
-            // settle — the roster remembers them, admission decides
-            // again. An unplugged face simply never comes back.
+            // If the port remains enumerated after a session exits, retry it
+            // after a short delay. Unplugged devices are not retried.
             let facts = device.facts.clone();
-            let door = self.door.clone();
+            let command_tx = self.command_tx.clone();
             tokio::spawn(async move {
                 tokio::time::sleep(Duration::from_secs(3)).await;
                 let still_present = crate::enumerate().iter().any(|e| e.name == facts.port);
                 if still_present {
-                    println!("[devices] {} is still on the bench — inviting the individual back", facts.port);
-                    let _ = door.send(DevicesCmd::Mind(facts)).await;
+                    println!("[devices] {} is still connected — retrying the session", facts.port);
+                    let _ = command_tx.send(DevicesCmd::Track(facts)).await;
                 }
             });
         }
     }
 
-    /// The newest frame for a port, under the freshness bound. This is
-    /// the whole capture story (ADR-0004): the house blinks on its own
-    /// cadence, the door serves the cached truth, and a stuck face
-    /// fails honestly in bounded time — here, instantly.
+    /// Return the newest cached frame when it satisfies the freshness limit.
     fn latest_frame(&self, port: &str) -> anyhow::Result<Vec<u8>> {
         let Some((at, png_b64)) = self.frames.get(port) else {
-            anyhow::bail!("{port}: no frame yet — the face has not blinked");
+            anyhow::bail!("{port}: no captured frame is available");
         };
         let age = at.elapsed();
         if age > MAX_FRAME_AGE {
             anyhow::bail!(
-                "{port}: the face last blinked {}s ago — unreachable or stuck",
+                "{port}: the latest frame is {}s old; the device may be unreachable",
                 age.as_secs()
             );
         }
@@ -843,14 +778,11 @@ impl Devices {
         Ok(path)
     }
 
-    /// The trail camera: hand the job to the owning session and ack.
-    /// The registry is the record — progress and the GIF's verdict
-    /// travel as Job facts; the ack only says whether the session
-    /// took the job.
+    /// Start a recording job on the owning session.
     fn record_start(&mut self, port: &str, job_id: &str, secs: u32, fps: u32) -> anyhow::Result<()> {
         let secs = secs.clamp(1, 60);
         let fps = fps.clamp(1, 5);
-        if let Err(e) = self.send_to_session(port, Ask::Record { job_id: job_id.to_string(), secs, fps }) {
+        if let Err(e) = self.send_to_session(port, SessionRequest::Record { job_id: job_id.to_string(), secs, fps }) {
             self.jobs.with(job_id, |j: &mut Job| {
                 j.state = "failed".into();
                 j.label = format!("{e:#}");
@@ -861,21 +793,19 @@ impl Devices {
     }
 
     fn admission_retry(&self, port: &str) -> anyhow::Result<()> {
-        self.send_to_session(port, Ask::Admission)
+        self.send_to_session(port, SessionRequest::Admission)
     }
 
-    /// A targeted say: one face takes the stage, undisturbed. No
-    /// moments budget — the keeper or an application aimed here, and
-    /// the latest ask replaces whatever is showing.
+    /// Send a targeted display message without the broadcast rate limit.
     fn say_to(&mut self, port: &str, signal: &str, text: Option<&str>) -> anyhow::Result<()> {
         let session = self
             .sessions
             .get(port)
             .ok_or_else(|| anyhow::anyhow!("{port}: no live session"))?;
         if !session.streaming.load(Ordering::Relaxed) {
-            anyhow::bail!("{port}: is not on the stream — only a live face hears its name");
+            anyhow::bail!("{port}: is not currently streaming");
         }
-        session.slot.slap(Ask::Ring {
+        session.mailbox.submit(SessionRequest::DisplayNotification {
             signal: signal.to_string(),
             words: text
                 .unwrap_or("")
@@ -887,8 +817,8 @@ impl Devices {
         Ok(())
     }
 
-    /// Ask one minded device to decide a keeper verb, then enact the
-    /// resulting order. Lifecycle and dress rules live on `Device`;
+    /// Validate a device action, then execute the resulting order.
+    /// Lifecycle and faceplate rules live on `Device`;
     /// this actor owns only infrastructure and event publication.
     fn act(
         &mut self,
@@ -900,54 +830,54 @@ impl Devices {
             let device = self
                 .devices
                 .get(port)
-                .ok_or_else(|| anyhow::anyhow!("{port}: no minded device"))?;
+                .ok_or_else(|| anyhow::anyhow!("{port}: no tracked device"))?;
             let in_maintenance = self.in_maintenance.contains_key(port);
             match action {
                 DeviceAction::Pause => {
-                    let mut roster = self
-                        .roster
+                    let mut registry = self
+                        .registry
                         .write()
-                        .map_err(|_| anyhow::anyhow!("roster lock poisoned"))?;
-                    device.pause(&mut roster)?
+                        .map_err(|_| anyhow::anyhow!("registry lock poisoned"))?;
+                    device.pause(&mut registry)?
                 }
                 DeviceAction::Resume => {
-                    let mut roster = self
-                        .roster
+                    let mut registry = self
+                        .registry
                         .write()
-                        .map_err(|_| anyhow::anyhow!("roster lock poisoned"))?;
-                    device.resume(&mut roster)?
+                        .map_err(|_| anyhow::anyhow!("registry lock poisoned"))?;
+                    device.resume(&mut registry)?
                 }
                 DeviceAction::Identify => {
-                    let roster = self
-                        .roster
+                    let registry = self
+                        .registry
                         .read()
-                        .map_err(|_| anyhow::anyhow!("roster lock poisoned"))?;
-                    let individual = device.device_id().and_then(|id| roster.individual(id));
-                    device.identify(individual)?
+                        .map_err(|_| anyhow::anyhow!("registry lock poisoned"))?;
+                    let registered_device = device.device_id().and_then(|id| registry.registered_device(id));
+                    device.identify(registered_device)?
                 }
                 DeviceAction::Install => {
-                    let roster = self
-                        .roster
+                    let registry = self
+                        .registry
                         .read()
-                        .map_err(|_| anyhow::anyhow!("roster lock poisoned"))?;
-                    let individual = device.device_id().and_then(|id| roster.individual(id));
-                    device.install(&self.catalog, faceplate, individual, in_maintenance)?
+                        .map_err(|_| anyhow::anyhow!("registry lock poisoned"))?;
+                    let registered_device = device.device_id().and_then(|id| registry.registered_device(id));
+                    device.install(&self.catalog, faceplate, registered_device, in_maintenance)?
                 }
                 DeviceAction::Update => {
-                    let roster = self
-                        .roster
+                    let registry = self
+                        .registry
                         .read()
-                        .map_err(|_| anyhow::anyhow!("roster lock poisoned"))?;
-                    let individual = device.device_id().and_then(|id| roster.individual(id));
-                    device.update(&self.catalog, faceplate, individual, in_maintenance)?
+                        .map_err(|_| anyhow::anyhow!("registry lock poisoned"))?;
+                    let registered_device = device.device_id().and_then(|id| registry.registered_device(id));
+                    device.update(&self.catalog, faceplate, registered_device, in_maintenance)?
                 }
                 DeviceAction::FactoryReset => {
-                    let roster = self
-                        .roster
+                    let registry = self
+                        .registry
                         .read()
-                        .map_err(|_| anyhow::anyhow!("roster lock poisoned"))?;
-                    let individual = device.device_id().and_then(|id| roster.individual(id));
-                    device.factory_reset(&self.catalog, individual, in_maintenance)?
+                        .map_err(|_| anyhow::anyhow!("registry lock poisoned"))?;
+                    let registered_device = device.device_id().and_then(|id| registry.registered_device(id));
+                    device.factory_reset(&self.catalog, registered_device, in_maintenance)?
                 }
             }
         };
@@ -961,10 +891,10 @@ impl Devices {
                     session.streaming.store(false, Ordering::Relaxed);
                 }
                 self.rows_dirty = true;
-                let _ = self.events.send(HouseEvent::StreamDetached {
+                let _ = self.events.send(ResidentEvent::StreamDetached {
                     device_id,
                     port: port.to_string(),
-                    reason: "paused by the keeper".into(),
+                    reason: "paused by user request".into(),
                 });
             }
             DeviceOrder::Resume { device_id } => {
@@ -972,7 +902,7 @@ impl Devices {
                     session.streaming.store(true, Ordering::Relaxed);
                 }
                 self.rows_dirty = true;
-                let _ = self.events.send(HouseEvent::StreamAttached {
+                let _ = self.events.send(ResidentEvent::StreamAttached {
                     device_id,
                     port: port.to_string(),
                 });
@@ -985,67 +915,63 @@ impl Devices {
         Ok(())
     }
 
-    fn send_to_session(&self, port: &str, ask: Ask) -> anyhow::Result<()> {
+    fn send_to_session(&self, port: &str, request: SessionRequest) -> anyhow::Result<()> {
         let session = self
             .sessions
             .get(port)
             .ok_or_else(|| anyhow::anyhow!("{port}: no live session — is the stream paused?"))?;
-        session.slot.slap(ask);
+        session.mailbox.submit(request);
         Ok(())
     }
 
-    /// Hand the individual to a maintenance saga. The session closes
-    /// (the port must belong to exactly one master), the saga runs
-    /// with the port to itself, and the session respawns afterward —
-    /// its admission exam is the gate back into the stream. The command
-    /// acks as soon as the saga *begins*; its progress arrives as
-    /// MaintenanceStep events and its end as MaintenanceFinished.
+    /// Stop the device session, run maintenance with exclusive serial-port
+    /// access, then restart the session and admission tests. The command
+    /// acknowledges after startup; progress is published as events.
     fn maintenance_begin(&mut self, port: &str, order: MaintenanceOrder) -> anyhow::Result<()> {
-        // The order ships the caller's resolved intent (the house door,
-        // ADR-0007); the live facts below remain the authority.
+        // The order contains the validated caller intent. Current device
+        // facts remain authoritative.
         let MaintenanceOrder { kind, faceplate, .. } = order;
         let kind = kind.as_str();
-// The keeper's verb is "install"; the saga depends on what the
-        // face speaks today - an unknown board needs the full install, a
-        // suzu face just its files back.
+        // Unknown firmware uses provisioning; suzu/1 firmware uses reinstall.
         let speaks_suzu = self
             .devices
             .get(port)
             .and_then(|d| d.facts.proto.as_deref())
             == Some("suzu/1");
         let kind = if kind == "install" && !speaks_suzu {
-            "adopt"
+            "provision"
         } else {
             kind
         };
-        if kind != "install" && kind != "adopt" && kind != "soft" && kind != "factory" {
-            anyhow::bail!("unknown maintenance kind {kind:?} - install | adopt | soft | factory");
+        if kind != "install" && kind != "provision" && kind != "soft" && kind != "factory" {
+            anyhow::bail!(
+                "unknown maintenance kind {kind:?} - install | provision | soft | factory"
+            );
         }
         if self.in_maintenance.contains_key(port) {
-            anyhow::bail!("{port}: a maintenance saga is already running");
+            anyhow::bail!("{port}: a maintenance procedure is already running");
         }
         let Some(device) = self.devices.get(port) else {
-            anyhow::bail!("{port}: no minded device");
+            anyhow::bail!("{port}: no tracked device");
         };
         let Some(device_id) = device.device_id().map(|s| s.to_string()) else {
-            anyhow::bail!("{port}: no device_id — the house mints at identification");
+            anyhow::bail!("{port}: no device_id was assigned during identification");
         };
         let class = device.facts.class.clone();
-        // The dress must be one the class declares — refused by name,
-        // with the vocabulary, per the door contract (ADR-0005).
-        if let Some(dress) = &faceplate {
+        // Validate the faceplate ID against the class catalog.
+        if let Some(faceplate_id) = &faceplate {
             let declared = class
                 .as_deref()
                 .map(|c| self.catalog.faceplates_for_class(c))
                 .unwrap_or_default();
-            if !declared.iter().any(|f| &f.id == dress) {
+            if !declared.iter().any(|f| &f.id == faceplate_id) {
                 let vocab = declared
                     .iter()
                     .map(|f| format!("{:?}", f.id))
                     .collect::<Vec<_>>()
                     .join(", ");
                 anyhow::bail!(
-                    "unknown faceplate {dress:?} — this class declares: {}",
+                    "unknown faceplate {faceplate_id:?} — this class declares: {}",
                     if vocab.is_empty() { "none".to_string() } else { vocab }
                 );
             }
@@ -1053,16 +979,15 @@ impl Devices {
         let vid = device.facts.vid;
         let pid = device.facts.pid;
 
-        // A bare ask (Update Dress) keeps the dress the face wears
-        // when that dress is still declared; anything else falls to
-        // the saga's own default — never a hardcoded friend.
+        // An update without an explicit selection keeps the currently
+        // reported faceplate when it is still declared.
         let faceplate = match faceplate {
             Some(f) => Some(f),
             None => {
-                // the dress the face reports, resolved to its install id
+                // Resolve the reported faceplate and mount to its install ID.
                 self.devices.get(port).and_then(|d| {
                     self.catalog
-                        .dress(
+                        .installed_faceplate(
                             d.facts.class.as_deref().unwrap_or_default(),
                             d.facts.faceplate.as_deref().unwrap_or_default(),
                             d.facts.mount.as_deref(),
@@ -1072,29 +997,27 @@ impl Devices {
             }
         };
 
-        // Detach the stream for the whole saga, then the port itself.
-        let _ = self.events.send(HouseEvent::StreamDetached {
+        // Detach streaming and release the port for maintenance.
+        let _ = self.events.send(ResidentEvent::StreamDetached {
             device_id: device_id.clone(),
             port: port.to_string(),
             reason: format!("maintenance:{kind}"),
         });
-        // The saga needs the port to itself: join the retired session's
-        // thread before the tools open the port — on the saga's own
-        // task, never on this loop.
+        // Join the stopped session thread before maintenance opens the port.
         let joining = self.close_session(port);
         self.in_maintenance
             .insert(port.to_string(), (kind.to_string(), faceplate.clone()));
-        held_ports().lock().unwrap().insert(port.to_string());
+        reserved_ports().lock().unwrap().insert(port.to_string());
         self.rows_dirty = true;
 
-        let _ = self.events.send(HouseEvent::MaintenanceStarted {
+        let _ = self.events.send(ResidentEvent::MaintenanceStarted {
             device_id: device_id.clone(),
             port: port.to_string(),
             kind: kind.to_string(),
         });
 
-        // The saga runs on its own thread (it blocks on tools, drives
-        // and human gates); its ending comes back through the door.
+        // Maintenance runs on a blocking worker; completion returns through
+        // the devices command channel.
         let events = self.events.clone();
         let catalog = Arc::clone(&self.catalog);
         let catalog_fresh = Arc::clone(&self.catalog);
@@ -1103,7 +1026,7 @@ impl Devices {
         let port3 = port2.clone();
         let kind2 = kind.to_string();
         let faceplate2 = faceplate.clone();
-        let door = self.door.clone();
+        let command_tx = self.command_tx.clone();
         tokio::spawn(async move {
             if let Some(join) = joining {
                 let _ = tokio::task::spawn_blocking(move || join.join()).await;
@@ -1115,14 +1038,12 @@ impl Devices {
                 )
             })
             .await
-            .unwrap_or_else(|e| Err(anyhow::anyhow!("saga panicked: {e}")));
+            .unwrap_or_else(|e| Err(anyhow::anyhow!("maintenance task panicked: {e}")));
             let ok = outcome.is_ok();
             if let Err(e) = &outcome {
                 println!("[maintenance] {port3}: failed — {e:#}");
             }
-            // The face needs seconds to boot and compile its source
-            // after the push; the identity probe retries, bounded —
-            // a face that answers suzu/1 rides home with its facts.
+            // Retry identification while the device boots and compiles source.
             let port4 = port3.clone();
             let fresh = tokio::task::spawn_blocking(move || {
                 let mut out = None;
@@ -1140,17 +1061,15 @@ impl Devices {
             })
             .await
             .unwrap_or(None);
-            let _ = door
+            let _ = command_tx
                 .send(DevicesCmd::MaintenanceFinished { port: port3, device_id, ok, fresh })
                 .await;
         });
         Ok(())
     }
 
-    /// The saga's end: the verdict lands on the roster's record. The
-    /// saga's task already re-identified the face off-loop — its facts
-    /// ride in, and the session respawns with the truth instead of the
-    /// memory of it. Its admission exam is the gate back.
+    /// Record maintenance completion, update device facts, restart the
+    /// session, and run admission tests.
     async fn maintenance_finish(
         &mut self,
         port: &str,
@@ -1158,7 +1077,7 @@ impl Devices {
         ok: bool,
         fresh: Option<DeviceFacts>,
     ) {
-        let _ = self.events.send(HouseEvent::MaintenanceCompleted {
+        let _ = self.events.send(ResidentEvent::MaintenanceCompleted {
             device_id: device_id.to_string(),
             kind: self
                 .in_maintenance
@@ -1168,7 +1087,7 @@ impl Devices {
             ok,
         });
         self.in_maintenance.remove(port);
-        held_ports().lock().unwrap().remove(port);
+        reserved_ports().lock().unwrap().remove(port);
         if let Some(session) = self.sessions.get(port) {
             session.streaming.store(false, Ordering::Relaxed);
         }
@@ -1180,17 +1099,16 @@ impl Devices {
             Some(_) => {} // gone or paused meanwhile: the respawn waits
             None => {
                 if self.devices.contains_key(port) {
-                    println!("[maintenance] {port}: the port went quiet after the saga — replug to re-admit");
+                    println!("[maintenance] {port}: the port went quiet after maintenance — replug to re-admit");
                 }
             }
         }
     }
 
-    /// A saga's respawn, re-identified off-loop: the record is updated
-    /// with the truth and the session opens with its admission exam.
+    /// Update device facts after maintenance and restart its session.
     fn session_respawn(&mut self, port: &str, facts: DeviceFacts) {
         let Some(d) = self.devices.get_mut(port) else {
-            return; // the device departed while the ladder ran
+            return; // The device disconnected during maintenance.
         };
         println!(
             "[maintenance] {port}: re-identified as {}/{} — respawning",
@@ -1204,12 +1122,12 @@ impl Devices {
     }
 
     pub fn snapshot(&self) -> Vec<DeviceRow> {
-        let roster = self.roster.read().ok();
+        let registry = self.registry.read().ok();
         self.devices
             .values()
             .map(|d| {
-                let individual = roster.as_ref().and_then(|r| {
-                    d.device_id().and_then(|id| r.individual(id))
+                let registered_device = registry.as_ref().and_then(|r| {
+                    d.device_id().and_then(|id| r.registered_device(id))
                 });
                 let session = self.sessions.get(&d.facts.port);
                 DeviceRow {
@@ -1222,12 +1140,12 @@ impl Devices {
                 device_id: d.facts.device_id.clone(),
                 state: d.state.clone(),
                 actions: d.available_actions(
-                    individual,
+                    registered_device,
                     self.in_maintenance.contains_key(&d.facts.port),
                 ),
                 faceplate: d.facts.faceplate.clone(),
                 mount: d.facts.mount.clone(),
-                lifecycle: individual
+                lifecycle: registered_device
                     .map(|i| i.lifecycle)
                     .map(|l| format!("{l:?}").to_lowercase()),
                 streaming: session
@@ -1265,29 +1183,28 @@ fn captures_dir() -> String {
 #[allow(clippy::too_many_arguments)]
 fn session_thread(
     port: String,
-    slot: Arc<Mailslot>,
-    substrate: Arc<Substrate>,
+    mailbox: Arc<SessionMailbox>,
+    host_state: Arc<HostStateCache>,
     close: Arc<AtomicBool>,
     streaming: Arc<AtomicBool>,
     suzu: bool,
     spec: Option<FrameSpec>,
     zones: DisplayZones,
-    events: Sender<HouseEvent>,
+    events: Sender<ResidentEvent>,
     jobs: Arc<Jobs>,
     media_watched: Arc<AtomicBool>,
-    voice: RingVoice,
+    ring_capabilities: RingCapabilities,
     device_id: Option<String>,
     class: Option<String>,
     identity_store: Option<String>,
-    currency: Option<(String, Option<String>)>,
+    faceplate_versions: Option<(String, Option<String>)>,
 ) {
-    // One master per port, with grace: a retired session's thread may
-    // still be exiting (a capture takes up to 8 s), so the open
-    // retries briefly before declaring the face unreachable.
+    // A previous session thread may still be exiting because capture can take
+    // up to eight seconds. Retry before declaring the port unreachable.
     let mut serial = None;
     for attempt in 0..12 {
         if close.load(Ordering::Relaxed) {
-            return; // retired before it ever opened — the port is free
+            return; // The session was closed before the port opened.
         }
         match open_serial(&port) {
             Ok(p) => {
@@ -1305,24 +1222,23 @@ fn session_thread(
     }
     let mut serial = serial.expect("the retry loop either opened or returned");
     println!(
-        "[sessions] {port}: consumer translating ({})",
-        if suzu { "suzu/1" } else { "unknown" }
+        "[sessions] {port}: session started ({})",
+        if suzu { "suzu/1" } else { "unknown protocol" }
     );
 
-    // The admission exam runs before anything flows. Its verdict goes
-    // to the roster; the roster's StreamAttached opens the gate.
-    let exam_currency = currency
+    // Run admission before enabling streaming.
+    let admission_faceplate_versions = faceplate_versions
         .as_ref()
-        .map(|(w, c)| (w.as_str(), c.as_deref()));
+        .map(|(installed, declared)| (installed.as_str(), declared.as_deref()));
     if suzu {
         let report = admission::run(
             &mut serial,
             class.as_deref(),
             spec.as_ref(),
             &zones,
-            exam_currency,
+            admission_faceplate_versions,
         );
-        let _ = events.send(HouseEvent::AdmissionReport {
+        let _ = events.send(ResidentEvent::AdmissionReport {
             device_id: device_id.clone().unwrap_or_default(),
             port: port.clone(),
             passed: report.passed,
@@ -1330,29 +1246,25 @@ fn session_thread(
         });
     }
 
-    // The deed (ADR-0003, amended): a freshly minted identity is
-    // written to the face the moment its session opens, so the next
-    // boot answers with the name it was given — no ghost per restart.
-    // Identity precedes trust: a face that failed its exam keeps the
-    // name it will pass the retry under.
+    // Persist a newly assigned identity as soon as the session opens.
+    // Identity persists even if admission tests fail.
     if let Some(id) = identity_store {
         let _ = write_line(&mut serial, &format!("J,{{\"device_id\":\"{id}\"}}"));
         std::thread::sleep(Duration::from_millis(300));
     }
 
-    // A session that panics releases the port with a name on the way
-    // out — never a silent thread death holding hardware hostage.
+    // Catch panics so the serial port is released deterministically.
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         session_loop(
-            &mut serial, &slot, &substrate, &close, &streaming, suzu, &port,
-            spec, zones, &events, &jobs, &media_watched, voice, device_id,
-            class, currency.clone(),
+            &mut serial, &mailbox, &host_state, &close, &streaming, suzu, &port,
+            spec, zones, &events, &jobs, &media_watched, ring_capabilities, device_id,
+            class, faceplate_versions.clone(),
         );
     }));
     if outcome.is_err() {
         println!("[sessions] {port}: session panicked — port released");
     }
-    println!("[sessions] {port}: released — fireflies when idle");
+    println!("[sessions] {port}: serial port released");
 }
 
 /// One translated frame to the wire, with a second chance. USB
@@ -1372,15 +1284,15 @@ fn write_line_twice(
     })
 }
 
-/// One translated ground to the wire, with the second chance. False
+/// Send one host-metrics update with one retry. False
 /// means the wire refused twice — the session is over.
-fn deliver_ground(
+fn deliver_metrics(
     serial: &mut Box<dyn SerialPort>,
     port: &str,
-    g: &Arc<MachineReport>,
+    metrics: &Arc<HostMetrics>,
     named: &mut Option<String>,
 ) -> bool {
-    let frames = translate_suzu(g, named);
+    let frames = encode_metric_frames(metrics, named);
     for frame in frames {
         if write_line_twice(serial, port, &frame).is_err() {
             return false;
@@ -1389,15 +1301,13 @@ fn deliver_ground(
     true
 }
 
-/// One blink of the frame lane: capture, render, publish. A face that
-/// misses a blink costs nothing but the attempt — the freshness bound
-/// on the shot doors is the honest voice for it.
-fn frame_blink(
+/// Capture, render, and publish one display frame.
+fn capture_frame(
     serial: &mut Box<dyn SerialPort>,
     port: &str,
     spec: &FrameSpec,
     zones: &[(usize, usize, [u8; 3])],
-    events: &Sender<HouseEvent>,
+    events: &Sender<ResidentEvent>,
 ) {
     let png = crate::shot::capture_on(serial, spec.size)
         .and_then(|frame| crate::shot::render_png_bytes(spec, zones, &frame));
@@ -1405,7 +1315,7 @@ fn frame_blink(
         println!("[sessions] {port}: blink failed — {e:#}");
     }
     if let Ok(png) = png {
-        let _ = events.send(HouseEvent::Frame {
+        let _ = events.send(ResidentEvent::Frame {
             port: port.to_string(),
             png: crate::shot::encode_b64(&png),
         });
@@ -1415,25 +1325,25 @@ fn frame_blink(
 #[allow(clippy::too_many_arguments)]
 fn session_loop(
     serial: &mut Box<dyn SerialPort>,
-    slot: &Mailslot,
-    substrate: &Substrate,
+    mailbox: &SessionMailbox,
+    host_state: &HostStateCache,
     close: &Arc<AtomicBool>,
     streaming: &Arc<AtomicBool>,
     suzu: bool,
     port: &str,
     spec: Option<FrameSpec>,
     zones: DisplayZones,
-    events: &Sender<HouseEvent>,
+    events: &Sender<ResidentEvent>,
     jobs: &Jobs,
     media_watched: &Arc<AtomicBool>,
-    voice: RingVoice,
+    ring_capabilities: RingCapabilities,
     device_id: Option<String>,
     class: Option<String>,
-    currency: Option<(String, Option<String>)>,
+    faceplate_versions: Option<(String, Option<String>)>,
 ) {
     let mut named: Option<String> = None;
     let mut seq: u8 = 0;
-    let mut sent_ground_gen: u64 = 0;
+    let mut sent_metrics_generation: u64 = 0;
     let mut sent_pulse_gen: u64 = 0;
     let mut next_frame = Instant::now() + FRAME_PERIOD;
     let mut last_keepalive = Instant::now();
@@ -1442,52 +1352,51 @@ fn session_loop(
         if close.load(Ordering::Relaxed) {
             break;
         }
-        // The tick (~5 Hz): the ask is picked first - it outranks the
-        // substrate; then the freshest state goes to the wire while
-        // the roster allows. The substrate is never delivered when the
-        // roster has not granted this stream.
-        while let Some(ask) = slot.pick() {
-            match ask {
-                Ask::Ring { signal, words, urgency } => {
+        // Process pending commands before sending new host state.
+        while let Some(request) = mailbox.take() {
+            match request {
+                SessionRequest::DisplayNotification { signal, words, urgency } => {
                     if !suzu || !streaming.load(Ordering::Relaxed) {
                         continue;
                     }
-                    // The instance degrades the say to the face's
-                    // declared dialect (ADR-0006): bare verbs where
-                    // qualifiers are not spoken, no words where there
-                    // is no text channel. The face owns the moment -
-                    // it ignores the substrate while the splash plays
-                    // and picks the next frame after.
+                    // Remove qualifiers or text that the faceplate does not
+                    // support (ADR-0006).
                     seq = seq.wrapping_add(1);
-                    let sig = if voice.qualifiers {
+                    let sig = if ring_capabilities.qualifiers {
                         signal.clone()
                     } else {
                         signal.split('.').next().unwrap_or(&signal).to_string()
                     };
-                    let spoken = if voice.text { words } else { Vec::new() };
+                    let supported_words = if ring_capabilities.text {
+                        words
+                    } else {
+                        Vec::new()
+                    };
                     let mut frame =
-                        format!("R,{sig},{urgency},0,1,{seq},{}", spoken.join(","));
+                        format!("R,{sig},{urgency},0,1,{seq},{}", supported_words.join(","));
                     frame = with_checksum(&frame);
                     if write_line_twice(serial, port, &frame).is_err() {
                         return;
                     }
                 }
-                Ask::Record { job_id, secs, fps } => {
+                SessionRequest::Record { job_id, secs, fps } => {
                     record_job(serial, port, &job_id, secs, fps, spec.as_ref(), &zones, jobs, events);
                 }
-                Ask::Admission => {
+                SessionRequest::Admission => {
                     if suzu {
-                        let cur = currency
+                        let versions = faceplate_versions
                             .as_ref()
-                            .map(|(w, c)| (w.as_str(), c.as_deref()));
+                            .map(|(installed, declared)| {
+                                (installed.as_str(), declared.as_deref())
+                            });
                         let report = admission::run(
                             serial,
                             class.as_deref(),
                             spec.as_ref(),
                             &zones,
-                            cur,
+                            versions,
                         );
-                        let _ = events.send(HouseEvent::AdmissionReport {
+                        let _ = events.send(ResidentEvent::AdmissionReport {
                             device_id: device_id.clone().unwrap_or_default(),
                             port: port.to_string(),
                             passed: report.passed,
@@ -1498,12 +1407,12 @@ fn session_loop(
             }
         }
         if streaming.load(Ordering::Relaxed) {
-            if let Some(g) = substrate.ground_since(&mut sent_ground_gen)
-                && !deliver_ground(serial, port, &g, &mut named)
+            if let Some(metrics) = host_state.metrics_since(&mut sent_metrics_generation)
+                && !deliver_metrics(serial, port, &metrics, &mut named)
             {
                 return;
             }
-            if let Some((axis, value)) = substrate.pulse_since(&mut sent_pulse_gen) {
+            if let Some((axis, value)) = host_state.pulse_since(&mut sent_pulse_gen) {
                 let frame = format!("A,{axis},{value}");
                 if write_line_twice(serial, port, &frame).is_err() {
                     return;
@@ -1511,10 +1420,8 @@ fn session_loop(
             }
         }
         let now = Instant::now();
-        // The media lane's blink, only for someone's eyes: the watch
-        // flag (ADR-0004 amendment) rides beside the roster's stream
-        // gate. A recording is work, not a glance — its frames publish
-        // from inside its own handler.
+        // Automatic capture requires streaming and a media subscriber.
+        // Recording publishes frames from its own handler.
         if now >= next_frame {
             next_frame = now + FRAME_PERIOD;
             if suzu
@@ -1522,10 +1429,10 @@ fn session_loop(
                 && media_watched.load(Ordering::Relaxed)
                 && let Some(spec) = &spec
             {
-                frame_blink(serial, port, spec, &zones, events);
+                capture_frame(serial, port, spec, &zones, events);
             }
         }
-        // Keepalive: only while the stream flows (see FRAME_PERIOD note).
+        // Send keepalives only while streaming.
         if now.duration_since(last_keepalive) >= KEEPALIVE_PERIOD {
             last_keepalive = now;
             if streaming.load(Ordering::Relaxed) {
@@ -1533,17 +1440,12 @@ fn session_loop(
                 let _ = write_line(serial, keepalive);
             }
         }
-        // The tick's nap: the substrate is pulled, not pushed, so the
-        // beat paces here — awake the instant a new ask is slapped.
-        slot.nap(TICK_PERIOD);
+        // Wait for the next polling interval or an incoming command.
+        mailbox.wait(TICK_PERIOD);
     }
 }
 
-/// The trail camera, on the session's own port: loop the in-band shot,
-/// publish every frame taken (recording subsumes the preview — the
-/// frames the GIF takes are the frames the wire carries), and assemble
-/// the GIF into the captures folder when the run ends. The registry is
-/// the record: progress and verdict travel as Job facts.
+/// Capture frames from one session, publish previews, and assemble a GIF.
 #[allow(clippy::too_many_arguments)] // the session's hands, all needed
 fn record_job(
     serial: &mut Box<dyn SerialPort>,
@@ -1554,12 +1456,12 @@ fn record_job(
     spec: Option<&FrameSpec>,
     zones: &[(usize, usize, [u8; 3])],
     jobs: &Jobs,
-    events: &Sender<HouseEvent>,
+    events: &Sender<ResidentEvent>,
 ) {
     let Some(spec) = spec else {
         jobs.with(job_id, |j| {
             j.state = "failed".into();
-            j.label = "the class declares no frame law".into();
+            j.label = "the class declares no frame format".into();
         });
         return;
     };
@@ -1592,7 +1494,7 @@ fn record_job(
                 vh = h;
                 rgba_frames.push(rgba);
                 let frames = rgba_frames.len() as u32;
-                let _ = events.send(HouseEvent::Frame {
+                let _ = events.send(ResidentEvent::Frame {
                     port: port.to_string(),
                     png: crate::shot::encode_b64(&png),
                 });
@@ -1609,7 +1511,7 @@ fn record_job(
         if next_at > now {
             std::thread::sleep(next_at - now);
         } else {
-            next_at = now; // wire-bound: skip the missed slot, keep going
+            next_at = now; // wire-bound: skip the missed capture interval, keep going
         }
     }
 
@@ -1638,13 +1540,18 @@ fn record_job(
     });
 }
 
-fn translate_suzu(g: &MachineReport, named: &mut Option<String>) -> Vec<String> {
+fn encode_metric_frames(metrics: &HostMetrics, named: &mut Option<String>) -> Vec<String> {
     let mut frames = Vec::new();
-    if named.as_deref() != Some(g.name.as_str()) {
-        frames.push(format!("J,{{\"name\":\"{}\"}}", g.name.replace('"', "'")));
-        *named = Some(g.name.clone());
+    if named.as_deref() != Some(metrics.name.as_str()) {
+        frames.push(format!("J,{{\"name\":\"{}\"}}", metrics.name.replace('"', "'")));
+        *named = Some(metrics.name.clone());
     }
-    frames.push(format!("G,report,{},{},{}", g.cpu, g.mem, g.gpu.unwrap_or(255)));
+    frames.push(format!(
+        "G,report,{},{},{}",
+        metrics.cpu,
+        metrics.mem,
+        metrics.gpu.unwrap_or(255)
+    ));
     frames
 }
 
@@ -1653,11 +1560,9 @@ fn open_serial(port: &str) -> anyhow::Result<Box<dyn SerialPort>> {
         .timeout(Duration::from_millis(200))
         .open()
         .map_err(|e| anyhow::anyhow!("{port}: {e}"))?;
-    // CircuitPython gates its CDC console on DTR: without it the face
-    // hears no ground and gardens forever while its neighbors work
-    // (proven 2026-08-29 — the matrix idle through a live stream).
+    // CircuitPython requires DTR before its CDC console accepts host metrics.
     let _ = p.write_data_terminal_ready(true);
-    // ESP auto-reset on open — the harvest's 2.5 s boot, plus a settle.
+    // Opening the ESP serial port triggers reset; wait for boot completion.
     std::thread::sleep(Duration::from_millis(2500));
     let _ = p.write_all(b"\r\n");
     let _ = p.flush();

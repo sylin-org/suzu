@@ -83,7 +83,7 @@ source into two files (the first fix applied to one and not the other
 was inevitable); a generic "rotate any face" mode in the tool (art
 lives in the files, not in the tool — ADR-0003's provisioning law).
 
-## Amendment — the currency gate (2026-08-31)
+## Amendment — the faceplate version check (2026-08-31)
 
 A face worn in an outdated dress joined the stream as readily as a
 current one; nothing told the keeper, and nothing told the face.

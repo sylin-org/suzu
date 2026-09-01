@@ -35,15 +35,14 @@
 
     <main id="main-content" tabindex="-1">
 
-      <!-- ── Status: the fleet, its lifecycle, its ceremonies ─────── -->
+      <!-- Device status and maintenance actions. -->
       <section class="view active" id="view-status" data-page="status" aria-label="Status">
         <div class="view-pad">
           <div class="page-heading">
             <div>
-              <span class="kicker">The roster</span>
-              <h1>Who is on the bench</h1>
-              <p>Every individual the Resident knows, and the lifecycle it granted them.
-                 Maintenance is a ceremony: backup first, tests last.</p>
+              <span class="kicker">Devices</span>
+              <h1>Connected devices</h1>
+              <p>Devices known to the Resident, their lifecycle state, and available maintenance actions.</p>
             </div>
             <span id="status-count" class="queue-meta"></span>
           </div>
@@ -51,15 +50,14 @@
         </div>
       </section>
 
-      <!-- ── Log: what was asked, and what it became ──────────────── -->
+      <!-- Resident event log. -->
       <section class="view" id="view-log" data-page="log" aria-label="Log">
         <div class="view-pad">
           <div class="page-heading">
             <div>
-              <span class="kicker">The journal</span>
-              <h1>What the house heard</h1>
-              <p>Every fact the Resident published, newest first. It lives in memory —
-                 it dies with the process, like the pause.</p>
+              <span class="kicker">Event log</span>
+              <h1>Resident events</h1>
+              <p>Events published by the Resident, newest first. This log is held in memory and resets when the service restarts.</p>
             </div>
             <span id="log-count" class="queue-meta"></span>
           </div>
@@ -67,16 +65,14 @@
         </div>
       </section>
 
-      <!-- ── Media: the trail camera ───────────────────────────────── -->
+      <!-- Live device previews and recording controls. -->
       <section class="view" id="view-media" data-page="media" aria-label="Media">
         <div class="view-pad">
           <div class="page-heading">
             <div>
-              <span class="kicker">The trail camera</span>
-              <h1>Watch the faces</h1>
-              <p>Live in-band shots while you are here — each glance costs the face
-                 one blink. Recording subsumes the preview: the panes show the very
-                 frames the GIF is taking.</p>
+              <span class="kicker">Device previews</span>
+              <h1>Live frames</h1>
+              <p>Live frames from connected displays. Recording uses the same frames shown in each preview.</p>
             </div>
           </div>
           <p class="action-note" id="media-note" hidden></p>
@@ -84,29 +80,28 @@
         </div>
       </section>
 
-      <!-- ── About: the published card ──────────────────────────────── -->
+      <!-- Product information. -->
       <section class="view" id="view-about" data-page="about" aria-label="About">
         <div class="about">
-          <div class="tcg tcg-suzu" id="suzu-card" role="img" aria-label="Suzu, the bell">
+          <div class="tcg tcg-suzu" id="suzu-card" role="img" aria-label="Suzu device manager">
             <span class="card-art">
               <span class="mascot-halo" aria-hidden="true"></span>
               <img class="mascot-echo px" src="suzu.png" alt="" aria-hidden="true" width="300" height="300">
-              <img class="px mascot" src="suzu.png" alt="Suzu mascot: a small golden bell with a gentle face" width="200" height="200">
+              <img class="px mascot" src="suzu.png" alt="Suzu mascot" width="200" height="200">
             </span>
             <span class="card-divider"></span>
             <span class="card-disc"><span class="ver" id="card-version">0.1</span></span>
             <span class="card-notch"></span>
             <span class="card-pane">
-              <span class="card-title"><span class="name">suzu</span><span class="role">&middot; the bell</span></span>
+              <span class="card-title"><span class="name">suzu</span><span class="role">&middot; device manager</span></span>
               <span class="card-body">
                 <span class="orbs">
                   <span class="orb orb-faces" title="Faces"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v3"></path><path d="M5 9a7 7 0 0 1 14 0c0 5-2.5 6-2.5 9h-9C7.5 15 5 14 5 9Z"></path><path d="M10 21h4"></path></svg></span>
                   <span class="orb orb-trust" title="Trust"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.4-3 7.6-7 9-4-1.4-7-4.6-7-9V6z"></path><path d="M9.4 12l1.9 1.9L15 10"></path></svg></span>
                 </span>
-                <span class="card-rules">Gives the machines you own physical faces — nine
-                  rings, honest idle, and light that means what it says.</span>
+                <span class="card-rules">Manages status displays, device identity, firmware, faceplates, and maintenance operations.</span>
               </span>
-              <span class="card-foot"><span class="flavor">&ldquo;The garden keeps breathing.&rdquo;</span></span>
+              <span class="card-foot"><span class="flavor">Local device management</span></span>
             </span>
             <span class="holo" aria-hidden="true"></span>
             <span class="holo2" aria-hidden="true"></span>
@@ -114,14 +109,11 @@
 
           <div class="about-copy">
             <h1>Suzu</h1>
-            <p class="about-lede">A resident for the machines you own. It rings the nine
-              moments onto physical faces, keeps a truthful roster, and stops where you
-              tell it to.</p>
+            <p class="about-lede">A local service for managing physical status displays, device identity, firmware, and maintenance.</p>
 
             <dl class="about-facts" id="about-facts"></dl>
 
-            <p class="about-note">Suzu never phones home. No telemetry, no update ping.
-              Everything on this page was assembled on this device from work this device did.</p>
+            <p class="about-note">Suzu sends no telemetry or update checks. The information on this page comes from the local service.</p>
 
             <div class="about-links" id="about-links"></div>
           </div>

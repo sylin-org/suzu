@@ -1,6 +1,6 @@
 [package]
 name = "suzu-workbench"
-description = "Suzu's desktop workbench: the keeper's window onto the Resident and its faces"
+description = "Desktop management interface for the Suzu Resident and connected devices"
 publish = false
 version = "0.1.0"
 edition = "2021"

@@ -1,11 +1,11 @@
-//! The store — the client's one mutable state (ADR-0004).
+//! The client's single mutable state store (ADR-0004).
 //!
 //! Every fact the window shows arrived over the wire. Collections are
 //! mutated only by typed reducers, one per fact kind; slices replaced
-//! whole where the house replaces them whole, keyed where it keys.
+//! whole when snapshots replace them and keyed when events update them.
 //! Stream health is itself store state. Views subscribe; a change
 //! re-renders the views that read the slice that changed. There is
-//! nothing to poll, because the truth arrives.
+//! no polling is required because updates arrive over the event stream.
 
 (() => {
   "use strict";
@@ -26,11 +26,11 @@
     photos: new Map(),  // class → url (fetched once per class)
     links: null,        // the About page's destinations, fetched once
     faceplates: new Map(), // class → declared faceplates (empty = none)
-    /// the watched lane: the house's echo of the window's watch
+    /// Resident acknowledgement of the client's media subscription.
     mediaWatched: false,
   };
 
-  // The client's journal keeps the house's own bound.
+  // Match the Resident journal capacity.
   const JOURNAL_CAP = 600;
   const JOBS_CAP = 40;
 
@@ -51,7 +51,7 @@
   const dataUri = (pngB64) => `data:image/png;base64,${pngB64}`;
   const journalKey = (line) => `${line.ts}|${line.domain}|${line.text}`;
 
-  /// The facts' arrival is itself the proof the wire is up. The
+  /// Receiving an event proves the stream is connected. The
   /// bridge announces "connected" once, at connect time — an
   /// announcement the still-loading webview can miss — but a fact in
   /// the store cannot be wrong about this.
@@ -62,7 +62,7 @@
     }
   }
 
-  // ── the reducers: the only writers ────────────────────────────────
+  // ── reducers: the only state writers ──────────────────────────────
 
   /// The connection-opening fact: replace the slices whole. A
   /// reconnect replaces, never appends — a dropped stream can
@@ -120,7 +120,7 @@
         break;
       }
       default:
-        break; // narrative facts carry no store state
+        break; // Other fact types do not update client state.
     }
   }
 
@@ -145,8 +145,7 @@
     mark("photos");
   }
 
-  /// Forget the classes whose photo failed to load — called when the
-  /// house comes back, so the cards ask again with the door open.
+  /// Retry class photos that failed while the Resident was unavailable.
   function retryPhotos() {
     const missing = [...state.photos.entries()]
       .filter(([, v]) => v === null).map(([k]) => k);
@@ -165,7 +164,7 @@
     mark("faceplates");
   }
 
-  /// A fresh house may declare differently — ask again.
+  /// Clear cached declarations after the Resident reconnects.
   function resetFaceplates() {
     state.faceplates.clear();
     mark("faceplates");

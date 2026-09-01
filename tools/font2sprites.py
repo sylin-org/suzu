@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """Render a TTF's glyphs into a MicroPython sprite module (1-bit rows).
 
-The host-side half of a faceplate: the tool installs what the faceplate
-declares, and art is data — never interpreted. This script turns a
+This build tool converts a declared faceplate font resource into data; it
+does not interpret the faceplate layout. This script turns a
 display font (Bebas Neue class, condensed) into a `digits_*.py` module
-of packed row bitmaps the face blits with fill_rect runs.
+of packed row bitmaps rendered with fill_rect runs.
 
 Data convention (matches the faceplate's fallback table):
     DIGITS = { char: (width, height, (row_int, ...)), ... }
 Each row_int has its MSB = leftmost column. All glyphs share one
 vertical window (the digits' cap-height box) so baselines and the
-dash's mid-height position survive the crop; horizontal cropping is
+dash's mid-height position remain consistent after cropping; horizontal cropping is
 per-glyph (proportional widths).
 
 Usage:
@@ -135,9 +135,9 @@ def main():
 
     # Companion raw bin: the device-side form. A .py module builds real
     # objects in the ESP8266's 80 KB heap at import; a raw file costs
-    # nothing until the face reads one glyph at draw time. Layout per
+    # no heap until the faceplate reads a glyph at draw time. Layout per
     # glyph: [width byte][BPP B per row, MSB = leftmost] — BPP is
-    # uniform across the set, sized for the widest glyph, so the face
+    # uniform across the set, sized for the widest glyph, so the faceplate
     # can seek a fixed stride.
     bin_path = os.path.splitext(args.out)[0] + ".bin"
     rows_per_glyph = len(next(iter(glyphs.values()))[1])

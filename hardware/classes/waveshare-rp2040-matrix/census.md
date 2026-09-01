@@ -36,15 +36,14 @@ pending more samples.
   the firefly firmware.
 
 
-## LED order (2026-08-30, the golden/green mismatch)
+## LED order (2026-08-30)
 
 The 5x5's pixels are **RGB-wired**, but CircuitPython's `neopixel`
-library silently defaults to GRB — so every hue the face displayed
+library defaults to GRB, so every color the faceplate displayed
 was red/green-scrambled on the physical board while the J shot
-(logical rgb) stayed truthful. Symptom: work atoms golden in the
-workbench preview, green on the board. Fix:
+(logical RGB) remained correct. Symptom: activity indicators appeared
+gold in the Workbench preview and green on the board. Fix:
 `pixel_order=neopixel.RGB`. Diagnosed empirically: with GRB send the
 amber frame glowed green on the board; an explicit RGB send is
-pending the keeper's eye as final confirmation. Rule for this class:
-the preview is the frame buffer's truth; when eyes and frame
-disagree, suspect the wire order first.
+pending visual confirmation. For this class, the preview represents the
+frame buffer; if the physical display differs, check the pixel wire order first.

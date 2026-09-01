@@ -1,29 +1,23 @@
-//! The resident's loopback read API — the third door into the house
-//! (the CLI and the control chirps were the first two).
+//! The Resident's loopback HTTP API.
 //!
 //! A minimal HTTP/1.1 responder on 127.0.0.1:7899 (S-U-Z-U + 1).
-//! ADR-0004 is the law here. The door streams: every `/api/events`
-//! connection opens with one `snapshot` fact — the whole house in one
-//! object — and everything after is a delta. Devices and roster ride
-//! the wire as whole-slice facts; the journal is its own lane; a
-//! heartbeat keeps half-open connections honest. Every command door
-//! follows one shape — send the command, await the reply under a hard
-//! timeout, answer honestly on a timeout — because the house never
-//! blocks on a face, and neither does the door. `/api/status` is gone:
-//! there is one truth, and it streams.
+//! Every `/api/events` connection starts with one complete snapshot,
+//! then streams incremental events. Device and registry collections are
+//! replaced as complete values. A heartbeat detects half-open
+//! connections. Commands use bounded actor request/reply channels.
 //!
 //! CORS: `*` — the Tauri webview is a foreign origin to this socket,
 //! and it is the only client that matters. The bind is loopback, so
 //! the trust boundary is the machine itself (ADR-0002: local-first,
-//! same machine as the faces).
+//! same machine as the devices).
 
 use super::device::DeviceAction;
 use super::devices::{DevicesCmd, DevicesSnapshot};
-use super::events::{HouseEvent, HouseSnapshot, JournalLine, ServiceFacts};
+use super::events::{ResidentEvent, ResidentSnapshot, JournalLine, ServiceFacts};
 use super::jobs::Job;
 use super::jobs::Jobs;
-use super::moments::MomentsCmd;
-use super::roster::Roster;
+use super::notifications::NotificationCmd;
+use super::registry::DeviceRegistry;
 use anyhow::Result;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -34,15 +28,14 @@ use tokio::sync::mpsc;
 
 pub const API_PORT: u16 = 7899;
 
-/// The hard bound on every command door. The actor routes instantly;
-/// five seconds means the house itself is wedged, and the door says so.
+/// Maximum actor command response time.
 const DOOR_TIMEOUT: Duration = Duration::from_secs(5);
-/// The heartbeat: a comment frame keeps half-open connections honest,
+/// A comment frame detects half-open connections,
 /// so a killed resident is *down* within seconds, not minutes.
 const PING_PERIOD: Duration = Duration::from_secs(10);
 
-/// The moment journal — the Log page's memory. Bounded, in-memory,
-/// honest: it dies with the process, like the pause flag.
+/// The event journal — the Log page's memory. Bounded, in-memory,
+/// process-local and is cleared on restart.
 pub struct Journal {
     lines: Mutex<VecDeque<JournalLine>>,
     tx: tokio::sync::broadcast::Sender<JournalLine>,
@@ -100,34 +93,32 @@ const DESTINATIONS: &[(&str, &str, &str, &str, &str)] = &[
     ("Ghostlight's sibling", "contract", "The face contract",
         "What every face does, regardless of dialect.",
         "https://github.com/sylin-org/suzu/blob/dev/docs/the-face-contract.md"),
-    ("Ghostlight's sibling", "adr_lake", "Why the matrix is a lake",
-        "Raindrops, atom fireflies, and the rendering grammar.",
+    ("Design documentation", "adr_lake", "RP2040 matrix rendering",
+        "Event and host-metric rendering rules for the matrix display.",
         "https://github.com/sylin-org/suzu/blob/dev/docs/adr/0001-the-lake.md"),
 ];
 
 pub struct Ctx {
     pub catalog: Arc<crate::Catalog>,
     pub jobs: Arc<Jobs>,
-    pub events: tokio::sync::broadcast::Sender<HouseEvent>,
+    pub events: tokio::sync::broadcast::Sender<ResidentEvent>,
     pub devices: mpsc::Sender<DevicesCmd>,
-    pub moments: mpsc::Sender<MomentsCmd>,
-    pub roster: Arc<std::sync::RwLock<Roster>>,
+    pub notifications: mpsc::Sender<NotificationCmd>,
+    pub registry: Arc<std::sync::RwLock<DeviceRegistry>>,
     pub journal: Arc<Journal>,
-    /// Live `/api/events` connections. The watched lane holds only
-    /// while this is non-zero — a dead client holds nothing.
+    /// Number of live `/api/events` connections. Automatic capture runs
+    /// only while this is non-zero.
     pub streams: std::sync::atomic::AtomicUsize,
 }
 
-/// The door is bound by the resident *before* any serial port is
-/// touched (ADR-0004) — a second claimant exits loudly instead of
-/// living doorless.
+/// Bind before opening serial ports so a second Resident fails early.
 pub async fn bind() -> std::io::Result<TcpListener> {
     TcpListener::bind(("127.0.0.1", API_PORT)).await
 }
 
 pub async fn listen(ctx: Arc<Ctx>, listener: TcpListener) -> Result<()> {
     println!(
-        "[api] the door is open on http://127.0.0.1:{API_PORT} — snapshot + stream, one truth"
+        "[api] listening on http://127.0.0.1:{API_PORT} — snapshot and event stream enabled"
     );
     loop {
         let Ok((stream, _)) = listener.accept().await else { continue };
@@ -194,7 +185,7 @@ async fn serve_one(mut stream: TcpStream, ctx: Arc<Ctx>) -> Result<()> {
     let started = Instant::now();
     let (status, content_type, payload) = route(&ctx, &method, &path, &body).await;
     if method == "POST" {
-        // One honest access line per keeper command.
+        // Log one access line per command.
         ctx.journal.record(
             "api",
             &format!(
@@ -205,29 +196,26 @@ async fn serve_one(mut stream: TcpStream, ctx: Arc<Ctx>) -> Result<()> {
     }
     write_response(&mut stream, status, content_type, payload).await?;
     if path == "/api/shutdown" && method == "POST" {
-        println!("[api] shutdown requested — the resident rests");
+        println!("[api] shutdown requested");
         let _ = std::io::Write::flush(&mut std::io::stdout());
         std::process::exit(0);
     }
     Ok(())
 }
 
-/// The live wire: one `snapshot` fact — the whole house in one object —
-/// then every delta as it lands, and the journal as its own lane. A
-/// heartbeat keeps the connection's health measurable at both ends.
+/// Send one initial snapshot followed by incremental events and journal entries.
 async fn events_stream(ctx: Arc<Ctx>, mut stream: TcpStream) -> Result<()> {
     let head = "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncache-control: no-cache\r\naccess-control-allow-origin: *\r\nconnection: keep-alive\r\n\r\n";
     stream.write_all(head.as_bytes()).await?;
-    // Subscribe before the snapshot is built: a fact that lands during
-    // the build replays as a delta, and replace-whole reducers are
-    // idempotent — a replay costs nothing, a loss would not heal.
+    // Subscribe before building the snapshot so concurrent events are
+    // replayed as idempotent collection replacements.
     let mut fact_rx = ctx.events.subscribe();
     let mut journal_rx = ctx.journal.subscribe();
     ctx.streams.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
     let snap = snapshot_fact(&ctx).await;
     let snap_json =
-        serde_json::to_string(&HouseEvent::Snapshot { snapshot: snap }).unwrap_or_default();
+        serde_json::to_string(&ResidentEvent::Snapshot { snapshot: snap }).unwrap_or_default();
     stream
         .write_all(format!("event: snapshot\ndata: {snap_json}\n\n").as_bytes())
         .await?;
@@ -279,9 +267,7 @@ async fn events_stream(ctx: Arc<Ctx>, mut stream: TcpStream) -> Result<()> {
             },
         }
     }
-    // The wire's own watch release: a client that quits while watching
-    // can send no "off", so the lane rests when its last listener
-    // leaves (ADR-0004, the watched lane — dead clients hold nothing).
+    // Disable automatic capture when the final event client disconnects.
     let remaining = ctx.streams.fetch_sub(1, std::sync::atomic::Ordering::Relaxed) - 1;
     if remaining == 0 {
         let _ = ctx
@@ -293,23 +279,22 @@ async fn events_stream(ctx: Arc<Ctx>, mut stream: TcpStream) -> Result<()> {
 }
 
 /// The delta vocabulary: the facts a client's store is built from.
-/// Everything else is narrative — the journal lane already carries its
-/// story, in the house's own voice.
-fn is_delta(ev: &HouseEvent) -> bool {
+/// Other events are represented by formatted journal entries.
+fn is_delta(ev: &ResidentEvent) -> bool {
     matches!(
         ev,
-        HouseEvent::Devices { .. }
-            | HouseEvent::Roster { .. }
-            | HouseEvent::Job { .. }
-            | HouseEvent::Frame { .. }
-            | HouseEvent::Paused { .. }
-            | HouseEvent::MediaWatched { .. }
+        ResidentEvent::Devices { .. }
+            | ResidentEvent::DeviceRegistry { .. }
+            | ResidentEvent::Job { .. }
+            | ResidentEvent::Frame { .. }
+            | ResidentEvent::Paused { .. }
+            | ResidentEvent::MediaWatched { .. }
     )
 }
 
-/// The whole house in one object — the fact every connection opens with.
-async fn snapshot_fact(ctx: &Ctx) -> HouseSnapshot {
-    let devs = door(&ctx.devices, |reply| DevicesCmd::Snapshot { reply })
+/// Build the initial connection snapshot.
+async fn snapshot_fact(ctx: &Ctx) -> ResidentSnapshot {
+    let devs = request_devices(&ctx.devices, |reply| DevicesCmd::Snapshot { reply })
         .await
         .unwrap_or_else(|_| DevicesSnapshot {
             devices: Vec::new(),
@@ -317,15 +302,15 @@ async fn snapshot_fact(ctx: &Ctx) -> HouseSnapshot {
             media_watched: false,
             frames: Vec::new(),
         });
-    let roster = ctx.roster.read().map(|r| r.snapshot()).unwrap_or_default();
-    HouseSnapshot {
+    let registry = ctx.registry.read().map(|r| r.snapshot()).unwrap_or_default();
+    ResidentSnapshot {
         service: ServiceFacts {
             name: "suzu".into(),
             version: env!("CARGO_PKG_VERSION").into(),
             paused: devs.paused,
         },
         devices: devs.devices,
-        roster,
+        registry,
         jobs: ctx.jobs.all(),
         journal: ctx.journal.tail(200),
         frames: devs.frames,
@@ -333,11 +318,8 @@ async fn snapshot_fact(ctx: &Ctx) -> HouseSnapshot {
     }
 }
 
-/// One command door, in the house's one shape (ADR-0004): send the
-/// command, await the reply under a hard timeout, answer honestly on
-/// a timeout. The actor routes instantly, so the timeout firing means
-/// the house itself is wedged — and the door says so instead of hanging.
-async fn door<T, F>(tx: &mpsc::Sender<DevicesCmd>, build: F) -> Result<T, String>
+/// Send a devices-actor command and wait for its bounded reply.
+async fn request_devices<T, F>(tx: &mpsc::Sender<DevicesCmd>, build: F) -> Result<T, String>
 where
     F: FnOnce(mpsc::Sender<T>) -> DevicesCmd,
 {
@@ -349,28 +331,26 @@ where
         Ok(Some(reply)) => Ok(reply),
         Ok(None) => Err("the devices domain dropped the reply".into()),
         Err(_) => Err(format!(
-            "the house did not answer within {}s — the wait is bounded, try again",
+            "the devices actor did not answer within {}s; try again",
             DOOR_TIMEOUT.as_secs()
         )),
     }
 }
 
-/// The keeper may name a device by port or by identity — the roster
-/// knows both. Returns the port the transport can act on.
+/// Resolve a device port from either its port name or device ID.
 fn resolve_target(ctx: &Ctx, target: &str) -> Option<String> {
-    let roster = ctx.roster.read().ok()?;
-    if roster.by_port(target).is_some() {
+    let registry = ctx.registry.read().ok()?;
+    if registry.by_port(target).is_some() {
         return Some(target.to_string());
     }
-    roster.individual(target).and_then(|i| i.last_port.clone())
+    registry.registered_device(target).and_then(|i| i.last_port.clone())
 }
 
 fn find_headers_end(buf: &[u8]) -> Option<usize> {
     buf.windows(4).position(|w| w == b"\r\n\r\n").map(|p| p + 4)
 }
 
-/// The door contract's envelope (docs/the-door-contract.md): was
-/// anything changed, what was asked, what is true now.
+/// Standard API response envelope from docs/the-door-contract.md.
 fn envelope(confirmed: bool, message: impl serde::Serialize) -> (u16, &'static str, Vec<u8>) {
     (
         if confirmed { 200 } else { 409 },
@@ -383,8 +363,7 @@ fn envelope(confirmed: bool, message: impl serde::Serialize) -> (u16, &'static s
     )
 }
 
-/// The ask names nothing the house knows (the door contract: the
-/// refusal is the envelope, and names what *is* known).
+/// Return the standard response for an unknown resource.
 fn no_such(msg: &'static str) -> (u16, &'static str, Vec<u8>) {
     (
         404,
@@ -397,7 +376,7 @@ fn no_such(msg: &'static str) -> (u16, &'static str, Vec<u8>) {
 async fn route(ctx: &Ctx, method: &str, path: &str, body: &str) -> (u16, &'static str, Vec<u8>) {
     let json = |v: serde_json::Value| (200u16, "application/json", serde_json::to_vec(&v).unwrap_or_default());
     match (method, path) {
-        // The curl-only debug door: the clients read the wire.
+        // Debug endpoint for the in-memory journal.
         ("GET", "/api/log") => json(serde_json::json!(ctx.journal.tail(300))),
         ("GET", "/api/destinations") => json(serde_json::json!(
             DESTINATIONS.iter().map(|(group, key, title, blurb, url)| serde_json::json!({
@@ -422,9 +401,7 @@ async fn route(ctx: &Ctx, method: &str, path: &str, body: &str) -> (u16, &'stati
             match ctx.catalog.faceplate_preview(class, id) {
                 Some(path) => match std::fs::read(&path) {
                     Ok(bytes) => {
-                        // The content type tells the truth about the
-                        // bytes: the fallback serves a png under the
-                        // gif ask, and says png.
+                        // Derive the content type from the actual file.
                         let kind = if path.extension().and_then(|e| e.to_str()) == Some("png") {
                             "image/png"
                         } else {
@@ -434,7 +411,7 @@ async fn route(ctx: &Ctx, method: &str, path: &str, body: &str) -> (u16, &'stati
                     }
                     Err(_) => no_such("the preview capture is missing"),
                 },
-                None => no_such("no preview captured yet — the words and the pictogram speak for it"),
+                None => no_such("no faceplate preview is available"),
             }
         }
         ("GET", p) if p.starts_with("/api/faceplates/") => {
@@ -462,21 +439,21 @@ async fn route(ctx: &Ctx, method: &str, path: &str, body: &str) -> (u16, &'stati
             let target = p.trim_start_matches("/api/capture/").trim_end_matches("/save");
             match resolve_target(ctx, target) {
                 Some(port) => capture_save(ctx, &port).await,
-                None => no_such("no such device on the roster"),
+                None => no_such("no such device on the registry"),
             }
         }
         ("POST", p) if p.starts_with("/api/record/") => {
             let target = p.trim_start_matches("/api/record/");
             match resolve_target(ctx, target) {
                 Some(port) => record_start(ctx, &port, body).await,
-                None => no_such("no such device on the roster"),
+                None => no_such("no such device on the registry"),
             }
         }
         ("POST", p) if p.starts_with("/api/admission/") => {
             let target = p.trim_start_matches("/api/admission/");
             match resolve_target(ctx, target) {
                 Some(port) => admission(ctx, &port).await,
-                None => no_such("no such device on the roster"),
+                None => no_such("no such device on the registry"),
             }
         }
         ("GET", p) if p.starts_with("/api/device/identify/") => {
@@ -499,60 +476,60 @@ async fn route(ctx: &Ctx, method: &str, path: &str, body: &str) -> (u16, &'stati
             let target = p.trim_start_matches("/api/device/").trim_end_matches("/identify");
             match resolve_target(ctx, target) {
                 Some(port) => device_action(ctx, &port, DeviceAction::Identify, None).await,
-                None => no_such("no such device on the roster"),
+                None => no_such("no such device on the registry"),
             }
         }
         ("POST", p) if p.starts_with("/api/device/") && p.ends_with("/pause") => {
             let target = p.trim_start_matches("/api/device/").trim_end_matches("/pause");
             match resolve_target(ctx, target) {
                 Some(port) => device_stream_toggle(ctx, &port, false).await,
-                None => no_such("no such device on the roster"),
+                None => no_such("no such device on the registry"),
             }
         }
         ("POST", p) if p.starts_with("/api/device/") && p.ends_with("/resume") => {
             let target = p.trim_start_matches("/api/device/").trim_end_matches("/resume");
             match resolve_target(ctx, target) {
                 Some(port) => device_stream_toggle(ctx, &port, true).await,
-                None => no_such("no such device on the roster"),
+                None => no_such("no such device on the registry"),
             }
         }
         ("POST", p) if p.starts_with("/api/device/") && p.ends_with("/install") => {
             let target = p.trim_start_matches("/api/device/").trim_end_matches("/install");
             match resolve_target(ctx, target) {
                 Some(port) => device_action(ctx, &port, DeviceAction::Install, faceplate_from(body)).await,
-                None => no_such("no such device on the roster"),
+                None => no_such("no such device on the registry"),
             }
         }
         ("POST", p) if p.starts_with("/api/device/") && p.ends_with("/update") => {
             let target = p.trim_start_matches("/api/device/").trim_end_matches("/update");
             match resolve_target(ctx, target) {
                 Some(port) => device_action(ctx, &port, DeviceAction::Update, faceplate_from(body)).await,
-                None => no_such("no such device on the roster"),
+                None => no_such("no such device on the registry"),
             }
         }
         ("POST", p) if p.starts_with("/api/device/") && p.ends_with("/factory-reset") => {
             let target = p.trim_start_matches("/api/device/").trim_end_matches("/factory-reset");
             match resolve_target(ctx, target) {
                 Some(port) => device_action(ctx, &port, DeviceAction::FactoryReset, None).await,
-                None => no_such("no such device on the roster"),
+                None => no_such("no such device on the registry"),
             }
         }
         ("POST", p) if p.starts_with("/api/maintenance/") => {
             let target = p.trim_start_matches("/api/maintenance/");
             match resolve_target(ctx, target) {
                 Some(port) => maintenance(ctx, &port, body).await,
-                None => no_such("no such device on the roster"),
+                None => no_such("no such device on the registry"),
             }
         }
         ("POST", "/api/shutdown") => (200, "application/json", serde_json::to_vec(&serde_json::json!({
         "confirmed": true,
         "stopping": true,
-        "message": "the resident rests — the garden keeps breathing",
+        "message": "resident shutdown requested",
     })).unwrap_or_default()),
         ("POST", "/api/ui") => ui_action(ctx, body).await,
         ("POST", "/api/control") => control(ctx, body).await,
         ("POST", "/api/say") => say(ctx, body).await,
-        _ => no_such("no such door"),
+        _ => no_such("no such endpoint"),
     }
 }
 
@@ -569,17 +546,15 @@ fn device_image(ctx: &Ctx, class: &str) -> (u16, &'static str, Vec<u8>) {
     }
 }
 
-/// The shot door: the newest frame under the freshness bound — instant,
-/// bounded, honest. A stuck face fails here in no time at all, with
-/// the truth about when it last blinked.
+/// Return the latest frame when it satisfies the freshness limit.
 async fn shot(ctx: &Ctx, path: &str) -> (u16, &'static str, Vec<u8>) {
     let Some(raw) = path.trim_start_matches("/api/shot/").strip_suffix(".png") else {
         return (404, "application/json", br#"{"error":"shots are /api/shot/PORT.png"}"#.to_vec());
     };
     let Some(port) = resolve_target(ctx, raw) else {
-        return no_such("no such device on the roster");
+        return no_such("no such device on the registry");
     };
-    match door(&ctx.devices, |reply| DevicesCmd::LatestFrame { port, reply }).await {
+    match request_devices(&ctx.devices, |reply| DevicesCmd::LatestFrame { port, reply }).await {
         Ok(Ok(png)) => (200, "image/png", png),
         Ok(Err(e)) => envelope(false, format!("{e:#}")),
         Err(e) => envelope(false, e),
@@ -587,7 +562,7 @@ async fn shot(ctx: &Ctx, path: &str) -> (u16, &'static str, Vec<u8>) {
 }
 
 async fn capture_save(ctx: &Ctx, port: &str) -> (u16, &'static str, Vec<u8>) {
-    match door(&ctx.devices, |reply| DevicesCmd::CaptureSave { port: port.to_string(), reply }).await {
+    match request_devices(&ctx.devices, |reply| DevicesCmd::CaptureSave { port: port.to_string(), reply }).await {
         Ok(Ok(path)) => (
             200,
             "application/json",
@@ -621,7 +596,7 @@ async fn record_start(ctx: &Ctx, port: &str, body: &str) -> (u16, &'static str, 
         gif: None,
         started_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
     });
-    match door(&ctx.devices, |reply| DevicesCmd::RecordStart {
+    match request_devices(&ctx.devices, |reply| DevicesCmd::RecordStart {
         port: port.to_string(),
         job_id,
         secs,
@@ -646,14 +621,14 @@ async fn record_start(ctx: &Ctx, port: &str, body: &str) -> (u16, &'static str, 
 }
 
 async fn admission(ctx: &Ctx, port: &str) -> (u16, &'static str, Vec<u8>) {
-    match door(&ctx.devices, |reply| DevicesCmd::AdmissionRetry { port: port.to_string(), reply }).await {
+    match request_devices(&ctx.devices, |reply| DevicesCmd::AdmissionRetry { port: port.to_string(), reply }).await {
         Ok(Ok(())) => (
             200,
             "application/json",
             serde_json::to_vec(&serde_json::json!({
                 "confirmed": true,
                 "admission": "retry",
-                "message": format!("the exam re-runs on {port} — the verdict arrives on the log"),
+                "message": format!("admission tests restarted on {port}; results appear in the log"),
             }))
             .unwrap_or_default(),
         ),
@@ -662,9 +637,7 @@ async fn admission(ctx: &Ctx, port: &str) -> (u16, &'static str, Vec<u8>) {
     }
 }
 
-/// The identify door: one face takes the stage and rings its own
-/// name (the port), so twins on a desk can be told apart and the say
-/// cycle proves itself end to end.
+/// Send the identify indication to one device.
 async fn identify(ctx: &Ctx, port: &str) -> (u16, &'static str, Vec<u8>) {
     device_action(ctx, port, DeviceAction::Identify, None).await
 }
@@ -687,7 +660,7 @@ async fn maintenance(ctx: &Ctx, port: &str, body: &str) -> (u16, &'static str, V
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
     let action = match kind.as_str() {
-        "install" | "adopt" => DeviceAction::Install,
+        "install" | "provision" | "adopt" => DeviceAction::Install,
         "soft" => DeviceAction::Update,
         "factory" => DeviceAction::FactoryReset,
         _ => return envelope(false, format!("unknown maintenance kind {kind:?}")),
@@ -707,7 +680,7 @@ async fn device_action(
     action: DeviceAction,
     faceplate: Option<String>,
 ) -> (u16, &'static str, Vec<u8>) {
-    match door(&ctx.devices, |reply| DevicesCmd::Act {
+    match request_devices(&ctx.devices, |reply| DevicesCmd::Act {
         port: port.to_string(),
         action,
         faceplate: faceplate.clone(),
@@ -741,27 +714,25 @@ fn action_echo(port: &str, action: DeviceAction, faceplate: Option<&str>) -> ser
 
 fn action_message(port: &str, action: DeviceAction) -> String {
     match action {
-        DeviceAction::Pause => format!("{port} lifted off the stream — the face rests"),
-        DeviceAction::Resume => format!("{port} back on the stream — no re-test needed"),
+        DeviceAction::Pause => format!("streaming paused for {port}"),
+        DeviceAction::Resume => format!("streaming resumed for {port}; no admission test required"),
         DeviceAction::Identify => {
-            format!("{port} takes the stage — it rings its name for a moment")
+            format!("identify indication sent to {port}")
         }
         DeviceAction::Install => {
-            format!("the install saga owns {port} — its steps arrive on the log")
+            format!("installation started for {port}; progress appears in the log")
         }
         DeviceAction::Update => {
-            format!("the update saga owns {port} — its steps arrive on the log")
+            format!("update started for {port}; progress appears in the log")
         }
         DeviceAction::FactoryReset => {
-            format!("the factory reset owns {port} — its steps arrive on the log")
+            format!("factory reset started for {port}; progress appears in the log")
         }
     }
 }
 
-/// The window's one action door: every client intent is a variant
-/// here, parsed and refused by name. Terse on the wire, honest in the
-/// reply — `confirmed` says whether the house *changed*, the echo says
-/// what was asked, and `message` says what is now true.
+/// Parse and dispatch Workbench actions. `confirmed` indicates whether
+/// state changed; the echo contains the normalized request.
 #[derive(Debug, serde::Deserialize)]
 struct UiAction {
     watch_media: Option<Watch>,
@@ -802,7 +773,7 @@ async fn ui_action(ctx: &Ctx, body: &str) -> (u16, &'static str, Vec<u8>) {
             "application/json",
             serde_json::to_vec(&serde_json::json!({
                 "confirmed": false,
-                "message": "this door speaks {\"watch_media\":\"on\"|\"off\"}",
+                "message": "expected {\"watch_media\":\"on\"|\"off\"}",
             }))
             .unwrap_or_default(),
         );
@@ -810,19 +781,19 @@ async fn ui_action(ctx: &Ctx, body: &str) -> (u16, &'static str, Vec<u8>) {
     let Some(watch) = action.watch_media else {
         return json(serde_json::json!({
             "confirmed": false,
-            "message": "nothing asked — the door holds watch_media so far",
+            "message": "request did not include watch_media",
         }));
     };
     let on = watch == Watch::On;
-    match door(&ctx.devices, |reply| DevicesCmd::WatchMedia { on, reply: Some(reply) }).await {
+    match request_devices(&ctx.devices, |reply| DevicesCmd::WatchMedia { on, reply: Some(reply) }).await {
         Ok(report) => {
             let message = match (on, report.changed) {
-                (true, true) => format!("Streaming captures on {} devices", report.blinking),
+                (true, true) => format!("Streaming captures on {} devices", report.active_captures),
                 (true, false) => {
-                    format!("Streaming already enabled ({} devices)", report.blinking)
+                    format!("Streaming already enabled ({} devices)", report.active_captures)
                 }
-                (false, true) => "Streaming captures resting".to_string(),
-                (false, false) => "Streaming captures already resting".to_string(),
+                (false, true) => "Streaming captures disabled".to_string(),
+                (false, false) => "Streaming captures already disabled".to_string(),
             };
             json(serde_json::json!({
                 "confirmed": report.changed,
@@ -851,16 +822,16 @@ async fn control(ctx: &Ctx, body: &str) -> (u16, &'static str, Vec<u8>) {
                     DevicesCmd::Pause { reply }
                 }
             };
-            match door(&ctx.devices, asked).await {
+            match request_devices(&ctx.devices, asked).await {
                 Ok(report) => {
                     let message = match (resume, report.changed) {
                         (true, true) => format!(
-                            "stream resumed — {} session(s) re-open, the faces redress",
+                            "stream resumed — {} device session(s) opened",
                             report.ports
                         ),
-                        (true, false) => "the stream was already flowing".to_string(),
+                        (true, false) => "the stream was already active".to_string(),
                         (false, true) => format!(
-                            "stream paused — {} port(s) released, the faces fall idle",
+                            "stream paused — {} device port(s) released",
                             report.ports
                         ),
                         (false, false) => "the stream was already paused".to_string(),
@@ -893,8 +864,8 @@ async fn say(ctx: &Ctx, body: &str) -> (u16, &'static str, Vec<u8>) {
         .to_string();
     let urgency = parsed.get("urgency").and_then(|v| v.as_u64()).unwrap_or(2) as u8;
     let _ = ctx
-        .moments
-        .send(MomentsCmd::tell("workbench", &kind, Some(label.clone()), urgency.min(5)))
+        .notifications
+        .send(NotificationCmd::submit("workbench", &kind, Some(label.clone()), urgency.min(5)))
         .await;
     (
         200,
@@ -902,7 +873,7 @@ async fn say(ctx: &Ctx, body: &str) -> (u16, &'static str, Vec<u8>) {
         serde_json::to_vec(&serde_json::json!({
             "confirmed": true,
             "say": kind,
-            "message": format!("the moment is handed to the house — {}", label),
+            "message": format!("event submitted — {}", label),
         }))
         .unwrap_or_default(),
     )

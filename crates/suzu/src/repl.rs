@@ -1,15 +1,15 @@
-//! The raw-REPL engine — the house's own voice for first adoption.
+//! Native raw-REPL engine for device provisioning.
 //!
 //! A MicroPython board not yet speaking suzu/1 can only be reached
 //! through its interpreter's console: interrupt the app, enter raw
 //! mode, evaluate one-liners, and write files as base64 chunk lines
-//! dribbled past the UART RX FIFO. This module is the Rust port of
+//! sized for the UART RX FIFO. This module is the Rust port of
 //! the reference procedure that lived in `scripts/push_firmware.py` —
-//! same framing, same proofs, same hardening — so a fresh machine
-//! needs nothing but this binary to adopt a face.
+//! with equivalent framing, verification, and error handling, so provisioning
+//! requires only this binary.
 //!
-//! The laws it keeps (each one earned on the bench):
-//! - raw mode is BELIEVED only when the device says so (`raw REPL`
+//! Protocol requirements:
+//! - raw mode is accepted only when the device returns the `raw REPL`
 //!   banner); a session without the banner is not a session;
 //! - the end marker is the PAIR `\x04>`, never a bare `\x04`;
 //! - framing failures abort loudly — blind retries can double-write;
@@ -49,7 +49,7 @@ impl Repl {
         if !out.windows(7).any(|w| w == b"suzu-ok") {
             bail!("REPL answered but not sanely: {:?}", &out[..out.len().min(80)]);
         }
-        // The ancestor app left the heap dirty and fragmented; a
+        // The previously running application may leave the heap fragmented; a
         // collect here is the difference between a parse fitting or not.
         repl.exec("import gc; gc.collect()")?;
         Ok(repl)
@@ -61,7 +61,7 @@ impl Repl {
             let _ = self.port.write_all(b"\r\x03\x03"); // interrupt any app
             let _ = self.port.flush();
             std::thread::sleep(Duration::from_millis(700));
-            self.drain(0.5); // the app's exit reply lands late
+            self.drain(0.5); // Allow time for the application exit response.
             let _ = self.port.write_all(b"\x02"); // Ctrl-B: friendly, known state
             let _ = self.port.flush();
             std::thread::sleep(Duration::from_millis(300));
@@ -312,7 +312,7 @@ impl Repl {
     }
 
     /// Ctrl-B to the friendly prompt, then Ctrl-D: the board re-runs
-    /// main.py and the face is on its own from here.
+    /// main.py; after this call the device restarts independently.
     pub fn soft_reboot(mut self) -> Result<()> {
         self.raw = false;
         let _ = self.port.write_all(b"\x02");

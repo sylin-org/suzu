@@ -3,37 +3,37 @@
 A 128×64 OLED composed in portrait (the unit stands on its long
 edge): three stacked readouts — CPU / GPU / MEM — in big condensed
 numerals from a real display font, a yellow name band down the right
-edge, and 1-px pulse dividers between areas, lit by the audio.level
-fast lane. Striking, legible from across the room, honest about what
-it doesn't know (an unmeasured slot is a dash, never a zero).
+edge, and 1-px pulse dividers between areas, updated by the audio.level
+event. It is legible from across the room and renders unmeasured values
+as a dash rather than zero.
 
-![the face](preview.png)
+![faceplate preview](preview.png)
 
 ## Package contract
 
-A faceplate is a **package of resources + placements + art**. The
+A faceplate is a **package of resources, placements, and graphics**. The
 installing tool pushes what `faceplate.yaml` declares, verbatim; it
 never interprets art. The face itself speaks suzu/1 on the serial
-line — that handshake is the only contract between the Resident and
-the art.
+line; that handshake is the interface between the Resident and the
+faceplate.
 
 | File | Role |
 |---|---|
 | `faceplate.yaml` | the declaration: slots, extras, frames, resources |
-| `main.py` | the face: frame parser + composition (pushed as `main.py`) |
+| `main.py` | frame parser and display composition (installed as `main.py`) |
 | `digits_bebas.py` | digit sprites generated from Bebas Neue (data only) |
-| `BebasNeue-OFL.txt` | the font's license, shipped with its art |
-| `preview.png` | host-rendered proof of the composition (not installed) |
+| `BebasNeue-OFL.txt` | the font license included with the faceplate |
+| `preview.png` | host-rendered preview of the composition (not installed) |
 
-Fallback: if `digits_bebas.py` is missing, the face renders a built-in
-4×7 numeral table scaled 4× — the same face, honest cloth.
+Fallback: if `digits_bebas.py` is missing, the faceplate renders a built-in
+4×7 numeral table scaled 4×.
 
 ## Frames (suzu/1, `suzu-t`, newline-terminated)
 
 | Frame | Meaning |
 |---|---|
 | `I` | identity → `OK,{descriptor}*hh` (proto, version, faceplate, coverage, hardware_id) |
-| `K` | keepalive → `OK`; also wakes the face from rest |
+| `K` | keepalive → `OK`; also exits idle mode |
 | `G,report,<cpu>,<mem>,<gpu>` | ground.set in declared slot order; 255 = not measured → dash |
 | `A,audio.level,<0..100>` | fast atom → the pulse dividers (attack instant, decay exponential) |
 | `J,{json}` | context escape; `"name"` sets the band, `"shot":1` answers with the frame buffer as base64 in the ack — a copy of the screen, no reboot (`suzu screenshot` / `suzu record` ride this) |
@@ -43,7 +43,7 @@ Fallback: if `digits_bebas.py` is missing, the face renders a built-in
 
 Checksums (`*hh`, xor of the preceding bytes) are verified on receipt —
 a bad checksum is dropped, and state self-heals on the next frame.
-After 10 s without frames the face rests (contrast dims); any frame
+After 10 s without frames the faceplate enters idle mode (contrast dims); any frame
 wakes it.
 
 ## Regenerating the digits
@@ -65,6 +65,6 @@ the standing alternative — the Keeper's call) with the same command.
 python tools/preview_faceplate.py faceplates/esp8266-oled-v2/portrait-numerals
 ```
 
-Executes the face's own `main.py` against a fake framebuffer and a
+Executes the faceplate's `main.py` against a fake framebuffer and a
 scripted frame feed, then renders the portrait view. `--fallback`
 hides the font module to prove the fallback path.

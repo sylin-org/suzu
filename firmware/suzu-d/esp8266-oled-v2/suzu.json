@@ -3,5 +3,5 @@
   "companion": "firefly",
   "family": "esp8266-oled",
   "variant": "oled-v2",
-  "device_id": "assigned at adoption (preserved from pre-suzu provisioning when present)"
+  "device_id": "assigned during provisioning (preserved when already present)"
 }

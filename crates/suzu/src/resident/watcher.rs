@@ -1,8 +1,9 @@
-//! The watcher domain — senses USB arrivals and departures, runs the
-//! identification ladder, hands the facts to the devices domain, and
-//! ends its cycle. It never manages; it keeps only the presence ear.
+//! USB device discovery and identification.
+//!
+//! This module detects serial-port changes, identifies candidate devices,
+//! and forwards the resulting facts to the device manager.
 
-use super::events::{DeviceFacts, HouseEvent};
+use super::events::{DeviceFacts, ResidentEvent};
 use crate::catalog::Catalog;
 use std::sync::Arc;
 use crate::probe;
@@ -12,15 +13,14 @@ use std::time::Duration;
 use tokio::sync::broadcast::Sender;
 use tokio::sync::mpsc;
 
-/// What the watcher needs to reach the devices domain.
+/// Channels used by device discovery.
 #[derive(Clone)]
 pub struct WatcherLinks {
-    pub events: Sender<HouseEvent>,
+    pub events: Sender<ResidentEvent>,
     pub devices: mpsc::Sender<super::devices::DevicesCmd>,
 }
 
-/// Settled probes a known-class port gets to speak suzu/1 before its
-/// silence is believed (each probe carries its own boot-settle pause).
+/// Number of identification attempts allowed while a known device boots.
 const BOOT_PATIENCE: u32 = 5;
 
 pub struct Watcher {
@@ -36,8 +36,8 @@ fn usb_of(p: &serialport::SerialPortInfo) -> Option<(u16, u16)> {
 }
 
 /// One identification pass, blocking — run inside spawn_blocking.
-/// `Err(reason)` means the port could not be honestly read (busy,
-/// stale, or failing) — such ports are never minded.
+/// `Err(reason)` means the port could not be read (busy,
+/// stale, or failing); such ports are not tracked.
 pub fn identify_facts(catalog: &Catalog, port: &str, vid: u16, pid: u16) -> Result<DeviceFacts, String> {
     let t = probe::probe_transcript(port);
     if let Some(err) = &t.error {
@@ -84,16 +84,12 @@ pub fn identify_facts(catalog: &Catalog, port: &str, vid: u16, pid: u16) -> Resu
 impl Watcher {
     pub async fn run(self) {
         let mut seen: HashSet<String> = HashSet::new();
-        // Ports whose identification failed: retried every cycle, with
-        // the failure logged once (not per retry). A busy or wedged
-        // port is a moment, not a verdict — tonight's lesson: a port
-        // marked seen before a panicking probe never came back.
+        // Retry ports whose identification failed on every cycle, but log each
+        // failure only once. Do not mark failed probes as successfully seen.
         let mut failed: HashSet<String> = HashSet::new();
-        // A known-class port that has not spoken suzu/1 yet is a face
-        // mid-boot (source compile takes seconds on the bigger boards),
-        // not an unknown-firmware verdict. It re-enters the probe queue,
-        // bounded — after BOOT_PATIENCE settled probes the silence is
-        // believed and the board is minded as unknown firmware.
+        // A known-class port may need several seconds to boot and compile source.
+        // Retry it up to BOOT_PATIENCE times before classifying its firmware as
+        // unknown.
         let mut booting: HashMap<String, u32> = HashMap::new();
         loop {
             let ports = match tokio::task::spawn_blocking(serialport::available_ports).await {
@@ -108,15 +104,15 @@ impl Watcher {
             for p in &ports {
                 present.insert(p.port_name.clone());
                 let Some((vid, pid)) = usb_of(p) else {
-                    continue; // non-USB — foreign by default, not our watch
+                    continue; // Non-USB ports are outside device discovery.
                 };
                 if seen.contains(&p.port_name) {
                     continue;
                 }
-                // A port under a maintenance saga belongs to the saga:
-                // a probe's DTR/RTS toggle would hard-reset the board
-                // mid-push. Skip until the hold lifts.
-                if super::devices::held_ports()
+                // Skip ports reserved by a maintenance procedure.
+                // A probe's DTR/RTS toggle would reset the board during an
+                // installation. Skip the port until maintenance releases it.
+                if super::devices::reserved_ports()
                     .lock()
                     .unwrap()
                     .contains(&p.port_name)
@@ -125,15 +121,15 @@ impl Watcher {
                 }
                 seen.insert(p.port_name.clone());
                 // `insert` answers false on retries: the first attempt
-                // announces itself, later retries stay quiet.
+                // Log the first failure only; later retries remain silent.
                 let first_attempt = failed.insert(p.port_name.clone());
                 if first_attempt {
-                    let _ = self.links.events.send(HouseEvent::DeviceSensed {
+                    let _ = self.links.events.send(ResidentEvent::DeviceSensed {
                         port: p.port_name.clone(),
                     });
                 }
 
-                // The ladder blocks (up to ~5.5 s) — off the async lane.
+                // Identification can block for about 5.5 seconds, so run it off the async loop.
                 let catalog = self.catalog.clone();
                 let name = p.port_name.clone();
                 let identified = tokio::task::spawn_blocking(move || {
@@ -164,7 +160,7 @@ impl Watcher {
                 };
 
                 // Report-before-minding: an unreachable port is a fact
-                // for the house, never a device to mind. A class the
+                // ignored by the Resident. A known class that
                 // catalog knows runs suzu — a silent descriptor is a
                 // face mid-boot, not a firmware verdict: settled
                 // re-probes until patience runs out, then belief.
@@ -178,7 +174,7 @@ impl Watcher {
                         }
                         booting.remove(&p.port_name);
                         failed.remove(&p.port_name);
-                        facts // believed silent: unknown firmware, minded honestly
+                        facts // confirmed silent: track as unknown firmware
                     }
                     Ok(facts) => {
                         booting.remove(&p.port_name);
@@ -190,7 +186,7 @@ impl Watcher {
                         booting.remove(&p.port_name);
                         seen.remove(&p.port_name);
                         if first_attempt {
-                            let _ = self.links.events.send(HouseEvent::PortBusy {
+                            let _ = self.links.events.send(ResidentEvent::PortBusy {
                                 port: p.port_name.clone(),
                                 reason,
                             });
@@ -202,20 +198,20 @@ impl Watcher {
                 let _ = self
                     .links
                     .events
-                    .send(HouseEvent::DeviceIdentified(facts.clone()));
+                    .send(ResidentEvent::DeviceIdentified(facts.clone()));
                 // Handoff: the watcher asks the devices domain to mind
                 // the new device, then ends its cycle for this port.
                 let _ = self
                     .links
                     .devices
-                    .send(super::devices::DevicesCmd::Mind(facts))
+                    .send(super::devices::DevicesCmd::Track(facts))
                     .await;
             }
 
             for gone in seen.difference(&present).cloned().collect::<Vec<_>>() {
                 seen.remove(&gone);
                 failed.remove(&gone);
-                let _ = self.links.events.send(HouseEvent::DeviceGone {
+                let _ = self.links.events.send(ResidentEvent::DeviceGone {
                     port: gone.clone(),
                 });
                 let _ = self.links.devices.send(super::devices::DevicesCmd::Gone { port: gone }).await;

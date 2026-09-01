@@ -3,7 +3,7 @@
 
 Read-only check of what's on the device, then — only if asked --
 restore the exact original bytes from a backup dir, using the
-ancestor's PROVEN write encode (base64 chunks, 384 B binary) instead
+legacy installer's verified write encoding (base64 chunks, 384 B binary) instead
 of the escaped-literal path that MemoryError'd.
 
     python scripts/park_device.py COM12 backups/COM12-20260828-213632
@@ -27,7 +27,7 @@ spec.loader.exec_module(pf)
 
 
 def write_file_b64(r, name, data):
-    """The ancestor installer's encode: 384 B binary -> 512-char base64
+    """Encode 384-byte binary chunks as 512-character base64 blocks.
     per chunk. It provisioned these very units; it stays the reference
     until the escaped path earns its keep."""
     r.exec("import gc; gc.collect()")

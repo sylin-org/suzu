@@ -4,7 +4,7 @@ MicroPython serial REPL (the esp8266-oled path).
 
 This is the executable form of the procedure checklists in
 hardware/classes/*/procedure.yaml — the same steps the Rust resident
-implements. Kept in Python because the ancestor tooling (esptool,
+implements. Kept as a standalone Python tool because the legacy tooling (esptool,
 mpremote) is Python and the flash step may need it first.
 
 Usage: python scripts/push_firmware.py COM24
@@ -61,7 +61,7 @@ class Repl:
         out = self.exec("print('suzu-ok')")
         if b"suzu-ok" not in out:
             raise FramingError("REPL answered but not sanely: " + repr(out[:80]))
-        # The ancestor app left the heap dirty and fragmented; a collect
+        # The legacy application left the heap fragmented; collect
         # here is the difference between a 1 KB parse fitting or not.
         self.exec("import gc; gc.collect()")
 
@@ -136,7 +136,7 @@ class Repl:
         return False
 
     def write_file(self, name, data):
-        """The ancestor Send-ESP8266File pattern, hardened: interrupt,
+        """Upload through raw REPL with interrupt, verification,
         Ctrl-B to the friendly prompt, then base64 chunk lines — each
         line dribbled in 16-char bites (the ESP8266's UART RX FIFO
         overruns a 200+ char burst; a truncated line with an open
@@ -250,10 +250,10 @@ class Repl:
         self.p.close()
 
 
-def resolve_dress(faceplate):
-    """A dress id -> (bundle directory, the dress tuple the device
-    records: faceplate name, mount side, this hang's version).
-    Variant-type faceplates declare their hangs in the manifest;
+def resolve_faceplate(faceplate):
+    """Map a faceplate ID to its bundle and persisted metadata:
+    faceplate name, mount, and version.
+    Variant-type faceplates declare mounts in the manifest;
     single-type faceplates bundle at their own root."""
     import yaml
     root = pathlib.Path("hardware/classes/esp8266-oled/faceplates")
@@ -277,14 +277,14 @@ def main():
     base = "firmware/suzu-d/esp8266-oled-v2/"
     device_id = sys.argv[2] if len(sys.argv) > 2 else None
     fresh = "--fresh" in sys.argv
-    # The dress (ADR-0005): a declared faceplate carries its own
+    # A declared faceplate carries its own metadata (ADR-0005).
     # main.py / face.mpy / art bins, and its id goes into suzu.json.
-    # Variant-type faceplates bundle one directory per hang beside
+    # Variant-type faceplates bundle one directory per mount beside
     # their manifest; the id resolves through the manifest's variants.
     faceplate = "numerals"
     if "--faceplate" in sys.argv:
         faceplate = sys.argv[sys.argv.index("--faceplate") + 1]
-    dress_dir, dress_name, dress_mount, dress_version = resolve_dress(faceplate)
+    faceplate_dir, faceplate_name, faceplate_mount, faceplate_version = resolve_faceplate(faceplate)
 
     repl = Repl(port)
     files = repl.list_files()
@@ -298,33 +298,31 @@ def main():
             "(pass --fresh after erase_flash + write_flash, never on a guess)"
         )
     # Rule zero: never modify a working device without a proven
-    # rollback. The backup is the file-level rollback; the ancestor
+    # rollback. The backup provides file-level rollback; the legacy
     # installer (erase -> flash -> provision) remains the heavy one.
     repl.backup_files(files, port)
 
-    # The durable word on the device: the dress tuple (ADR-0005) —
-    # this faceplate, this hang, this version. The descriptor answers
+    # Persist faceplate name, mount, and version (ADR-0005). The descriptor answers
     # the same three; the flattened install id is the doors' business.
     suzu = {
         "proto": "suzu/1",
         "companion": "firefly",
         "family": "esp8266-oled",
         "variant": "oled-v2",
-        "faceplate": dress_name,
+        "faceplate": faceplate_name,
         "adopted": "2026-08-28",
-        "dress_version": dress_version,
+        "dress_version": faceplate_version,
     }
-    if dress_mount:
-        suzu["mount"] = dress_mount
+    if faceplate_mount:
+        suzu["mount"] = faceplate_mount
     if device_id:
         suzu["device_id"] = device_id              # preserve identity
         print("identity preserved:", device_id)
 
     # The faceplate bundle: its bootstrap, its bytecode, its art.
-    # A missing file fails here, before any write — a dress that
-    # cannot be read is not a dress to push.
-    dress_files = ["main.py", "face.mpy"] + sorted(
-        p.name for p in pathlib.Path(dress_dir).glob("*.bin"))
+    # Validate every source file before writing to the device.
+    faceplate_files = ["main.py", "face.mpy"] + sorted(
+        p.name for p in pathlib.Path(faceplate_dir).glob("*.bin"))
     payload = [
         ("boot.py", open(base + "boot.py", "rb").read()),
         ("firefly_oled_v2.py", open(base + "firefly_oled_v2.py", "rb").read()),
@@ -337,8 +335,8 @@ def main():
         # This firmware auto-runs main.py only, so main.py is a
         # two-line bootstrap importing face (face.mpy).
     ]
-    for name in dress_files:
-        payload.append((name, open(f"{dress_dir}/{name}", "rb").read()))
+    for name in faceplate_files:
+        payload.append((name, open(f"{faceplate_dir}/{name}", "rb").read()))
     for stale in ("main.mpy", "face.py"):
         if stale in repl.list_files():
             print("  removing stale %s ..." % stale)

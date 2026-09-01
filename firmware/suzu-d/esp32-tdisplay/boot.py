@@ -1,7 +1,7 @@
 # boot.py - Firefly T-Display boot script
 # Runs before main.py on ESP32 T-Display (ST7789 135x240)
 #
-# Fireflies are USB-tethered by design: the host (suzu) sends all
+# These displays are USB-tethered: the host sends all
 # commands over serial. Disabling WiFi (and Bluetooth on ESP32) saves power
 # and removes an unused attack surface.
 import network

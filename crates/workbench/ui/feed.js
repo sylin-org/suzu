@@ -1,4 +1,4 @@
-//! The feed — the shell's SSE bridge, poured into the store.
+//! Receives Resident SSE messages from the desktop shell and updates the store.
 //!
 //! The Rust shell holds one connection to `/api/events` and republishes
 //! every frame as a Tauri event; this file is the whole of the client's
@@ -10,11 +10,11 @@
   "use strict";
 
   const tauri = window.__TAURI__;
-  if (!tauri?.event?.listen) return; // opened outside the shell: nothing to feed on
+  if (!tauri?.event?.listen) return; // No event bridge outside the desktop shell.
 
   const Store = window.SuzuStore;
 
-  tauri.event.listen("house", (e) => {
+  tauri.event.listen("resident-event", (e) => {
     let msg;
     try {
       msg = JSON.parse(e.payload);
@@ -26,7 +26,7 @@
     else Store.ingestFact(msg);
   });
 
-  tauri.event.listen("house-health", (e) => {
+  tauri.event.listen("resident-health", (e) => {
     Store.setStream(e.payload === "connected" ? "connected" : "reconnecting");
   });
 })();

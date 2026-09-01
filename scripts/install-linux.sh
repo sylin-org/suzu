@@ -5,7 +5,7 @@ set -euo pipefail
 SUZU_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 SUZU_REPO_DIR="$(cd -- "${SUZU_SCRIPT_DIR}/.." && pwd)"
 SUZU_ACTION="install"
-SUZU_KEEPER="${SUDO_USER:-${USER:-}}"
+SUZU_SERVICE_USER="${SUDO_USER:-${USER:-}}"
 SUZU_PREFIX="/usr/local"
 SUZU_BINARY="${SUZU_REPO_DIR}/target/release/suzu"
 SUZU_START=1
@@ -15,7 +15,7 @@ usage() {
     printf '%s\n' \
         "Usage: sudo scripts/install-linux.sh [install|verify|uninstall] [options]" \
         "" \
-        "  --user NAME       Unix account that keeps the Resident" \
+        "  --user NAME       Unix account that runs the Resident" \
         "  --binary PATH     Built suzu binary (default: target/release/suzu)" \
         "  --prefix PATH     Installation prefix (default: /usr/local)" \
         "  --no-start        Install and enable, but do not start now" \
@@ -29,7 +29,7 @@ if [[ $# -gt 0 && "${1}" != --* && "${1}" != "-h" ]]; then
 fi
 while [[ $# -gt 0 ]]; do
     case "${1}" in
-        --user) SUZU_KEEPER="${2:?--user needs an account}"; shift 2 ;;
+        --user) SUZU_SERVICE_USER="${2:?--user needs an account}"; shift 2 ;;
         --binary) SUZU_BINARY="${2:?--binary needs a path}"; shift 2 ;;
         --prefix) SUZU_PREFIX="${2:?--prefix needs a path}"; shift 2 ;;
         --no-start) SUZU_START=0; shift ;;
@@ -44,17 +44,17 @@ case "${SUZU_ACTION}" in install|verify|uninstall) ;; *) usage >&2; exit 2 ;; es
     printf 'The prefix must be an absolute path without spaces or pipes.\n' >&2
     exit 2
 }
-[[ "${SUZU_KEEPER}" =~ ^[a-z_][a-z0-9_-]*[$]?$ ]] || {
-    printf 'Not a safe Unix account name: %s\n' "${SUZU_KEEPER}" >&2
+[[ "${SUZU_SERVICE_USER}" =~ ^[a-z_][a-z0-9_-]*[$]?$ ]] || {
+    printf 'Not a safe Unix account name: %s\n' "${SUZU_SERVICE_USER}" >&2
     exit 2
 }
 command -v systemctl >/dev/null || { printf 'systemd is required.\n' >&2; exit 1; }
-getent passwd "${SUZU_KEEPER}" >/dev/null || {
-    printf 'The keeper account does not exist: %s\n' "${SUZU_KEEPER}" >&2
+getent passwd "${SUZU_SERVICE_USER}" >/dev/null || {
+    printf 'The configured service account does not exist: %s\n' "${SUZU_SERVICE_USER}" >&2
     exit 1
 }
 
-SUZU_UNIT="suzu@${SUZU_KEEPER}.service"
+SUZU_UNIT="suzu@${SUZU_SERVICE_USER}.service"
 SUZU_BINDIR="${SUZU_PREFIX}/bin"
 SUZU_RESOURCE_DIR="${SUZU_PREFIX}/share/suzu"
 SUZU_UNIT_FILE="/etc/systemd/system/suzu@.service"
@@ -90,12 +90,12 @@ if [[ "${SUZU_ACTION}" == "uninstall" ]]; then
         udevadm control --reload-rules
     fi
     if [[ "${SUZU_PURGE_STATE}" -eq 1 ]]; then
-        SUZU_STATE_TARGET="/var/lib/suzu/${SUZU_KEEPER}"
+        SUZU_STATE_TARGET="/var/lib/suzu/${SUZU_SERVICE_USER}"
         [[ "${SUZU_STATE_TARGET}" == /var/lib/suzu/* && "${SUZU_STATE_TARGET}" != /var/lib/suzu/ ]] || exit 1
         rm -rf -- "${SUZU_STATE_TARGET}"
         printf 'Removed service state: %s (not recoverable from this installer)\n' "${SUZU_STATE_TARGET}"
     else
-        printf 'Preserved service state in /var/lib/suzu/%s.\n' "${SUZU_KEEPER}"
+        printf 'Preserved service state in /var/lib/suzu/%s.\n' "${SUZU_SERVICE_USER}"
     fi
     printf 'Uninstalled %s. The shared suzu-hw group was preserved.\n' "${SUZU_UNIT}"
     exit 0

@@ -1,13 +1,12 @@
 name: lake
 class: waveshare-rp2040-matrix
 display_name: The Lake
-blurb: Raindrops and atom fireflies — color speaks, words do not
+blurb: A color-only event and metric display for the 5x5 matrix
 mount: usb-right                   # mounted on its long edge, connector to the right
 
-# The ring voice (ADR-0006): the lake splashes color. Qualifiers and
-# text are degraded away by the instance — the face receives bare
-# verbs (R,WARN) — and it cannot announce DONE, so the house times
-# the stage.
+# Ring protocol capabilities (ADR-0006). The 5x5 display cannot show
+# qualifiers or text, so the Resident sends bare event verbs and does
+# not wait for a DONE response.
 rings:
   qualifiers: false
   text: false

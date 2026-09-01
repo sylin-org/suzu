@@ -1,4 +1,4 @@
-# suzu face bootstrap — this firmware auto-runs only main.py;
-# the face itself ships as bytecode (face.mpy) so its 13 KB source
-# never compiles on the ESP8266's 80 KB heap at boot.
+# Faceplate bootstrap: this firmware automatically runs main.py;
+# face.mpy contains precompiled faceplate code so the 13 KB source
+# is not compiled in the ESP8266.s 80 KB heap at boot.
 import face

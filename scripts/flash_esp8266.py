@@ -209,6 +209,6 @@ write_bytes(b"I\n")
 got = read_for(4.0)
 if b"suzu/1" in got and DEVICE_ID.encode() in got:
     say("HANDSHAKE VERIFIED — proto suzu/1, identity preserved")
-    say("the face is up. watch the OLED.")
+    say("the faceplate is running; check the OLED output.")
 else:
     say("handshake incomplete: %r" % got[:200])

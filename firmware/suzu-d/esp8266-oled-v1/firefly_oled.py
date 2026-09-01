@@ -19,7 +19,7 @@ import ujson
 import profont_10 as font
 
 
-# firmware-side runtime truth. Everything else (family,
+# Firmware runtime fields. Everything else (family,
 # variant, display shape, capabilities) lives in /suzu.json —
 # written at provisioning time by NewFirefly.ps1. Firmware overlays
 # these two fields before emitting the HELLO frame.
@@ -52,7 +52,7 @@ _DESCRIPTOR = _load_descriptor()
 
 
 def descriptor_json():
-    """Merge runtime-truth fields into the provisioned descriptor."""
+    """Merge runtime fields into the provisioned descriptor."""
     d = dict(_DESCRIPTOR)
     d["hardware_id"] = _hardware_id()
     d["version"] = _FW_VERSION
@@ -290,7 +290,7 @@ class FireflyOLED:
         """Return the descriptor JSON framed as `OK,{...}` for the `I` command.
 
         suzu identity protocol: emits the same descriptor as HELLO does on
-        boot. Keeps a single source of truth via descriptor_json().
+        boot. Uses descriptor_json() for all identity replies.
         """
         return "OK," + descriptor_json()
 
@@ -379,7 +379,7 @@ class FireflyOLED:
     def pulse(self, count=3, step_ms=30):
         """
         Pulse brightness using contrast control.
-        Creates a breathing effect.
+        Creates a pulsing brightness effect.
         """
         for _ in range(count):
             # Fade out

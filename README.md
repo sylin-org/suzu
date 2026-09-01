@@ -256,19 +256,20 @@ to. ADR-0001 records why the matrix is a lake.
 git clone https://github.com/sylin-org/suzu
 cd suzu
 cargo run -- scan          # who is plugged in?
-cargo run -- prepare       # adopt a face: pick a device, pick a faceplate
-cargo run -- serve         # the Resident takes the night shift
+cargo run -- prepare       # provision a device and select a faceplate
+cargo run -- serve         # run the Resident service
 ```
 
-Adopting a CircuitPython board is a drive copy with backup and verification.
-Adopting an ESP8266 runs the proven pusher:
+CircuitPython provisioning uses verified drive copies. ESP8266 and T-Display
+provisioning uses the Resident's native Rust raw-REPL implementation:
 
 ```bash
-python scripts/push_firmware.py <port> <device_id> --fresh
+cargo run -- prepare <port> [faceplate]
 ```
 
-The Rust path needs a stable toolchain; the ESP8266 path needs Python with
-`pyserial` and `esptool`. Once a face is adopted, send it a moment by hand:
+The service has no host-Python runtime dependency. MicroPython remains installed
+on supported devices. The scripts under `scripts/` are development references
+and are not invoked by the Resident. Send a display notification with:
 
 ```bash
 cargo run -- say completion A backup committed

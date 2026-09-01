@@ -1,19 +1,11 @@
-//! The maintenance sagas — install, adopt, soft and factory reset,
-//! step by step, journaled as house events (ADR-0003).
+//! Install, update, and factory-reset maintenance procedures (ADR-0003).
 //!
-//! Every saga declares its plan up front (a total step count), and
-//! each step is announced the moment it begins — the workbench shows
-//! "step 2 of 5 — Waiting for BOOTSEL" while it runs. A step that
-//! fails is told truthfully; a saga that dies leaves the individual
-//! New, and the admission exam decides everything after.
+//! Each run declares a step count and publishes progress events. A
+//! failed run leaves the device in the New state until admission passes.
 //!
-//! Two laws bind every path:
-//! - **Backup precedes every write** — identity is stashed before
-//!   anything is erased, and restored before the saga ends.
-//! - **The tool that bricks is the tool that un-bricks** — the
-//!   runtime artifacts are vendored in `firmware/artifacts/`, so the
-//!   factory path works offline; a missing artifact fails the saga
-//!   *before* any erase begins.
+//! Device identity is backed up before writes and restored before the
+//! run ends. Runtime artifacts are vendored in `firmware/artifacts/`
+//! so factory reset works offline and validates artifacts before erase.
 
 use crate::catalog::Catalog;
 use anyhow::{anyhow, bail, Result};
@@ -21,60 +13,29 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 use tokio::sync::broadcast::Sender;
 
-use super::events::HouseEvent;
+use super::events::ResidentEvent;
 
-/// The saga runner: announces numbered steps as they begin, and tells
-/// the truth when one fails.
-///
-/// The counting law: `total` is every numbered announcement the saga
-/// will ever make — its steps, plus the closing hand (the exam on
-/// success, `failed` otherwise). A step that fails re-announces its
-/// own number; the closing takes the next one, so the counter can
-/// never run past the plan.
-struct Saga<'a> {
-    events: &'a Sender<HouseEvent>,
+/// Publishes numbered steps and failures. `total` includes the final
+/// admission or failure step.
+struct MaintenanceRun<'a> {
+    events: &'a Sender<ResidentEvent>,
     device_id: String,
     index: u32,
     total: u32,
 }
 
-/// A long step's voice: handed to the step's closure, it announces
-/// where the work is while the work runs. The plan's numbers hold —
-/// this is the same step, saying what it is doing.
-struct StepVoice<'a> {
-    events: &'a Sender<HouseEvent>,
-    device_id: &'a str,
-    index: u32,
-    total: u32,
-}
-
-impl StepVoice<'_> {
-    fn speak(&self, text: &str) {
-        let _ = self.events.send(HouseEvent::MaintenanceStep {
-            device_id: self.device_id.to_string(),
-            step: text.to_string(),
-            index: self.index,
-            total: self.total,
-            ok: true,
-            detail: String::new(),
-        });
-    }
-}
-
-impl<'a> Saga<'a> {
-    fn new(events: &'a Sender<HouseEvent>, device_id: &str, total: u32) -> Self {
+impl<'a> MaintenanceRun<'a> {
+    fn new(events: &'a Sender<ResidentEvent>, device_id: &str, total: u32) -> Self {
         Self { events, device_id: device_id.to_string(), index: 0, total }
     }
 
-    /// Announce a step, run it, and keep the announcement either way —
-    /// the workbench shows the step while it runs, and the failure if
-    /// it fails. The closure speaks through the step's voice.
+    /// Announce a step, execute it, and publish any failure.
     fn step<T, F>(&mut self, label: &str, run: F) -> Result<T>
     where
-        F: FnOnce(&StepVoice<'_>) -> Result<T>,
+        F: FnOnce() -> Result<T>,
     {
         self.index += 1;
-        let _ = self.events.send(HouseEvent::MaintenanceStep {
+        let _ = self.events.send(ResidentEvent::MaintenanceStep {
             device_id: self.device_id.clone(),
             step: label.to_string(),
             index: self.index,
@@ -82,16 +43,10 @@ impl<'a> Saga<'a> {
             ok: true,
             detail: String::new(),
         });
-        let voice = StepVoice {
-            events: self.events,
-            device_id: &self.device_id,
-            index: self.index,
-            total: self.total,
-        };
-        match run(&voice) {
+        match run() {
             Ok(v) => Ok(v),
             Err(e) => {
-                let _ = self.events.send(HouseEvent::MaintenanceStep {
+                let _ = self.events.send(ResidentEvent::MaintenanceStep {
                     device_id: self.device_id.clone(),
                     step: format!("{label} (failed)"),
                     index: self.index,
@@ -104,10 +59,10 @@ impl<'a> Saga<'a> {
         }
     }
 
-    /// The closing announcement — whichever way the saga ends.
+    /// Publish the final step.
     fn close(&mut self, label: &str, ok: bool, detail: String) {
         self.index += 1;
-        let _ = self.events.send(HouseEvent::MaintenanceStep {
+        let _ = self.events.send(ResidentEvent::MaintenanceStep {
             device_id: self.device_id.clone(),
             step: label.to_string(),
             index: self.index,
@@ -117,31 +72,28 @@ impl<'a> Saga<'a> {
         });
     }
 
-    /// The success closing: the saga hands the individual to the
-    /// admission exam, which alone decides the stream.
-    fn hand_to_exam(&mut self) {
-        self.close("Handing to the exam", true, String::new());
+    /// Publish the transition to admission tests.
+    fn finish_successfully(&mut self) {
+        self.close("Starting admission tests", true, String::new());
     }
 }
 
-/// The saga's spine: run the kind the keeper asked for.
+/// Select and run the requested maintenance procedure.
 pub fn run(
     port: &str,
     class: Option<&str>,
     kind: &str,
     catalog: &Catalog,
-    events: &Sender<HouseEvent>,
+    events: &Sender<ResidentEvent>,
     device_id: &str,
     faceplate: Option<&str>,
 ) -> Result<()> {
-    type SagaRunner = fn(&mut Saga, &str, &str, &str, &Catalog, Option<&str>) -> Result<()>;
-    let (total, runner): (u32, SagaRunner) = match (class, kind)
-    {
-        (Some("waveshare-rp2040-matrix"), "install" | "adopt") => {
-            // A board with no CircuitPython yet gets the full install:
-            // BOOTSEL, the runtime, then the face. One with the drive
-            // mounted just needs its files refreshed. Totals count the
-            // steps plus the closing hand (the counting law, Saga's doc).
+    type MaintenanceRunner = fn(&mut MaintenanceRun, &str, &str, &str, &Catalog, Option<&str>) -> Result<()>;
+    let (total, runner): (u32, MaintenanceRunner) = match (class, kind) {
+        (Some("waveshare-rp2040-matrix"), "install" | "provision") => {
+            // A board without a mounted CircuitPython drive requires the full
+            // BOOTSEL installation. A mounted drive only needs its files updated.
+            // Totals include procedure steps and the final admission step.
             if circuitpy_drives().is_empty() {
                 (5, rp2040_fresh)
             } else {
@@ -151,32 +103,31 @@ pub fn run(
         (Some("waveshare-rp2040-matrix"), "soft") => (5, rp2040_soft),
         (Some("waveshare-rp2040-matrix"), "factory") => (6, rp2040_factory),
         (Some(c), kind) if c.contains("esp8266") => match kind {
-            "install" | "adopt" | "soft" => (2, esp8266_adopt),
-            "factory" => (4, esp8266_factory),
-            _ => bail!("no saga for kind {kind:?}"),
+            "install" | "provision" | "soft" => (2, esp8266_provision),
+            _ => bail!("unsupported maintenance kind {kind:?}"),
         },
         (Some(c), kind) if c.contains("tdisplay") => match kind {
-            // The T-Display already runs MicroPython: adoption is a
-            // file push (backup, Aurora, exam) — never the bootloader.
-            "install" | "adopt" | "soft" => (2, tdisplay_adopt),
-            _ => bail!("tdisplay declares no {kind:?} saga — adopt is the door"),
+            // The T-Display already runs MicroPython, so provisioning only
+            // updates files and does not enter the bootloader.
+            "install" | "provision" | "soft" => (2, tdisplay_provision),
+            _ => bail!("tdisplay does not support the {kind:?} maintenance procedure"),
         },
         (Some(c), _) => bail!("class {c} declares no maintenance procedure yet"),
         (None, _) => bail!("no class manifest — no maintenance procedure"),
     };
 
-    let mut saga = Saga::new(events, device_id, total);
+    let mut run = MaintenanceRun::new(events, device_id, total);
     match runner(
-        &mut saga,
+        &mut run,
         port,
         class.as_deref().unwrap_or(""),
         device_id,
         catalog,
         faceplate,
     ) {
-        Ok(()) => saga.hand_to_exam(),
+        Ok(()) => run.finish_successfully(),
         Err(e) => {
-            saga.close("failed", false, format!("{e:#}"));
+            run.close("failed", false, format!("{e:#}"));
         }
     }
     Ok(())
@@ -194,7 +145,7 @@ fn wait_for<F: Fn() -> bool>(secs: u64, what: &str, pred: F) -> Result<()> {
 }
 
 /// Every mounted CIRCUITPY drive — more than one means the install
-/// could land on the wrong board, so the saga refuses and says so.
+/// could target the wrong board, so the run rejects ambiguous mounts.
 fn circuitpy_drives() -> Vec<String> {
     let mut out = Vec::new();
     for letter in 'A'..='Z' {
@@ -212,7 +163,7 @@ fn wait_mount(label: &str, secs: u64) -> Result<String> {
     Ok(format!("{label}:/"))
 }
 
-/// The fresh CIRCUITPY remount takes a moment after a UF2 lands.
+/// Wait for CIRCUITPY to remount after copying a UF2 file.
 fn wait_circuitpy(secs: u64) -> Result<String> {
     wait_for(secs, "CIRCUITPY", || find_circuitpy_drive().is_some())?;
     let drive = find_circuitpy_drive().unwrap();
@@ -263,14 +214,14 @@ fn backup_drive_identity(drive: &str, device_id: &str) -> Result<()> {
             std::fs::copy(&p, dest.join(name)).map_err(|e| anyhow!("backup {name}: {e}"))?;
         }
     }
-    // The roster's device_id is the identity of record; note it beside
-    // the backup so a wipe can never orphan an individual.
+    // The registry's device_id is the identity of record; note it beside
+    // the backup so a reset cannot lose the registered device identity.
     std::fs::write(dest.join("identity.txt"), format!("device_id: {device_id}\n"))?;
     Ok(())
 }
 
-/// The face files, with the individual's identity restored.
-fn write_face_files(drive: &str, device_id: &str) -> Result<()> {
+/// Write the faceplate files and restore the device identity.
+fn write_faceplate_files(drive: &str, device_id: &str) -> Result<()> {
     let firmware = crate::paths::firmware_dir().join("suzu-d/rp2040-matrix");
     let code = std::fs::read(firmware.join("code.py"))?;
     let template = std::fs::read_to_string(firmware.join("suzu.json"))
@@ -299,8 +250,7 @@ fn write_face_files(drive: &str, device_id: &str) -> Result<()> {
     Ok(())
 }
 
-/// CircuitPython with autoreload disabled does not reload on write —
-/// the face is told, politely, to start over (Ctrl-C ×2, Ctrl-D).
+/// Restart CircuitPython after writes when autoreload is disabled.
 fn force_reload(port: &str) -> Result<()> {
     let mut p = serialport::new(port, 115_200)
         .timeout(Duration::from_millis(300))
@@ -318,120 +268,6 @@ fn force_reload(port: &str) -> Result<()> {
     Ok(())
 }
 
-/// The calmest a tool's voice may pulse — a burst (esptool's progress
-/// bar speaks in `\r` ticks) collapses to its latest line at this
-/// cadence, so the journal stays a story, not a firehose.
-const SPEAK_MIN_INTERVAL: Duration = Duration::from_millis(1000);
-
-/// A tool line worth speaking: the tail after any carriage return (a
-/// progress bar redraws one line in place), trimmed of frame noise.
-fn speakable(line: &str) -> &str {
-    line.rsplit('\r').next().unwrap_or("").trim()
-}
-
-/// Run a tool with its voice on: every line it speaks becomes a step
-/// announcement as it lands (coalesced — see SPEAK_MIN_INTERVAL), so a
-/// long step is never a silent step. Returns the tool's own last line.
-fn run_tool(voice: &StepVoice<'_>, mut command: std::process::Command, what: &str) -> Result<String> {
-    use std::io::{BufRead, BufReader};
-    use std::sync::mpsc;
-    command
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-    let mut child = command.spawn().map_err(|e| anyhow!("{what}: {e}"))?;
-    let (tx, rx) = mpsc::channel::<String>();
-    let mut pipes: Vec<Box<dyn std::io::Read + Send>> = Vec::new();
-    if let Some(p) = child.stdout.take() {
-        pipes.push(Box::new(p));
-    }
-    if let Some(p) = child.stderr.take() {
-        pipes.push(Box::new(p));
-    }
-    for pipe in pipes {
-        let tx = tx.clone();
-        std::thread::spawn(move || {
-            for line in BufReader::new(pipe).lines() {
-                if tx.send(line.unwrap_or_default()).is_err() {
-                    return;
-                }
-            }
-        });
-    }
-    drop(tx);
-
-    let mut last = String::new();
-    let mut pending: Option<String> = None;
-    let mut last_spoke = Instant::now() - SPEAK_MIN_INTERVAL;
-    loop {
-        match rx.recv_timeout(Duration::from_millis(200)) {
-            Ok(line) => {
-                let text = speakable(&line);
-                if text.is_empty() {
-                    continue;
-                }
-                last = text.to_string();
-                if last_spoke.elapsed() >= SPEAK_MIN_INTERVAL {
-                    voice.speak(text);
-                    pending = None;
-                    last_spoke = Instant::now();
-                } else {
-                    pending = Some(text.to_string());
-                }
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                if let Some(text) = pending.take() {
-                    voice.speak(&text);
-                    last_spoke = Instant::now();
-                }
-            }
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
-        }
-    }
-    if let Some(text) = pending.take() {
-        voice.speak(&text);
-    }
-    let status = child.wait().map_err(|e| anyhow!("{what}: wait failed — {e}"))?;
-    if !status.success() {
-        bail!("{what} failed: {}", if last.is_empty() { format!("exited with {status}") } else { last });
-    }
-    Ok(last)
-}
-
-fn esptool(voice: &StepVoice<'_>, port: &str, args: &[&str]) -> Result<String> {
-    for exe in ["esptool", "esptool.py"] {
-        let mut cmd = std::process::Command::new(exe);
-        cmd.arg("--port").arg(port).arg("--chip");
-        let mut all = args.to_vec();
-        let chip = all.remove(0);
-        cmd.arg(chip);
-        cmd.args(&all);
-        match run_tool(voice, cmd, exe) {
-            Ok(text) => return Ok(text),
-            Err(e) if exe == "esptool.py" => return Err(e),
-            Err(_) => continue, // no `esptool` on PATH — try `esptool.py`
-        }
-    }
-    unreachable!()
-}
-
-fn push_face_files(
-    voice: &StepVoice<'_>,
-    port: &str,
-    device_id: &str,
-    fresh: bool,
-    faceplate: Option<&str>,
-) -> Result<String> {
-    let mut cmd = std::process::Command::new("python");
-    cmd.args(["scripts/push_firmware.py", port, device_id]);
-    if fresh {
-        cmd.arg("--fresh");
-    }
-    if let Some(dress) = faceplate {
-        cmd.args(["--faceplate", dress]);
-    }
-    run_tool(voice, cmd, "push_firmware.py")
-}
-
 fn rp2040_port() -> Result<String> {
     for e in crate::enumerate() {
         if let Some(usb) = &e.usb
@@ -442,52 +278,43 @@ fn rp2040_port() -> Result<String> {
     bail!("no RP2040 CDC port — replug the device")
 }
 
-fn last_line(text: &str) -> String {
-    text.lines()
-        .rev()
-        .map(|l| l.trim())
-        .find(|l| !l.is_empty())
-        .unwrap_or("ok")
-        .to_string()
-}
+// ── the rp2040 procedures ────────────────────────────────────────────────
 
-// ── the rp2040 sagas ────────────────────────────────────────────────
-
-/// A factory-fresh board: BOOTSEL gate, the CircuitPython runtime,
-/// then the face files with the individual's minted identity.
+/// Provision a factory-reset board through BOOTSEL, install CircuitPython,
+/// then install the faceplate files with the assigned device identity.
 fn rp2040_fresh(
-    saga: &mut Saga,
+    run: &mut MaintenanceRun,
     _port: &str,
     _class: &str,
     device_id: &str,
     _catalog: &Catalog,
     _faceplate: Option<&str>,
 ) -> Result<()> {
-    saga.step("Preparing the board", |_voice| {
+    run.step("Preparing the board", || {
         if !circuitpy_drives().is_empty() {
             bail!("a CIRCUITPY drive is already mounted — this board is not fresh; use Reinstall");
         }
         Ok(())
     })?;
-    saga.step("Waiting for BOOTSEL", |_voice| {
+    run.step("Waiting for BOOTSEL", || {
         wait_mount("RPI-RP2", 600).map(|_| ())
     })?;
-    saga.step("Flashing CircuitPython", |_voice| {
+    run.step("Flashing CircuitPython", || {
         let mount = wait_mount("RPI-RP2", 60)?;
         copy_uf2("circuitpython-raspberry_pi_pico.uf2", &mount)?;
         wait_circuitpy(120).map(|_| ())
     })?;
-    saga.step("Writing the face", |_voice| {
+    run.step("Writing the faceplate", || {
         let drive = find_circuitpy_drive()
-            .ok_or_else(|| anyhow!("the drive vanished before the face could be written"))?;
-        write_face_files(&drive, device_id)
+            .ok_or_else(|| anyhow!("the drive disconnected before the faceplate could be written"))?;
+        write_faceplate_files(&drive, device_id)
     })?;
     Ok(())
 }
 
-/// The face files return to ship state; the runtime is untouched.
+/// Restore faceplate files without replacing the CircuitPython runtime.
 fn rp2040_soft(
-    saga: &mut Saga,
+    run: &mut MaintenanceRun,
     _port: &str,
     _class: &str,
     device_id: &str,
@@ -496,33 +323,33 @@ fn rp2040_soft(
 ) -> Result<()> {
     let drives = circuitpy_drives();
     if drives.len() > 1 {
-        bail!("multiple CIRCUITPY drives mounted ({}) — unplug the other boards so the face lands on the right one", drives.join(", "));
+        bail!("multiple CIRCUITPY drives mounted ({}); unplug other boards to select one target", drives.join(", "));
     }
     let drive = drives
         .into_iter()
         .next()
         .ok_or_else(|| anyhow!("no CIRCUITPY drive — replug the device"))?;
-    saga.step("Checking the drive", |_voice| {
+    run.step("Checking the drive", || {
         if Path::new(&format!("{drive}/boot_out.txt")).exists() {
             Ok(())
         } else {
             bail!("{drive} does not look like a CircuitPython board");
         }
     })?;
-    saga.step("Backing up identity", |_voice| {
+    run.step("Backing up identity", || {
         backup_drive_identity(&drive, device_id)
     })?;
-    saga.step("Writing the face", |_voice| {
-        write_face_files(&drive, device_id)
+    run.step("Writing the faceplate", || {
+        write_faceplate_files(&drive, device_id)
     })?;
-    saga.step("Nudging the face", |_voice| force_reload(&rp2040_port()?))?;
+    run.step("Restarting the faceplate", || force_reload(&rp2040_port()?))?;
     Ok(())
 }
 
-/// The nuke: BOOTSEL, every flash cell to 0xFF, the runtime rebuilt,
-/// the face rewritten — identity backed up first, restored after.
+/// Erase flash through BOOTSEL, reinstall the runtime and faceplate, and
+/// restore the identity saved before the reset.
 fn rp2040_factory(
-    saga: &mut Saga,
+    run: &mut MaintenanceRun,
     _port: &str,
     _class: &str,
     device_id: &str,
@@ -531,63 +358,56 @@ fn rp2040_factory(
 ) -> Result<()> {
     let drive = find_circuitpy_drive()
         .ok_or_else(|| anyhow!("no CIRCUITPY drive — replug the device first so identity can be backed up"))?;
-    saga.step("Backing up identity", |_voice| {
+    run.step("Backing up identity", || {
         backup_drive_identity(&drive, device_id)
     })?;
-    saga.step("Waiting for BOOTSEL", |_voice| {
+    run.step("Waiting for BOOTSEL", || {
         println!("[maintenance] hold BOOTSEL and replug — waiting up to 10 minutes for RPI-RP2");
         wait_mount("RPI-RP2", 600).map(|_| ())
     })?;
-    saga.step("Erasing the flash", |_voice| {
+    run.step("Erasing the flash", || {
         let mount = wait_mount("RPI-RP2", 60)?;
         copy_uf2("flash_nuke.uf2", &mount)?;
         std::thread::sleep(Duration::from_millis(2500));
-        wait_mount("RPI-RP2", 60).map(|_| ()) // the nuke reboots into its bootloader
+        wait_mount("RPI-RP2", 60).map(|_| ()) // The erase image reboots into the bootloader.
     })?;
-    saga.step("Flashing CircuitPython", |_voice| {
+    run.step("Flashing CircuitPython", || {
         let mount = wait_mount("RPI-RP2", 60)?;
         copy_uf2("circuitpython-raspberry_pi_pico.uf2", &mount)?;
         wait_circuitpy(120).map(|_| ())
     })?;
-    saga.step("Writing the face", |_voice| {
+    run.step("Writing the faceplate", || {
         let drive = find_circuitpy_drive()
-            .ok_or_else(|| anyhow!("the drive vanished before the face could be written"))?;
-        write_face_files(&drive, device_id)
+            .ok_or_else(|| anyhow!("the drive disconnected before the faceplate could be written"))?;
+        write_faceplate_files(&drive, device_id)
     })?;
     Ok(())
 }
 
-// ── the tdisplay sagas ──────────────────────────────────────────────
+// ── the tdisplay procedures ──────────────────────────────────────────────
 
-/// The T-Display already runs MicroPython (firefly, or a previous
-/// Aurora): adoption is the file push — backup, the Aurora bundle,
-/// the dress tuple into suzu.json — then the exam decides.
-fn tdisplay_adopt(
-    saga: &mut Saga,
+/// The T-Display already runs MicroPython (legacy firmware or a previous
+/// Aurora): provisioning is the file push — backup, the Aurora bundle,
+/// faceplate metadata into suzu.json, followed by admission tests.
+fn tdisplay_provision(
+    run: &mut MaintenanceRun,
     port: &str,
     class: &str,
     device_id: &str,
     catalog: &Catalog,
     faceplate: Option<&str>,
 ) -> Result<()> {
-    let dress = faceplate.unwrap_or_else(|| default_dress(catalog, class));
-    let mut cmd = std::process::Command::new("python");
-    cmd.args(["scripts/push_tdisplay.py", port, device_id]);
-    if !dress.is_empty() {
-        cmd.args(["--faceplate", dress]);
-    }
-    saga.step(&format!("Adopting the T-Display face ({dress})"), |voice| {
-        run_tool(voice, cmd, "push_tdisplay.py")
+    let faceplate_id = faceplate.unwrap_or_else(|| default_faceplate(catalog, class));
+    run.step(&format!("Installing T-Display faceplate ({faceplate_id})"), || {
+        crate::prepare::install_tdisplay(port, Some(device_id), Some(faceplate_id), class)
     })?;
     Ok(())
 }
 
-// ── the esp8266 sagas ───────────────────────────────────────────────
+// ── the esp8266 procedures ───────────────────────────────────────────────
 
-/// The dress a bare saga installs when the keeper named none: the
-/// class's first declaration. (Callers that know the face's current
-/// dress pass it; this is the last resort, not the default path.)
-fn default_dress<'a>(catalog: &'a Catalog, class: &str) -> &'a str {
+/// Return the class's first declared faceplate as a fallback.
+fn default_faceplate<'a>(catalog: &'a Catalog, class: &str) -> &'a str {
     catalog
         .faceplates_for_class(class)
         .first()
@@ -595,46 +415,18 @@ fn default_dress<'a>(catalog: &'a Catalog, class: &str) -> &'a str {
         .unwrap_or("")
 }
 
-/// An unknown board walks in: the full install (the proven fresh push that
-/// gives it the suzu face, identity kept), then the exam decides.
-fn esp8266_adopt(
-    saga: &mut Saga,
+/// Install or update the application files while preserving identity.
+fn esp8266_provision(
+    run: &mut MaintenanceRun,
     port: &str,
     class: &str,
     device_id: &str,
     catalog: &Catalog,
     faceplate: Option<&str>,
 ) -> Result<()> {
-    let dress = faceplate.unwrap_or_else(|| default_dress(catalog, class));
-    saga.step(&format!("Installing the suzu face ({dress})"), |voice| {
-        push_face_files(voice, port, device_id, true, Some(dress)).map(|out| last_line(&out))
-    })?;
-    Ok(())
-}
-
-fn esp8266_factory(
-    saga: &mut Saga,
-    port: &str,
-    class: &str,
-    device_id: &str,
-    catalog: &Catalog,
-    faceplate: Option<&str>,
-) -> Result<()> {
-    saga.step("Erasing the flash", |voice| {
-        esptool(voice, port, &["esp8266", "erase_flash"]).map(|_| ())
-    })?;
-    let bin = crate::paths::firmware_dir().join("artifacts/micropython-esp8266-1mib.bin");
-    if !bin.exists() {
-        bail!("artifact {} is missing — vendor it before factory", bin.display());
-    }
-    let bin_str = bin.to_string_lossy().into_owned();
-    let args = ["esp8266", "write_flash", "--flash_size=detect", "0", bin_str.as_str()];
-    saga.step("Flashing MicroPython", |voice| {
-        esptool(voice, port, &args).map(|_| ())
-    })?;
-    let dress = faceplate.unwrap_or_else(|| default_dress(catalog, class));
-    saga.step(&format!("Installing the suzu face ({dress})"), |voice| {
-        push_face_files(voice, port, device_id, true, Some(dress)).map(|out| last_line(&out))
+    let faceplate_id = faceplate.unwrap_or_else(|| default_faceplate(catalog, class));
+    run.step(&format!("Installing faceplate ({faceplate_id})"), || {
+        crate::prepare::install_esp8266(port, Some(device_id), Some(faceplate_id), class)
     })?;
     Ok(())
 }
@@ -643,38 +435,37 @@ fn esp8266_factory(
 mod tests {
     use super::*;
 
-    /// A saga wired to a real bus, so the announcements can be read
-    /// back and the counting law checked against the wire's truth.
-    fn saga_of(total: u32) -> (Saga<'static>, tokio::sync::broadcast::Receiver<HouseEvent>) {
+    /// Create a run with a real event channel for counter tests.
+    fn run_of(total: u32) -> (MaintenanceRun<'static>, tokio::sync::broadcast::Receiver<ResidentEvent>) {
         let (tx, _rx) = tokio::sync::broadcast::channel(32);
         let tx = Box::leak(Box::new(tx));
-        (Saga::new(tx, "id-1", total), tx.subscribe())
+        (MaintenanceRun::new(tx, "id-1", total), tx.subscribe())
     }
 
     /// Collect every announcement still on the bus.
-    fn announcements(rx: &mut tokio::sync::broadcast::Receiver<HouseEvent>) -> Vec<(u32, u32)> {
+    fn announcements(rx: &mut tokio::sync::broadcast::Receiver<ResidentEvent>) -> Vec<(u32, u32)> {
         let mut out = Vec::new();
-        while let Ok(HouseEvent::MaintenanceStep { index, total, .. }) = rx.try_recv() {
+        while let Ok(ResidentEvent::MaintenanceStep { index, total, .. }) = rx.try_recv() {
             out.push((index, total));
         }
         out
     }
 
     #[test]
-    fn success_lands_exactly_on_the_plan() {
-        let (mut saga, mut rx) = saga_of(3);
-        saga.step("one", |_| Ok(())).unwrap();
-        saga.step("two", |_| Ok(())).unwrap();
-        saga.hand_to_exam();
+    fn success_uses_the_planned_step_count() {
+        let (mut run, mut rx) = run_of(3);
+        run.step("one", || Ok(())).unwrap();
+        run.step("two", || Ok(())).unwrap();
+        run.finish_successfully();
         let seen = announcements(&mut rx);
         assert_eq!(seen, vec![(1, 3), (2, 3), (3, 3)]);
     }
 
     #[test]
     fn a_failed_step_reannounces_its_own_number() {
-        let (mut saga, mut rx) = saga_of(3);
-        saga.step("one", |_| Ok(())).unwrap();
-        saga.step("two", |_| Err::<(), _>(anyhow!("no drive"))).unwrap_err();
+        let (mut run, mut rx) = run_of(3);
+        run.step("one", || Ok(())).unwrap();
+        run.step("two", || Err::<(), _>(anyhow!("no drive"))).unwrap_err();
         let seen = announcements(&mut rx);
         assert_eq!(seen, vec![(1, 3), (2, 3), (2, 3)]);
     }
@@ -682,15 +473,15 @@ mod tests {
     #[test]
     fn the_counter_never_runs_past_the_plan() {
         // Mid-failure: the closing "failed" takes the next number.
-        let (mut saga, mut rx) = saga_of(3);
-        saga.step("one", |_| Ok(())).unwrap();
-        saga.step("two", |_| Err::<(), _>(anyhow!("boom"))).unwrap_err();
-        saga.close("failed", false, "boom".into());
+        let (mut run, mut rx) = run_of(3);
+        run.step("one", || Ok(())).unwrap();
+        run.step("two", || Err::<(), _>(anyhow!("boom"))).unwrap_err();
+        run.close("failed", false, "boom".into());
         assert!(announcements(&mut rx).iter().all(|(i, t)| i <= t));
 
         // A failure before any step still fits the plan.
-        let (mut saga, mut rx) = saga_of(2);
-        saga.close("failed", false, "no CIRCUITPY drive".into());
+        let (mut run, mut rx) = run_of(2);
+        run.close("failed", false, "no CIRCUITPY drive".into());
         assert_eq!(announcements(&mut rx), vec![(1, 2)]);
     }
 }

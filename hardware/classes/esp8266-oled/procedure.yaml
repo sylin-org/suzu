@@ -42,7 +42,7 @@ procedures:
   # The true factory reset: the ROM bootloader erases every flash
   # sector (the CH340's DTR/RTS circuit enters it - no button), the
   # MicroPython runtime is re-flashed from the vendored artifact, and
-  # the face is pushed with the individual's preserved device_id.
+  # Install the faceplate with the preserved device_id.
   factory:
     pre: "device answers or auto-resets into the ROM bootloader; esptool on PATH"
     steps:
@@ -53,17 +53,14 @@ procedures:
       - push-chunked: { via: scripts/push_firmware.py, fresh: true }
       - admission-test: {}
 
-  # The exam a face takes before the stream may flow to it (ADR-0003).
-  # display-truth draws a known ground pattern (G,report,88,77,66) and
-  # asserts two witnesses: the face acks the draw (an ERR is a face
-  # that cannot be fed), and the decoded shot lights the cyan field
-  # beyond the resting face's own glyphs (the view is 1:1 with the
-  # framebuffer — a three-digit ground lights ~1040 px, the resting
-  # face ~40; the bar sits at 500). The label round-trip is skipped:
-  # this face's descriptor declares no label key.
+  # Admission renders a known metrics pattern (G,report,88,77,66).
+  # The device must acknowledge the command and the decoded capture
+  # must contain at least 500 lit cyan pixels. The three-digit pattern
+  # normally lights about 1040 pixels and the idle display about 40.
+  # Label verification is skipped because this descriptor has no label.
   admission_test:
-    display_truth: ground-pattern
-    assert: "the ground frame acks OK and ≥500 lit pixels in the cyan field of the decoded shot"
+    display_check: metrics-pattern
+    assert: "the metrics frame returns OK and has at least 500 lit pixels in the cyan area of the decoded capture"
 
 artifacts:
   - file: micropython-esp8266-1mib.bin

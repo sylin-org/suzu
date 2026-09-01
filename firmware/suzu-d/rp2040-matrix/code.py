@@ -1,26 +1,22 @@
-# suzu firefly matrix - rp2040-matrix, suzu/1
-# The lake, as a proper machine state.
+# Suzu RP2040 matrix firmware, suzu/1.
 #
 # States:
-#   IDLE  the garden: fireflies drift slowly, glow, fade to black
-#   WAKE  the garden gathers: the atoms rise, a brief pop
-#   WORK  the ground: three atom fireflies breathe with the machine's
-#         numbers (value drives the breathing period; past 80 they
-#         blink at the peak, brighter than the ceiling)
-#   RING  an alert has latched: the lake keeps ringing at its spot
+#   IDLE   low-intensity particle animation
+#   WAKE   transition from idle to metric indicators
+#   WORK   three metric indicators; each metric controls its cycle time
+#   ALERT  persistent alert animation at the selected pixel
 #
-# Signals (what the machine hears):
+# State-machine signals:
 #   FRAME_G, FRAME_R, FRAME_ALLCLEAR, FRAME_X, FRAME_K,
-#   TICK_POP (the wake's rise finished), SILENCE (10 s quiet),
-#   LATCH (re-drop the latched alert's rain)
+#   WAKE_COMPLETE, SILENCE (10 seconds without host data), and LATCH.
 #
 # Transitions:
-#   IDLE  + FRAME_G     -> WAKE   (the house has numbers to show)
-#   WAKE  + TICK_POP    -> WORK   (the pop)
-#   WORK  + R(alert)    -> RING   (an alert latches)
-#   RING  + allclear/X  -> WORK   (the heal lands at the wound)
-#   WORK  + SILENCE     -> IDLE   (the house went quiet)
-#   RING  + SILENCE     -> RING   (an alert never idles away)
+#   IDLE  + FRAME_G       -> WAKE
+#   WAKE  + WAKE_COMPLETE -> WORK
+#   WORK  + R(alert)      -> ALERT
+#   ALERT + allclear/X    -> WORK
+#   WORK  + SILENCE       -> IDLE
+#   ALERT + SILENCE       -> ALERT
 #
 # The face contract lives in docs/the-face-contract.md.
 
@@ -43,7 +39,7 @@ COLS = 5
 ROWS = 5
 # These LEDs are RGB-wired; CircuitPython's neopixel silently defaults
 # to GRB, which swaps red and green on the physical board while the J
-# shot (logical rgb) stays truthful - preview and pond disagreed until
+# capture buffer (logical RGB) remains unchanged; the preview differed until
 # this was set. Confirmed empirically 2026-08-30: GRB order showed
 # amber frames as green pixels.
 pixels = neopixel.NeoPixel(board.GP16, NUM, brightness=0.3, auto_write=False,
@@ -56,7 +52,7 @@ LABEL_FILE = "/label.txt"
 VERBS = ("alert", "allclear", "completion", "discovery", "begin",
          "departure", "tended", "transition", "heartbeat")
 
-# the say vocabulary: the nine verbs, each with its hue
+# Protocol event colors.
 HUES = {
     "alert": (255, 25, 0),
     "allclear": (0, 255, 90),
@@ -71,14 +67,14 @@ HUES = {
     "warn": (255, 190, 0),
 }
 
-MAX_K = 0.5                  # the gentle ceiling: half brightness
-BLINK_K = 1.0                # the threshold blink may exceed it
-RISE_S = 0.9                 # the wake's rise before the pop
-POP_S = 0.12                 # the pop holds this long
-WAKE_TOTAL = RISE_S + POP_S
+MAX_K = 0.5                  # normal maximum brightness
+BLINK_K = 1.0                # high-metric blink brightness
+WAKE_RISE_S = 0.9            # idle-to-work transition
+WAKE_FLASH_S = 0.12          # final transition flash
+WAKE_TOTAL = WAKE_RISE_S + WAKE_FLASH_S
 DROP_LIFE = 1.1
 
-# the label: persisted, restored at boot, never reverted (the contract)
+# Persisted device label.
 label = "suzu"
 try:
     with open(LABEL_FILE) as f:
@@ -127,38 +123,36 @@ def chebyshev(a, b):
     return max(abs(ax - bx), abs(ay - by))
 
 
-# ── the machine ──
+# ── state machine ──
 
-IDLE, WAKE, WORK, RING = "idle", "wake", "work", "ring"
+IDLE, WAKE, WORK, ALERT = "idle", "wake", "work", "alert"
 state = IDLE
 t_state = time.monotonic()
 
-ground = [10, 10, 10]
+metrics = [10, 10, 10]
 latched = False
 latch_center = None
 latch_drop_t = 0.0
 last_frame_t = time.monotonic()
 
-# atom fireflies: one per report slot, and each is its own little
-# machine - "I am gpu, I am at 12, I am fading in." The position only
-# ever changes in the dark beat between cycles, so a value change or a
-# pop never teleports a lit pixel: the fade completes, then it moves.
+# One indicator per reported metric. Positions change only between
+# brightness cycles, after the previous pixel has faded out.
 def timings_for(value):
     total = 2.0 + 6.0 * (1.0 - value / 100.0)   # 8 s tops, 2 s floor
     return total * 0.30, total * 0.20, total * 0.30, total * 0.20
 
-atoms = []
+indicators = []
 for i in range(3):
     rise, stay, fall, wait = timings_for(10)
-    atoms.append({"pos": 6 + i * 7, "value": 10, "pending": 10,
+    indicators.append({"pos": 6 + i * 7, "value": 10, "pending": 10,
                   "phase": "quiet", "pt": 0.0,
                   "rise": rise, "stay": stay, "fall": fall, "wait": wait})
 
 
-def retimings(atom):
-    total = 2.0 + 6.0 * (1.0 - atom["value"] / 100.0)
-    atom["rise"], atom["stay"] = total * 0.30, total * 0.20
-    atom["fall"], atom["wait"] = total * 0.30, total * 0.20
+def retimings(indicator):
+    total = 2.0 + 6.0 * (1.0 - indicator["value"] / 100.0)
+    indicator["rise"], indicator["stay"] = total * 0.30, total * 0.20
+    indicator["fall"], indicator["wait"] = total * 0.30, total * 0.20
 
 
 def area_dark(x, y):
@@ -173,11 +167,11 @@ def area_dark(x, y):
     return True
 
 
-# idle fireflies: [pos, drift, glow phase, move timer]
-flies = [[6, 1, 0.1, 0.0], [18, -1, 0.5, 0.4], [12, 1, 0.9, 0.8]]
+# Idle particles: [position, direction, brightness phase, move timer].
+idle_particles = [[6, 1, 0.1, 0.0], [18, -1, 0.5, 0.4], [12, 1, 0.9, 0.8]]
 
-# raindrops: [pos, born, (r, g, b)] - impact flash, expanding ring
-drops = []
+# Event effects: [position, start time, color, urgency].
+event_effects = []
 DROP_LIFE = 1.1
 
 
@@ -187,17 +181,17 @@ def add(buf, pos, color):
                 min(255, b + color[2]))
 
 
-def drop_at(pos, color, urgency, force=False):
-    if not force:                       # not too close to a live drop
-        for d in drops:
+def add_event_effect(pos, color, urgency, force=False):
+    if not force:                       # Avoid overlapping recent effects.
+        for d in event_effects:
             if chebyshev(d[0], pos) < 2 and time.monotonic() - d[1] < DROP_LIFE:
                 return
-    drops.append([pos, time.monotonic(), color, urgency])
-    if len(drops) > 4:
-        drops.pop(0)
+    event_effects.append([pos, time.monotonic(), color, urgency])
+    if len(event_effects) > 4:
+        event_effects.pop(0)
 
 
-# ── the machine: signals and transitions ──
+# ── signals and transitions ──
 
 def set_state(s):
     global state, t_state
@@ -218,67 +212,67 @@ def transition(to, why=""):
 def on_signal(sig):
     if sig == "FRAME_G":
         if state == IDLE:   # only idle wakes; work takes the numbers
-            transition(WAKE, "the house has numbers to show")
-    elif sig == "TICK_POP":
+            transition(WAKE, "metrics received")
+    elif sig == "WAKE_COMPLETE":
         if state == WAKE:
-            transition(WORK, "the pop")
+            transition(WORK, "wake transition complete")
     elif sig == "ALERT":
-        if state != RING:
-            transition(RING, "an alert latches")
+        if state != ALERT:
+            transition(ALERT, "alert latched")
     elif sig == "ALLCLEAR":
-        if state == RING:
-            transition(WORK, "the heal lands at the wound")
+        if state == ALERT:
+            transition(WORK, "alert cleared")
     elif sig == "SILENCE":
         if state != IDLE and not latched:
-            transition(IDLE, "the house went quiet")
+            transition(IDLE, "host data timeout")
 
 
 def machine_tick(t):
     global latch_drop_t
     if state == WAKE and t - t_state >= WAKE_TOTAL:
-        on_signal("TICK_POP")
+        on_signal("WAKE_COMPLETE")
     if (state != IDLE and not latched and
             t - last_frame_t > IDLE_AFTER):
         on_signal("SILENCE")
     if latched and t - latch_drop_t > 0.8:
         latch_drop_t = t
-        drop_at(latch_center, HUES["alert"], 4, force=True)
+        add_event_effect(latch_center, HUES["alert"], 4, force=True)
 
 
 # ── state enter/tick/render ──
 
 def enter_idle():
-    pass                                # the garden needs no preparation
+    pass
 
 
 def enter_wake():
-    for a in atoms:
+    for a in indicators:
         a["t"] = 0.0                    # the rise restarts
 
 
 def enter_work():
-    pass                                # the atoms are already breathing
+    pass
 
 
-def enter_ring():
-    pass                                # the rain is already falling
+def enter_alert():
+    pass
 
 
-ENTER = {IDLE: enter_idle, WAKE: enter_wake, WORK: enter_work, RING: enter_ring}
+ENTER = {IDLE: enter_idle, WAKE: enter_wake, WORK: enter_work, ALERT: enter_alert}
 
 
 def tick_idle(t, dt):
-    for fly in flies:
-        fly[3] -= dt
-        if fly[3] <= 0:
-            fly[0] += fly[1]
-            if fly[0] >= NUM or fly[0] < 0:
-                fly[1] = -fly[1]
-                fly[0] = max(0, min(NUM - 1, fly[0]))
-            fly[3] = 1.2 + random.random() * 0.8   # a slow, lazy drift
+    for particle in idle_particles:
+        particle[3] -= dt
+        if particle[3] <= 0:
+            particle[0] += particle[1]
+            if particle[0] >= NUM or particle[0] < 0:
+                particle[1] = -particle[1]
+                particle[0] = max(0, min(NUM - 1, particle[0]))
+            particle[3] = 1.2 + random.random() * 0.8   # a slow, lazy drift
     buf = [(0, 0, 0)] * NUM
-    for fly in flies:
-        cyc = ((t / 2.6) + fly[2]) % 1.0
+    for particle in idle_particles:
+        cyc = ((t / 2.6) + particle[2]) % 1.0
         if cyc < 0.35:                  # fade in
             k = (cyc / 0.35) * MAX_K
         elif cyc < 0.6:                 # gentle hold
@@ -288,14 +282,14 @@ def tick_idle(t, dt):
         else:                           # a dark rest
             k = 0.0
         if k > 0:
-            add(buf, fly[0], (int(70 * k), int(190 * k), int(50 * k)))
+            add(buf, particle[0], (int(70 * k), int(190 * k), int(50 * k)))
     return buf
 
 
 def tick_wake(t, dt):
-    f = min(1.0, (t - t_state) / RISE_S)
+    f = min(1.0, (t - t_state) / WAKE_RISE_S)
     buf = [(0, 0, 0)] * NUM
-    for i, a in enumerate(atoms):
+    for i, a in enumerate(indicators):
         x, y = xy(a["pos"])
         k = f * BLINK_K                 # rise through the ceiling: the pop
         warm = (255, 150 + i * 20, 30)
@@ -304,7 +298,7 @@ def tick_wake(t, dt):
 
 
 def step_atom(a, dt):
-    """One atom's lifecycle: rise -> stay -> fall -> wait -> rise
+    """One indicator's lifecycle: rise -> stay -> fall -> wait -> rise
     somewhere new. The position only ever changes in the dark wait, so
     a lit pixel never teleports; a value change waits for the dark too."""
     a["pt"] += dt
@@ -351,7 +345,7 @@ def step_atom(a, dt):
 
 def tick_work(t, dt):
     buf = [(0, 0, 0)] * NUM
-    for a in atoms:
+    for a in indicators:
         k = step_atom(a, dt)
         if k > 0:
             x, y = xy(a["pos"])
@@ -361,24 +355,24 @@ def tick_work(t, dt):
     return buf
 
 
-def enter_ring():
+def enter_alert():
     pass
 
 
-ENTER = {IDLE: enter_idle, WAKE: enter_wake, WORK: enter_work, RING: enter_ring}
+ENTER = {IDLE: enter_idle, WAKE: enter_wake, WORK: enter_work, ALERT: enter_alert}
 
 
-def tick_ring(t, dt):
-    """A latched alert: the lake dims and keeps ringing at the wound."""
+def tick_alert(t, dt):
+    """Render a persistent alert centered on the selected pixel."""
     global latch_drop_t
     buf = [(0, 0, 0)] * NUM
     base = 12
     for i in range(NUM):
         buf[i] = (base // 6, base // 3, base // 6)
-    if t - latch_drop_t > 0.8:          # the lake keeps ringing there
+    if t - latch_drop_t > 0.8:          # Repeat the alert effect.
         latch_drop_t = t
-        drop_at(latch_center, HUES["alert"], 4, force=True)
-    for d in drops:
+        add_event_effect(latch_center, HUES["alert"], 4, force=True)
+    for d in event_effects:
         age = t - d[1]
         color = d[2]
         urgency = d[3]
@@ -400,7 +394,7 @@ def tick_ring(t, dt):
     return buf
 
 
-TICKS = {IDLE: tick_idle, WAKE: tick_wake, WORK: tick_work, RING: tick_ring}
+TICKS = {IDLE: tick_idle, WAKE: tick_wake, WORK: tick_work, ALERT: tick_alert}
 
 
 frame = bytearray(NUM * 3)         # the shot: flat rgb75, row-major
@@ -409,9 +403,8 @@ frame = bytearray(NUM * 3)         # the shot: flat rgb75, row-major
 def render():
     global frame
     buf = TICKS[state](time.monotonic(), TICK)
-    # the raindrop layer lands in every state: moments reach the face
-    # wherever it is
-    for d in drops:
+    # Render event effects over every base state.
+    for d in event_effects:
         age = time.monotonic() - d[1]
         if age > DROP_LIFE:
             continue
@@ -453,12 +446,11 @@ def process(line):
         vals = []
         for v in a[1:4]:
             vals.append(int(v) if v.isdigit() else 0)
-        ground[:] = vals
-        for i, atom in enumerate(atoms):
-            # the new value waits for the dark beat: a lit firefly never
-            # changes speed or place mid-breath
-            atom["pending"] = ground[i]
-        on_signal("FRAME_G")           # the house has numbers to show
+        metrics[:] = vals
+        for i, indicator in enumerate(indicators):
+            # Apply new values between brightness cycles.
+            indicator["pending"] = metrics[i]
+        on_signal("FRAME_G")
         r("OK")
     elif c == "A" and len(a) >= 2 and a[0] == "audio.level":
         pulse = max(0, min(100, int(a[1])))
@@ -471,22 +463,22 @@ def process(line):
         color = HUES.get(verb, HUES["transition"])
         cx = random.randrange(COLS)
         cy = random.randrange(ROWS)
-        drop_at(cy * COLS + cx, color, max(1, urgency))
+        add_event_effect(cy * COLS + cx, color, max(1, urgency))
         if verb.startswith("alert"):
             latched = True
             latch_center = cy * COLS + cx
             latch_drop_t = time.monotonic()
-            on_signal("ALERT")         # the lake keeps ringing
+            on_signal("ALERT")
         if verb.startswith("allclear"):
             latched = False
             if latch_center is not None:
-                cx, cy = xy(latch_center)   # the heal lands at the wound
+                cx, cy = xy(latch_center)
             on_signal("ALLCLEAR")
         r("OK," + (a[4] if len(a) > 4 else "0"))
     elif c == "X":
         latched = False
         latch_center = None
-        on_signal("ALLCLEAR")          # the host's heal: ring returns to work
+        on_signal("ALLCLEAR")
         r("OK")
     elif c == "S":
         words = ",".join(a)
@@ -499,8 +491,7 @@ def process(line):
                 pass
         r("OK")
     elif c == "J":
-        # the shot: the frame rides the ack itself - base64 rgb75, no
-        # reboot, the lake keeps dancing while the camera reads it.
+        # Return the current RGB75 frame as base64 without rebooting.
         # CircuitPython dialect: binascii (no ubinascii alias here)
         import binascii
         payload = str(binascii.b2a_base64(frame)[:-1], "ascii")
@@ -527,10 +518,10 @@ def main():
     buf = ""
     while True:
         t = time.monotonic()
-        # drain everything the wire holds: the pulse lane alone runs at
+        # Drain all available input; scalar updates alone run at
         # 5 Hz, and one char per tick (~15 B/s) drowns the RX ring in
         # seconds — the session dies of a host-side write timeout and
-        # the face gardens forever while its neighbors work
+        # Continue processing display updates while other devices run.
         while supervisor.runtime.serial_bytes_available:
             ch = sys.stdin.read(1)
             if not ch:

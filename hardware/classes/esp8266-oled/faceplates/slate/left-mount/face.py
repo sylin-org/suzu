@@ -5,42 +5,39 @@
 # is embossed on a filled label strip whose end dot pulses with
 # traffic. Frames (newline-term):
 #   I -> OK,{descriptor}*hh | K -> OK | G,report,<cpu>,<mem>,<gpu> (255=dash)
-#   A,audio.level,<v> | J,{"name":...} | S,<name> | X | R,... -> the stage.
-# `*hh` checksums verified; 10 s without frames -> the face rests (dim).
+#   A,audio.level,<v> | J,{"name":...} | S,<name> | X | R,... -> the overlay.
+# `*hh` checksums verified; 10 s without frames -> the display dims (dim).
 # Full contract: README.md. Keep this file SMALL — the ESP8266 compiles
-# it into an 80 KB heap; the ancestor face fit at ~11 KB source.
+# it into an 80 KB heap; the legacy face fit at ~11 KB source.
 
 import gc, math, sys, time, select
 from machine import Timer, UART
 
-math_cos = math.cos             # the stage's circle, one lookup each
+math_cos = math.cos             # trigonometry used to draw the overlay circle
 math_sin = math.sin
 
 W, H = 64, 128            # portrait: u 0..63 across, v 0..127 down
 INVERT = False            # the -inverted build flips this (tools/build_faceplates.py):
-                          # the composition mirrors along its long axis, so the
-                          # board hung connector-up reads exactly as this reads
-                          # connector-down. Same art, same words, other hang.
+                          # Mirror the composition along its long axis so
+                          # connector-up and connector-down mounts remain readable.
+                          #
 BAND_U = 48               # the yellow band starts here (16 px wide)
-# The glass's painted yellow strip is fixed to the glass: it does not
-# move when the board is hung the other way. The 180° remap alone
-# would set the drawn strip against the numerals — numbers over the
-# paint, words deep in the blue. So the inverted hang re-homes the
-# composition: band strip at the panel's other edge, numerals after.
+# The physical yellow strip does not rotate with the board. Inverted mounts
+# move the label band to the opposite edge to preserve the layout.
 NUM_U = 0                 # the numeral column's left edge
 BAND_X = BAND_U           # the strip's left edge (16 px wide)
-DRESS_ID = "slate"             # the faceplate this face wears (never flattened)
-DRESS_MOUNT = "left"          # the hang; the build sets it per mount
-DRESS_VERSION = "1.2.1"       # this hang's dress version; the build sets it per mount
+FACEPLATE_ID = "slate"             # stable faceplate identifier
+FACEPLATE_MOUNT = "left"          # the mount; the build sets it per mount
+FACEPLATE_VERSION = "1.2.1"       # this mount's faceplate version; the build sets it per mount
 TEXT_FLIP = True         # left-aligned mounts rotate the text area 180°
-                          # — the words would stand on their head otherwise
+                          # Keep text upright for rotated mounts.
 if INVERT:
     NUM_U = W - BAND_U    # 16: numerals u 16..63
     BAND_X = 0            # the strip re-homes to the panel's other edge
 AREA_H = 42               # 3 areas x 42 + 2 dividers = 128
 NUM_H = 34                # numeral zone inside an area
-REST_MS = 10000           # frames since last_rx before the face idles
-BOOT_IDLE_MS = 3000       # no host at boot -> fireflies instead of dashes
+REST_MS = 10000           # idle timeout after the last received frame
+BOOT_IDLE_MS = 3000       # additional startup delay before idle mode
 I2C_SCL, I2C_SDA = 12, 14 # the class's OLED wiring (D6/D5), 400 kHz
 
 u = UART(0, 115200)
@@ -49,26 +46,24 @@ tick = None
 last_rx = None
 boot_ms = None
 idle = False
-ff = ()                   # the fireflies: [u0, phase, speed, v] each
+idle_particles = ()                   # idle animation particles
 label = "suzu"
-stage = None               # the stage: None (ground showing), "full",
+overlay = None               # the overlay: None (metrics showing), "full",
                            # or the addressed area 0..2 (cpu/gpu/mem)
-stage_glyph = None         # the full stage's subject: info|warn|exception
-ring_label = None          # a moment's words, glowing on the band
-ring_until = None          # when the stage ends (ticks_ms); None = latched
-latch = False              # True while an exception holds the stage
-ring_seq = "0"             # the stage's ring: DONE carries it, so a
-                           # dropped animation can never answer for
-                           # the one that replaced it
-band_lit = True            # the flash phase while a latched stage holds
-marker_lit = False         # the heartbeat dot: lit while traffic is fresh
+overlay_glyph = None         # the full overlay's subject: info|warn|exception
+notification_label = None          # active notification label
+notification_expires_at = None          # when the overlay ends (ticks_ms); None = latched
+notification_latched = False              # True while an exception holds the overlay
+notification_sequence = "0"             # notification sequence id included in DONE
+band_lit = True            # the flash phase while a latched overlay holds
+activity_indicator_lit = False         # activity indicator state
 values = {"cpu": 255, "mem": 255, "gpu": 255}
 
 # ── numerals: digits_slate.bin — raw glyph rows (2 B each, MSB =
 # leftmost), one width byte per glyph, 11 glyphs in DIG_CHARS order.
 # Read one glyph at a time at draw: the file costs ZERO import RAM,
 # which the ESP8266's 80 KB heap cannot spare (a .py font module
-# OOMs the display driver). Missing file -> the face degrades to
+# OOMs the display driver). Missing file -> the display falls back to
 # dashes, not a crash. ──
 DIG_CHARS = "0123456789-"
 DIG_H = 25
@@ -76,19 +71,19 @@ DIG_STRIDE = 1 + DIG_H * 2          # widths <= 16: two bytes a row
 DIG_FILE = "/digits_slate.bin"
 NUM_H = DIG_H
 
-# ── the stage grammar (the keeper's design). Every say takes one of
-# three modes, by its signal's first word: info/ok/allclear bloom the
+# ── the overlay grammar (event overlay behavior). Every event takes one of
+# three modes selected by the signal first word: info/ok/allclear display the
 # encircled I; warn and the other verbs hold the triangle; the
 # exception family (alert/crit) latches — it flashes until allclear
-# or X. A bare say takes the whole stage: the panel clears and one
-# big glyph speaks, alone. A qualifier that names a ground area
+# or X. A bare event takes the whole overlay: the panel clears and one
+# one large glyph is displayed. A qualifier that names a metric area
 # (cpu/gpu/mem) addresses only that area: its sprite replaces the
-# numeral while the other areas keep breathing. Anything the face
-# cannot place degrades to the full stage — never disconnected. ──
-STAGE_MS = 5000            # a bloom's length; a latch knows no clock
+# numeral while the other areas remain visible. Any signal the faceplate
+# cannot place uses the full-display overlay. ──
+OVERLAY_MS = 5000            # overlay duration; latched overlays do not expire
 
-# ── moment icons: icons.bin — 8x8 sprites, 8 bytes each, MSB-left
-# rows, one per ground area, in the areas' own order. Zero boot RAM —
+# ── notification icons: icons.bin — 8x8 sprites, 8 bytes each, MSB-left
+# rows, one per metric area, in the areas' own order. Zero boot RAM —
 # read at draw, like the digits. ──
 ICON_KEYS = "cpu gpu mem"
 ICON_FILE = "/icons.bin"
@@ -99,13 +94,10 @@ ICON_FILE = "/icons.bin"
 GLYPH_KEYS = "ABCDEFGHIKLMNOPRSTUVWXYZ0123456789- "
 GLYPH_BITS = b"+\xedk\xae9#kny\xa7y\xa49k[\xedt\x97[\xadI'_\xedkm+jk\xa4k\xad8\x8et\x92[o[j[\xfdZ\xadZ\x92r\xa7{o,\x97R\xa7r\xcf[\xc9\x7f\x8e?kr\x92{\xefk\xce\x01\xc0\x00\x00"
 
-# the poc's sine table (x100) — the idle fireflies bob on it
+# Sine lookup table (scaled by 100) used by idle particles.
 SIN = (0, 38, 70, 92, 100, 92, 70, 38, 0, -38, -70, -92, -100, -92, -70, -38)
 
-# the label persists on the filesystem: a face that reboots (a
-# screenshot's probe, a power blink) keeps its band text instead of
-# reverting to "suzu" while the resident's session still believes it
-# already sent one.
+# Persist the label so resets do not discard text already sent by the Resident.
 LABEL_FILE = "/label.txt"
 
 def load_label():
@@ -126,8 +118,7 @@ def save_label():
         pass
 
 def store_identity(dev_id):
-    """The house names a face at adoption; the name outlives the
-    session that minted it (ADR-0003). suzu.json is the deed."""
+    """Load the persistent device identity from suzu.json (ADR-0003)."""
     import ujson
     try:
         d = {}
@@ -146,7 +137,7 @@ def store_identity(dev_id):
 # portrait mapping: visual (u,v) -> native (x=v, y=63-u);
 # inverted builds mirror the long axis: (u,v) -> native (127-v, u) —
 # the band stays on the panel's right, the reading runs bottom-up,
-# and the numeral order inverts with the hang.
+# and the numeral order inverts with the mount.
 
 def px(u, v, on=1):
     if INVERT:
@@ -181,9 +172,9 @@ def descriptor():
     except (OSError, ValueError):
         pass
     d["proto"] = "suzu/1"
-    d["version"] = DRESS_VERSION   # this hang's dress version             # the faceplate.yaml version: the currency gate reads it
-    d["faceplate"] = DRESS_ID
-    d["mount"] = DRESS_MOUNT            # the orientation: down | up | left | right
+    d["version"] = FACEPLATE_VERSION   # faceplate version from faceplate.yaml
+    d["faceplate"] = FACEPLATE_ID
+    d["mount"] = FACEPLATE_MOUNT            # the orientation: down | up | left | right
     d["coverage"] = {
         "grounds": ["report"],
         "slots": {"report": ["cpu", "mem", "gpu"]},
@@ -208,11 +199,11 @@ def glyph(u, v, ch, on=1):
                 px(u + col, v + row, on)
 
 def band_glyph(u, v, ch, on=1):
-    """A microglyph rotated 90° — the spine convention. The letter's
+    """A microglyph rotated 90° — the text rotation convention. The letter's
     5-row height spans the band across (u 0..4), its 3-column width
-    runs along it. The mount chooses the layout: the parent hang and
-    the right-aligned hang read one way, the up and left hangs —
-    where the words would stand on their head — carry the rotated
+    runs along it. The mount chooses the layout: the parent mount and
+    the right-aligned mount read one way, the up and left mounts —
+    where the label would stand on their head — carry the rotated
     text area."""
     i = GLYPH_KEYS.find(ch)
     if i < 0:
@@ -233,33 +224,28 @@ def band_glyph(u, v, ch, on=1):
                         px(u + (4 - row), v + col, on)
 
 def draw_band(dark=False):
-    """The label: a filled strip with the name knocked out — embossed
-    tape, this face's voice. Cleared first; glyphs never overlay
-    glyphs. A latched stage flashes the polarity: the whole label
-    blinks, never merely dims."""
+    """Draw the notification or persistent label as inverted text."""
     if TEXT_FLIP:
         x, v0, step = 6, H - 5, -4
     else:
         x, v0, step = BAND_U + 5, 4, 4
     rect(BAND_X, 0, W - BAND_U, H, 0 if dark else 1)
-    text = ring_label if ring_label else label
+    text = notification_label if notification_label else label
     for i, ch in enumerate(text.upper()[:30]):   # 4 + 29*4 <= 127
         band_glyph(x, v0 + i * step, ch, 1 if dark else 0)
 
 def draw_marker():
-    """The heartbeat: a notch at the strip's far end that fills while
-    traffic is fresh and fades when the house goes quiet."""
-    global marker_lit
+    """Update the activity indicator from the age of the last input."""
+    global activity_indicator_lit
     fresh = last_rx is not None and         time.ticks_diff(time.ticks_ms(), last_rx) < 300
-    if fresh != marker_lit:
-        marker_lit = fresh
+    if fresh != activity_indicator_lit:
+        activity_indicator_lit = fresh
         rect(BAND_X + 2, 3 if TEXT_FLIP else H - 8, 2, 2,
              0 if fresh else 1)
         oled.show()
 
 def draw_divider(v):
-    """A solid rule between areas — the lane it used to carry now
-    lives in the label strip's end dot."""
+    """Draw a solid divider between metric areas."""
     rect(NUM_U, v, BAND_U, 1, 1)
 
 def blit(u, v, w, rowbytes):
@@ -290,7 +276,7 @@ def spr_for(ch):
             f.seek(i * DIG_STRIDE)
             g = f.read(DIG_STRIDE)
     except OSError:
-        g = bytearray(DIG_STRIDE)      # honest "not measured" dash
+        g = bytearray(DIG_STRIDE)      # explicit "not measured" dash
         g[0] = 10
         g[1 + (DIG_H // 2) * ((10 + 7) // 8)] = 0x0F
         return (10, bytes(g))
@@ -353,40 +339,38 @@ def redraw():
     oled.show()
 
 def decay():
-    global idle, ring_until, ring_label, stage, stage_glyph, latch, band_lit, marker_lit
+    global idle, notification_expires_at, notification_label, overlay, overlay_glyph, notification_latched, band_lit, activity_indicator_lit
     now = time.ticks_ms()
-    if latch:
-        # the exception holds: it flashes by inversion, ~400 ms a phase
+    if notification_latched:
+        # Flash a latched exception by inverting every 400 ms.
         phase = (now // 400) % 2 == 1
         if band_lit != phase:
             band_lit = phase
-            stage_draw()
-    elif ring_until is not None and time.ticks_diff(now, ring_until) > 0:
-        ring_until = None             # the moment passed: the words go
-        ring_label = None             # with it, the name returns, and the
-        stage = None                  # substrate fills the gap on its next
-        stage_glyph = None            # frame
+            overlay_draw()
+    elif notification_expires_at is not None and time.ticks_diff(now, notification_expires_at) > 0:
+        notification_expires_at = None             # The notification expired; restore metrics and the persistent label.
+        notification_label = None
+        overlay = None
+        overlay_glyph = None
         redraw()
     draw_marker()
     now = time.ticks_ms()
     quiet_for = (REST_MS if last_rx is not None
                  else BOOT_IDLE_MS + REST_MS)
     anchor = last_rx if last_rx is not None else boot_ms
-    if time.ticks_diff(now, anchor) > quiet_for and not idle and not latch:
+    if time.ticks_diff(now, anchor) > quiet_for and not idle and not notification_latched:
         idle_start()
 
 def idle_start():
-    """The poc's idle: three fireflies drift down the numeral column,
-    bobbing on the same sine table, in the same 100 ms tick."""
-    global idle, ff, boot_ms, ff_t0
+    """Initialize three vertically moving idle particles."""
+    global idle, idle_particles, boot_ms, idle_started_at
     idle = True
     boot_ms = None
-    ff_t0 = time.ticks_ms()
-    draw_band()                   # the label glows while they float
-    ff = [list(p) for p in (
-        # [u0, phase, speed, amp, v, delay] — the poc's particles,
-        # portrait-turned: they drift DOWN the column, bob ±amp on the
-        # sine table, and enter staggered (0/1000/2000 ms).
+    idle_started_at = time.ticks_ms()
+    draw_band()                   # Draw the persistent label during the idle animation.
+    idle_particles = [list(p) for p in (
+        # [u0, phase, speed, amplitude, v, delay]. Start particles at
+        # staggered 0, 1000, and 2000 ms offsets.
         (NUM_U + 24, 0, 1, 6, -2, 0),
         (NUM_U + 34, 4, 2, 8, 40, 1000),
         (NUM_U + 20, 10, 1, 5, 84, 2000),
@@ -395,15 +379,15 @@ def idle_start():
 def idle_step():
     rect(NUM_U, 0, BAND_U, H, 0)
     now = time.ticks_ms()
-    for f in ff:
-        if time.ticks_diff(now, ff_t0) < f[5]:
-            continue                    # staggered entrance, as the poc
-        f[4] += f[2]                    # drift down at the poc's speeds
-        if f[4] > 129:
-            f[4] = -1
-        f[1] = (f[1] + f[2]) % 16       # the poc's bob tempo
-        x = f[0] + (f[3] * SIN[f[1]]) // 100   # ±amp, not ±25
-        px(max(NUM_U + 1, min(NUM_U + BAND_U - 2, x)), f[4], 1)
+    for particle in idle_particles:
+        if time.ticks_diff(now, idle_started_at) < particle[5]:
+            continue                    # Wait for the particle.s configured delay.
+        particle[4] += particle[2]                    # Advance the particle vertically.
+        if particle[4] > 129:
+            particle[4] = -1
+        particle[1] = (particle[1] + particle[2]) % 16       # advance the horizontal oscillation
+        x = particle[0] + (particle[3] * SIN[particle[1]]) // 100   # ±amp, not ±25
+        px(max(NUM_U + 1, min(NUM_U + BAND_U - 2, x)), particle[4], 1)
     oled.show()
 
 def draw_icon(u, v, i, on=1):
@@ -421,7 +405,7 @@ def draw_icon(u, v, i, on=1):
                 px(u + c * 2, v + r * 2 + 1, on)
                 px(u + c * 2 + 1, v + r * 2 + 1, on)
 
-# ── the stage's big glyphs: code-drawn geometry, not sprites — they
+# ── the overlay's big glyphs: code-drawn geometry, not sprites — they
 # must read across the room at 1 bit, and shapes cost no heap. ──
 
 def line(x0, y0, x1, y1, on=1):
@@ -453,7 +437,7 @@ def circle(cx, cy, rad, on=1):
         prev = pt
 
 def draw_info():
-    """The encircled I — the say that carries no alarm."""
+    """The encircled I — the event that carries no alarm."""
     cx = NUM_U + 24
     circle(cx, 64, 17)
     rect(cx - 3, 54, 6, 21, 1)
@@ -486,48 +470,48 @@ def draw_warn(inverted=False):
     rect(cx - 1, cy - 6, 3, 9, ink)
     rect(cx - 1, cy + 5, 3, 3, ink)
 
-def stage_draw():
-    """The stage: a bare say clears the panel and one big glyph
-    speaks, alone; a qualified say replaces only that area's numeral
-    while the rest keeps breathing. The band clears before it speaks
-    and flashes by inversion while a latch holds."""
-    flash = latch and (time.ticks_ms() // 400) % 2 == 1
-    if stage == "full":
+def overlay_draw():
+    """The overlay: a bare event clears the panel and one big glyph
+    is displayed; a qualified event replaces only that area's numeral
+    while other metrics remain visible. The band clears before showing the label
+    and flashes by inversion while a notification is latched."""
+    flash = notification_latched and (time.ticks_ms() // 400) % 2 == 1
+    if overlay == "full":
         rect(NUM_U, 0, BAND_U, H, 0)
-        if stage_glyph == "exception":
+        if overlay_glyph == "exception":
             draw_warn(flash)
-        elif stage_glyph == "warn":
+        elif overlay_glyph == "warn":
             draw_warn(False)
         else:
             draw_info()
-    elif stage is not None:
-        v0 = stage * AREA_H
+    elif overlay is not None:
+        v0 = overlay * AREA_H
         rect(NUM_U, v0 + 1, BAND_U, NUM_H + 2, 0)
         u = NUM_U + (BAND_U - 16) // 2
         v = v0 + 1 + (NUM_H - 16) // 2
         if flash:
             rect(u, v, 16, 16, 1)
-            draw_icon(u, v, stage, 0)
+            draw_icon(u, v, overlay, 0)
         else:
-            draw_icon(u, v, stage, 1)
+            draw_icon(u, v, overlay, 1)
     draw_band(flash)
     draw_marker()
     oled.show()
 
-def wake():
+def resume_display():
     global idle
     if idle:
         idle = False
-        if stage is not None:
-            stage_draw()              # the say that woke the face stays up
+        if overlay is not None:
+            overlay_draw()              # preserve the active overlay
         else:
             redraw()
 
 # ── frames ──
 
 def cmd(line):
-    global last_rx, label, values, ring_until, ring_label
-    global stage, stage_glyph, latch, band_lit, ring_seq
+    global last_rx, label, values, notification_expires_at, notification_label
+    global overlay, overlay_glyph, notification_latched, band_lit, notification_sequence
     line = line.strip()
     if not line:
         return
@@ -554,19 +538,19 @@ def cmd(line):
         elif c == "G":
             p = a.split(",")
             if p[0].lower() != "report":
-                r("OK")               # a ground this face doesn't declare
+                r("OK")               # a metrics group this face does not declare
                 return
             for i, key in enumerate(("cpu", "mem", "gpu")):
                 if len(p) > i + 1 and p[i + 1]:
                     values[key] = int(p[i + 1])
-            if stage == "full":
-                r("OK")               # the stage owns the panel; ground waits
+            if overlay == "full":
+                r("OK")               # defer metrics while the overlay is active
                 return
-            if stage is not None:
-                # a qualified stage: the addressed area is spoken for,
-                # the other two keep breathing
+            if overlay is not None:
+                # A qualified overlay replaces the addressed metric area;
+                # the other two remain visible.
                 for i in range(3):
-                    if i != stage:
+                    if i != overlay:
                         draw_area(i, ("CPU", "GPU", "MEM")[i])
                 oled.show()
                 r("OK")
@@ -582,9 +566,9 @@ def cmd(line):
             ctx = ujson.loads(a)
             if isinstance(ctx, dict):
                 if ctx.get("shot"):
-                    # a copy of the screen rides the ack itself:
-                    # base64 buffer, one ~120 ms write, no reboot —
-                    # the house can screenshot a live face.
+                    # Return a base64 copy of the display in the acknowledgement:
+                    # one write of approximately 120 ms without rebooting.
+                    # This supports capture while the session remains active.
                     import ubinascii
                     payload = str(
                         ubinascii.b2a_base64(oled.buffer)[:-1], "ascii")
@@ -606,12 +590,12 @@ def cmd(line):
                 oled.show()
             r("OK")
         elif c == "X":
-            # the host stands the stage down (the latch's other key)
-            stage = None
-            stage_glyph = None
-            latch = False
-            ring_until = None
-            ring_label = None
+            # Clear the latched overlay.
+            overlay = None
+            overlay_glyph = None
+            notification_latched = False
+            notification_expires_at = None
+            notification_label = None
             redraw()
             r("OK")
         elif c == "R":
@@ -625,33 +609,32 @@ def cmd(line):
                 glyph = "info"
             else:
                 glyph = "warn"
-            ring_label = " ".join(p[5:])[:30] or None
+            notification_label = " ".join(p[5:])[:30] or None
             if len(p) > 4:
-                ring_seq = p[4]
+                notification_sequence = p[4]
             keys = ICON_KEYS.split()
-            prev = stage
-            stage = keys.index(qual) if qual in keys else "full"
-            stage_glyph = glyph
-            if stage != "full":
-                # stepping between stages: the old mark must not haunt
-                # the areas — clear the column, repaint the rest from
-                # the stored truth, and let the stage own its area
+            prev = overlay
+            overlay = keys.index(qual) if qual in keys else "full"
+            overlay_glyph = glyph
+            if overlay != "full":
+                # Clear the previous overlay, redraw stored metrics, and
+                # render the new overlay in its selected area.
                 rect(NUM_U, 0, BAND_U, H, 0)
                 for i in range(3):
-                    if i != stage:
+                    if i != overlay:
                         draw_area(i, ("CPU", "GPU", "MEM")[i])
-            latch = glyph == "exception"    # the exception latches; the
-            ring_until = (None if latch     # rest blooms and returns
-                          else time.ticks_add(time.ticks_ms(), STAGE_MS))
+            notification_latched = glyph == "exception"    # Alert and critical notifications remain active.
+            notification_expires_at = (None if notification_latched     # Non-latched notifications expire.
+                          else time.ticks_add(time.ticks_ms(), OVERLAY_MS))
             band_lit = False
-            stage_draw()
+            overlay_draw()
             ack = "OK," + p[4] if len(p) > 4 else "OK"   # echo the seq
             r(ack, checksum=True)
         else:
             r("ERR,unknown:%s" % c)
     except (ValueError, IndexError) as e:
         r("ERR,%s" % e)
-    wake()
+    resume_display()
 
 def tcb(t):
     if idle:
@@ -662,11 +645,11 @@ def tcb(t):
 def init():
     global oled, tick
     gc.collect()
-    # The frozen ssd1306 driver, driven directly — NOT the ancestor's
+    # The frozen ssd1306 driver, driven directly — NOT the legacy's
     # dashboard class. Importing that 11.5 KB .py means compiling it on
     # this 80 KB-heap board, and its parse tree alone exhausts the heap
-    # (the silent session-killer; twice proven on the bench). The face
-    # draws with the native framebuffer API and declares nothing else.
+    # during import. The faceplate
+    # uses only the native framebuffer API.
     from machine import SoftI2C, Pin
     import ssd1306
     i2c = SoftI2C(scl=Pin(I2C_SCL), sda=Pin(I2C_SDA), freq=400000)
@@ -684,8 +667,8 @@ def main():
     if not init():
         r("ERR,display_init")
         return
-    idle_start()                  # fireflies open the show; the first
-                                  # frame from the house wakes the face
+    idle_start()                  # start the idle animation; the first
+                                  # host data resumes the active display
 
     poll = select.poll()
     poll.register(sys.stdin, select.POLLIN)

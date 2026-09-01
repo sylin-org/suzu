@@ -1,20 +1,17 @@
-//! The admission test — the exam a face takes before it may join the
-//! stream (ADR-0003). Non-destructive by construction: everything it
-//! writes, it restores; everything it asserts, it verifies through the
-//! face's own wire (the J shot decoded per the class manifest).
+//! Admission tests run before a device may stream (ADR-0003). Tests
+//! restore temporary writes and verify display output through a J capture.
 //!
-//! Steps, adaptive to what the face declares:
-//! - handshake — `I` answers a descriptor (the identity parse law)
-//! - ack-law — `K` answers `OK`
+//! Steps depend on device capabilities:
+//! - handshake — `I` returns a descriptor
+//! - keepalive-ack — `K` returns `OK`
 //! - label-roundtrip — only when the descriptor exposes `label`:
 //!   write a marker, read it back, restore the original
-//! - display-truth — draw something only the tested command can draw,
+//! - display verification — draw a known pattern and capture it,
 //!   capture via J, and assert the pixels:
-//!   · matrix: a `completion`-blue ripple — a hue no other state
-//!   can produce (idle green, warm atoms and every other ring hue
-//!   fall short of blue channel 80 at the half-brightness ceiling)
-//!   · oled: a known ground pattern — digits light the cyan field
-//!   far beyond what three idle fireflies can light
+//!   · matrix: a blue `completion` pattern that no other display state
+//!   produces (the other states remain below blue channel 80 at the
+//!   configured half-brightness limit)
+//!   · OLED: a known three-digit metrics pattern lights the data area
 
 use crate::catalog::FrameSpec;
 use crate::probe;
@@ -92,18 +89,17 @@ fn descriptor_of(serial: &mut Box<dyn SerialPort>) -> Option<Value> {
     probe::try_identity(&line)
 }
 
-/// Run the exam on an open session. `spec`/`zones` come from the
-/// class manifest; a face without a decodable frame law skips the
-/// display-truth step (marked so, not silently). `currency` carries
-/// (worn, declared) dress versions when the faceplate declares one:
-/// a dress older than its declaration may not join the stream — the
-/// refusal names the remedy (ADR-0005, amended).
+/// Run admission on an open session. `spec`/`zones` come from the
+/// class manifest; a device without a decodable frame format skips the
+/// display-verification step. `faceplate_versions` contains the installed and
+/// declared versions. Devices with outdated faceplates cannot stream until the
+/// faceplate is updated (ADR-0005).
 pub fn run(
     serial: &mut Box<dyn SerialPort>,
     class: Option<&str>,
     spec: Option<&FrameSpec>,
     zones: &[(usize, usize, [u8; 3])],
-    currency: Option<(&str, Option<&str>)>,
+    faceplate_versions: Option<(&str, Option<&str>)>,
 ) -> Report {
     let mut report = Report { passed: true, steps: Vec::new() };
     let fail = |r: &mut Report, name: &str, detail: String| {
@@ -126,37 +122,37 @@ pub fn run(
         ),
     );
 
-    // ── currency (ADR-0005, amended) — cheap, and first to fail: a
-    // face in an outdated dress need not prove its pixels to be told
-    // the remedy. ──
-    if let Some((worn, declared)) = currency {
+    // Validate the faceplate version before the more expensive display check.
+    if let Some((installed, declared)) = faceplate_versions {
         let Some(declared) = declared else {
             fail(
                 &mut report,
-                "currency",
-                format!("dress {worn} is not declared for this class — update the faceplate to join the stream"),
+                "faceplate-version",
+                format!("faceplate {installed} is not declared for this class; install a declared faceplate"),
             );
             return report;
         };
         match parse_version(declared) {
             None => report.step(
-                "currency",
+                "faceplate-version",
                 true,
                 format!("declared version `{declared}` unreadable — not asserted"),
             ),
             Some(declared_v) => {
-                let worn_v = parse_version(worn);
-                let current = worn_v.as_ref().is_some_and(|w| w >= &declared_v);
+                let installed_parsed = parse_version(installed);
+                let current = installed_parsed
+                    .as_ref()
+                    .is_some_and(|version| version >= &declared_v);
                 if current {
-                    report.step("currency", true, format!("dress {worn} is current"));
+                    report.step("faceplate-version", true, format!("faceplate {installed} is current"));
                 } else {
-                    let worn_text = worn_v
+                    let installed_text = installed_parsed
                         .map(|v| v.iter().map(|n| n.to_string()).collect::<Vec<_>>().join("."))
                         .unwrap_or_else(|| "unversioned".to_string());
                     fail(
                         &mut report,
-                        "currency",
-                        format!("dress {worn_text} is older than the declared {declared} — update the faceplate to join the stream"),
+                        "faceplate-version",
+                        format!("faceplate {installed_text} is older than declared version {declared}; update it before streaming"),
                     );
                     return report;
                 }
@@ -164,17 +160,17 @@ pub fn run(
         }
     }
 
-    // ── ack law ──
+    // Verify keepalive acknowledgement.
     let _ = write_line(serial, "K");
     match read_line_matching(serial, HANDSHAKE_SECS, |l| l == "OK" || l.starts_with("OK,")) {
-        Some(_) => report.step("ack-law", true, "K answered OK".into()),
+        Some(_) => report.step("keepalive-ack", true, "K answered OK".into()),
         None => {
-            fail(&mut report, "ack-law", "K answered nothing".into());
+            fail(&mut report, "keepalive-ack", "K answered nothing".into());
             return report;
         }
     }
 
-    // ── label roundtrip (only when the face declares a label) ──
+    // ── label roundtrip (only when the faceplate declares a label) ──
     let original = descriptor.get("label").and_then(|v| v.as_str()).map(|s| s.to_string());
     if let Some(original) = original {
         const MARKER: &str = "suzu-admission";
@@ -204,12 +200,12 @@ pub fn run(
         report.step("label-roundtrip", true, "face declares no label — skipped".to_string());
     }
 
-    // ── display truth ──
-    let truth = display_truth(serial, class, spec, zones);
-    match truth {
-        Ok(detail) => report.step("display-truth", true, detail),
+    // Verify that a known pattern is visible in the captured frame.
+    let display_result = display_check(serial, class, spec, zones);
+    match display_result {
+        Ok(detail) => report.step("display-check", true, detail),
         Err(e) => {
-            fail(&mut report, "display-truth", format!("{e}"));
+            fail(&mut report, "display-check", format!("{e}"));
             return report;
         }
     }
@@ -227,60 +223,54 @@ fn view_of(
     crate::shot::render_view(spec, zones, &frame)
 }
 
-fn display_truth(
+fn display_check(
     serial: &mut Box<dyn SerialPort>,
     class: Option<&str>,
     spec: Option<&FrameSpec>,
     zones: &[(usize, usize, [u8; 3])],
 ) -> Result<String> {
     let Some(spec) = spec else {
-        return Ok("class declares no frame law — display truth not assertable".into());
+        return Ok("class declares no frame format; display check skipped".into());
     };
     match class {
-        // A completion-blue ripple is a hue only a completion drop can
-        // make: every other state and verb stays under blue 80 at the
-        // half-brightness ceiling.
+        // Render a completion event and confirm its distinctive blue pixels.
         Some("waveshare-rp2040-matrix") => {
             let _ = view_of(serial, spec, zones)?; // drain any stale frame
             crate::shot::dribble_line(serial, "R,completion.0,2,0,1,1,admission")?;
             std::thread::sleep(Duration::from_millis(300));
             let (w, _h, rgba) = view_of(serial, spec, zones)?;
             let blue = rgba.chunks_exact(4).filter(|p| p[0] < 60 && p[1] > 50 && p[2] > 80).count();
-            let _ = crate::shot::dribble_line(serial, "X"); // the lake stands down
+            let _ = crate::shot::dribble_line(serial, "X"); // clear the test pattern
             if blue == 0 {
-                anyhow::bail!("no completion-blue pixel in the {w}px view — the ripple never landed");
+                anyhow::bail!("no completion-blue pixel in the {w}px captured frame");
             }
-            Ok(format!("completion ripple landed ({blue} blue px)"))
+            Ok(format!("completion pattern rendered ({blue} blue px)"))
         }
-        // A known ground pattern, witnessed twice: the panel must ack
-        // the draw (a face that errors on G is a face that cannot be
-        // fed), and the three big digits must light the cyan field
-        // beyond anything the resting face lights on its own — the
-        // dash glyphs, labels and band of an unfed face cleared the
-        // old 150-px bar on the night the ring forgot how to speak.
+        // Send a known three-digit metrics pattern. The device must
+        // acknowledge it and the capture must contain enough lit pixels.
         Some("esp8266-oled") => {
             crate::shot::dribble_line(serial, "G,report,88,77,66")?;
             match read_line_matching(serial, HANDSHAKE_SECS, |l| {
                 l == "OK" || l.starts_with("OK,") || l.starts_with("ERR")
             }) {
                 Some(l) if l.starts_with("ERR") => {
-                    anyhow::bail!("the face refused the ground frame: {l}")
+                    anyhow::bail!("the device rejected the metrics frame: {l}")
                 }
                 Some(_) => {}
-                None => anyhow::bail!("G drew no ack — a face that cannot answer cannot be fed"),
+                None => anyhow::bail!("the device did not acknowledge the metrics frame"),
             }
             std::thread::sleep(Duration::from_millis(400));
             let (_w, _h, rgba) = view_of(serial, spec, zones)?;
             let field = rgba.chunks_exact(4).filter(|p| p[2] > 150).count();
             // The view is 1:1 with the framebuffer: a three-digit
-            // ground lights ~1040 px, the resting face's own glyphs
+            // The pattern lights about 1040 pixels; idle content
             // ~40 — 500 separates them by an order of magnitude
             // either way.
             if field < 500 {
-                anyhow::bail!("only {field} lit field px for a three-digit ground — the panel did not draw");
+                anyhow::bail!("only {field} data-area pixels lit for the test pattern; the panel did not draw it");
             }
-            Ok(format!("ground pattern acked and drew itself ({field} lit field px)"))
+            Ok(format!("metrics pattern acknowledged and rendered ({field} lit data-area pixels)"))
         }
-        _ => Ok("no display-truth procedure for this class — skipped".into()),
+        _ => Ok("class has no display-check procedure; skipped".into()),
     }
 }

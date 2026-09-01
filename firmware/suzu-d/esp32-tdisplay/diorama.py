@@ -686,7 +686,7 @@ class Diorama:
         self._ff = [
             # Slow floater — large lazy orbit, upper-left area
             # drift: x=149 ticks (14.9s), y=97 ticks (9.7s)
-            # pulse: 31 ticks (3.1s) — slow breathing
+            # Brightness cycle: 31 ticks (3.1 seconds).
             [0, 0,  0, 0,  149, 97,  350, 200,  350, 700,   0, 31],
             # Medium drifter — mid screen
             # drift: x=113 ticks (11.3s), y=79 ticks (7.9s)

@@ -1,12 +1,12 @@
-//! The minded-device aggregate.
+//! Device lifecycle and action-policy aggregate.
 //!
-//! A device decides which keeper actions make sense from its roster
+//! A device decides which operator actions are valid from its registry
 //! lifecycle and turns those verbs into typed orders. Serial ownership,
 //! tasks, and event publication remain application concerns in `devices`;
 //! the rules do not leak into HTTP, Workbench, or CLI presentation code.
 
 use super::events::DeviceFacts;
-use super::roster::{Individual, Lifecycle, Refusal, Roster};
+use super::registry::{RegisteredDevice, Lifecycle, Refusal, DeviceRegistry};
 use crate::catalog::Catalog;
 use serde::{Deserialize, Serialize};
 
@@ -17,7 +17,7 @@ pub enum DeviceState {
     Disposed,
 }
 
-/// The stable keeper vocabulary. Every presentation receives these
+/// The stable device-action vocabulary. Every client receives these
 /// names on the device read model and sends the same names back.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -64,15 +64,16 @@ pub struct MaintenanceOrder {
 pub struct Device {
     pub facts: DeviceFacts,
     pub state: DeviceState,
-    pub minded_at: String,
+    #[serde(rename = "minded_at")]
+    pub tracked_at: String,
 }
 
 impl Device {
-    pub fn new(facts: DeviceFacts, minded_at: String) -> Self {
+    pub fn new(facts: DeviceFacts, tracked_at: String) -> Self {
         Self {
             facts,
             state: DeviceState::Accepted,
-            minded_at,
+            tracked_at,
         }
     }
 
@@ -81,64 +82,78 @@ impl Device {
     }
 
     /// Actions are domain facts, not buttons inferred independently by
-    /// every client. An empty list means maintenance owns the individual.
+    /// every client. An empty list means maintenance has exclusive access.
     pub fn available_actions(
         &self,
-        individual: Option<&Individual>,
+        registered_device: Option<&RegisteredDevice>,
         in_maintenance: bool,
     ) -> Vec<DeviceAction> {
         if in_maintenance {
             return Vec::new();
         }
-        let Some(individual) = individual else {
-            return vec![DeviceAction::Install, DeviceAction::FactoryReset];
+        let factory = self.supports_native_factory_reset();
+        let Some(registered_device) = registered_device else {
+            let mut actions = vec![DeviceAction::Install];
+            if factory {
+                actions.push(DeviceAction::FactoryReset);
+            }
+            return actions;
         };
-        match individual.lifecycle {
+        let mut actions = match registered_device.lifecycle {
             Lifecycle::New => {
-                let primary = if currency_is_stale(individual) {
+                let primary = if faceplate_is_outdated(registered_device) {
                     DeviceAction::Update
                 } else {
                     DeviceAction::Install
                 };
-                vec![primary, DeviceAction::FactoryReset]
+                vec![primary]
             }
             Lifecycle::Live => vec![
                 DeviceAction::Pause,
                 DeviceAction::Identify,
                 DeviceAction::Update,
                 DeviceAction::Install,
-                DeviceAction::FactoryReset,
             ],
             Lifecycle::Paused => vec![
                 DeviceAction::Resume,
                 DeviceAction::Update,
                 DeviceAction::Install,
-                DeviceAction::FactoryReset,
             ],
             Lifecycle::Retired => Vec::new(),
+        };
+        if factory && registered_device.lifecycle != Lifecycle::Retired {
+            actions.push(DeviceAction::FactoryReset);
         }
+        actions
     }
 
-    pub fn pause(&self, roster: &mut Roster) -> anyhow::Result<DeviceOrder> {
+    /// Offer a destructive reset only when the Resident implements the complete
+    /// recovery path. RP2040 recovery uses native drive I/O. ESP8266 recovery is
+    /// unavailable because the removed Python/esptool path has no native replacement.
+    fn supports_native_factory_reset(&self) -> bool {
+        self.facts.class.as_deref() == Some("waveshare-rp2040-matrix")
+    }
+
+    pub fn pause(&self, registry: &mut DeviceRegistry) -> anyhow::Result<DeviceOrder> {
         let id = self.id_owned()?;
-        roster
+        registry
             .pause(&id)
-            .map_err(|e| action_refusal(&self.facts.port, "pause", e, roster, &id))?;
+            .map_err(|e| action_refusal(&self.facts.port, "pause", e, registry, &id))?;
         Ok(DeviceOrder::Pause { device_id: id })
     }
 
-    pub fn resume(&self, roster: &mut Roster) -> anyhow::Result<DeviceOrder> {
+    pub fn resume(&self, registry: &mut DeviceRegistry) -> anyhow::Result<DeviceOrder> {
         let id = self.id_owned()?;
-        roster
+        registry
             .resume(&id)
-            .map_err(|e| action_refusal(&self.facts.port, "resume", e, roster, &id))?;
+            .map_err(|e| action_refusal(&self.facts.port, "resume", e, registry, &id))?;
         Ok(DeviceOrder::Resume { device_id: id })
     }
 
-    pub fn identify(&self, individual: Option<&Individual>) -> anyhow::Result<DeviceOrder> {
-        if !individual.is_some_and(|i| i.lifecycle == Lifecycle::Live) {
+    pub fn identify(&self, registered_device: Option<&RegisteredDevice>) -> anyhow::Result<DeviceOrder> {
+        if !registered_device.is_some_and(|i| i.lifecycle == Lifecycle::Live) {
             anyhow::bail!(
-                "{}: identify is only available while the face is live",
+                "{}: identify is only available while the device session is active",
                 self.facts.port
             );
         }
@@ -149,14 +164,14 @@ impl Device {
         &self,
         catalog: &Catalog,
         faceplate: Option<String>,
-        individual: Option<&Individual>,
+        registered_device: Option<&RegisteredDevice>,
         in_maintenance: bool,
     ) -> anyhow::Result<DeviceOrder> {
-        self.ensure_available(DeviceAction::Install, individual, in_maintenance)?;
+        self.ensure_available(DeviceAction::Install, registered_device, in_maintenance)?;
         let kind = if self.facts.proto.as_deref() == Some("suzu/1") {
             "install"
         } else {
-            "adopt"
+            "provision"
         };
         self.maintenance(catalog, kind, faceplate, in_maintenance)
     }
@@ -165,42 +180,42 @@ impl Device {
         &self,
         catalog: &Catalog,
         faceplate: Option<String>,
-        individual: Option<&Individual>,
+        registered_device: Option<&RegisteredDevice>,
         in_maintenance: bool,
     ) -> anyhow::Result<DeviceOrder> {
-        self.ensure_available(DeviceAction::Update, individual, in_maintenance)?;
+        self.ensure_available(DeviceAction::Update, registered_device, in_maintenance)?;
         self.maintenance(catalog, "soft", faceplate, in_maintenance)
     }
 
     pub fn factory_reset(
         &self,
         catalog: &Catalog,
-        individual: Option<&Individual>,
+        registered_device: Option<&RegisteredDevice>,
         in_maintenance: bool,
     ) -> anyhow::Result<DeviceOrder> {
-        self.ensure_available(DeviceAction::FactoryReset, individual, in_maintenance)?;
+        self.ensure_available(DeviceAction::FactoryReset, registered_device, in_maintenance)?;
         self.maintenance(catalog, "factory", None, in_maintenance)
     }
 
     fn ensure_available(
         &self,
         action: DeviceAction,
-        individual: Option<&Individual>,
+        registered_device: Option<&RegisteredDevice>,
         in_maintenance: bool,
     ) -> anyhow::Result<()> {
-        // A suzu-speaking New face may be awaiting its currency verdict
-        // while the admission and devices actors observe the same fact.
-        // Update is intrinsically safe there; presentation still offers
-        // it only once the stale verdict is part of the read model.
+        // A new suzu-speaking device may be awaiting its version result while
+        // admission and device management process the same event. Updating is
+        // safe in that state, but the UI only offers it after the read model
+        // records an outdated faceplate.
         if action == DeviceAction::Update
             && !in_maintenance
             && self.facts.proto.as_deref() == Some("suzu/1")
-            && individual.is_some_and(|i| i.lifecycle == Lifecycle::New)
+            && registered_device.is_some_and(|i| i.lifecycle == Lifecycle::New)
         {
             return Ok(());
         }
         if !self
-            .available_actions(individual, in_maintenance)
+            .available_actions(registered_device, in_maintenance)
             .contains(&action)
         {
             anyhow::bail!(
@@ -220,23 +235,23 @@ impl Device {
         in_maintenance: bool,
     ) -> anyhow::Result<DeviceOrder> {
         if in_maintenance {
-            anyhow::bail!("{}: a maintenance saga is already running", self.facts.port);
+            anyhow::bail!("{}: a maintenance procedure is already running", self.facts.port);
         }
         let device_id = self.id_owned()?;
         let class = self.facts.class.clone();
-        if let Some(dress) = &requested_faceplate {
+        if let Some(faceplate_id) = &requested_faceplate {
             let declared = class
                 .as_deref()
                 .map(|c| catalog.faceplates_for_class(c))
                 .unwrap_or_default();
-            if !declared.iter().any(|f| &f.id == dress) {
+            if !declared.iter().any(|f| &f.id == faceplate_id) {
                 let vocabulary = declared
                     .iter()
                     .map(|f| format!("{:?}", f.id))
                     .collect::<Vec<_>>()
                     .join(", ");
                 anyhow::bail!(
-                    "unknown faceplate {dress:?} — this class declares: {}",
+                    "unknown faceplate {faceplate_id:?} — this class declares: {}",
                     if vocabulary.is_empty() {
                         "none".to_string()
                     } else {
@@ -245,11 +260,11 @@ impl Device {
                 );
             }
         }
-        // A bare update keeps the current declared dress. The catalog
+        // An update without an explicit selection keeps the current faceplate. The catalog
         // resolves faceplate + mount into the flattened install id.
         let faceplate = requested_faceplate.or_else(|| {
             catalog
-                .dress(
+                .installed_faceplate(
                     self.facts.class.as_deref().unwrap_or_default(),
                     self.facts.faceplate.as_deref().unwrap_or_default(),
                     self.facts.mount.as_deref(),
@@ -269,18 +284,18 @@ impl Device {
     fn id_owned(&self) -> anyhow::Result<String> {
         self.device_id().map(str::to_string).ok_or_else(|| {
             anyhow::anyhow!(
-                "{}: no device_id — adopt the individual first",
+                "{}: no device_id — provision the device first",
                 self.facts.port
             )
         })
     }
 }
 
-fn currency_is_stale(individual: &Individual) -> bool {
-    individual
+fn faceplate_is_outdated(registered_device: &RegisteredDevice) -> bool {
+    registered_device
         .admission
         .as_ref()
-        .and_then(|a| a.steps.iter().find(|s| s.name == "currency"))
+        .and_then(|a| a.steps.iter().find(|s| s.name == "faceplate-version"))
         .is_some_and(|step| !step.ok)
 }
 
@@ -288,16 +303,16 @@ fn action_refusal(
     port: &str,
     action: &str,
     refusal: Refusal,
-    roster: &Roster,
+    registry: &DeviceRegistry,
     id: &str,
 ) -> anyhow::Error {
-    let current = roster
-        .individual(id)
+    let current = registry
+        .registered_device(id)
         .map(|i| format!("{:?}", i.lifecycle).to_lowercase())
         .unwrap_or_else(|| "unknown".into());
     let reason = match refusal {
         Refusal::NotFrom(from) => format!("that move is only from {from} (this face is {current})"),
-        Refusal::Unknown => "the roster holds no such individual".to_string(),
+        Refusal::Unknown => "the registry contains no such device".to_string(),
     };
     anyhow::anyhow!("{port}: cannot {action} — {reason}")
 }
@@ -306,7 +321,7 @@ fn action_refusal(
 mod tests {
     use super::*;
     use crate::resident::events::AdmissionStep;
-    use crate::resident::roster::AdmissionRecord;
+    use crate::resident::registry::AdmissionRecord;
 
     fn device(proto: Option<&str>) -> Device {
         Device::new(
@@ -328,12 +343,12 @@ mod tests {
         )
     }
 
-    fn roster_live() -> Roster {
-        let mut roster = Roster::new();
-        roster
-            .hold("device-1", "/dev/ttyUSB0", Some("esp8266-oled"), "now")
+    fn active_registry() -> DeviceRegistry {
+        let mut registry = DeviceRegistry::new();
+        registry
+            .register("device-1", "/dev/ttyUSB0", Some("esp8266-oled"), "now")
             .unwrap();
-        roster
+        registry
             .admission_result(
                 "device-1",
                 AdmissionRecord {
@@ -343,24 +358,24 @@ mod tests {
                 },
             )
             .unwrap();
-        roster
+        registry
     }
 
     #[test]
-    fn the_device_owns_pause_and_resume_rules() {
+    fn pause_and_resume_follow_device_policy() {
         let device = device(Some("suzu/1"));
-        let mut roster = roster_live();
+        let mut registry = active_registry();
         assert!(matches!(
-            device.pause(&mut roster).unwrap(),
+            device.pause(&mut registry).unwrap(),
             DeviceOrder::Pause { .. }
         ));
         assert_eq!(
-            roster.individual("device-1").unwrap().lifecycle,
+            registry.registered_device("device-1").unwrap().lifecycle,
             Lifecycle::Paused
         );
-        assert!(device.identify(roster.individual("device-1")).is_err());
+        assert!(device.identify(registry.registered_device("device-1")).is_err());
         assert!(matches!(
-            device.resume(&mut roster).unwrap(),
+            device.resume(&mut registry).unwrap(),
             DeviceOrder::Resume { .. }
         ));
     }
@@ -368,36 +383,36 @@ mod tests {
     #[test]
     fn published_actions_follow_the_aggregate_lifecycle() {
         let device = device(Some("suzu/1"));
-        let mut roster = roster_live();
-        let live = device.available_actions(roster.individual("device-1"), false);
+        let mut registry = active_registry();
+        let live = device.available_actions(registry.registered_device("device-1"), false);
         assert_eq!(live[0], DeviceAction::Pause);
         assert!(live.contains(&DeviceAction::Identify));
-        device.pause(&mut roster).unwrap();
-        let paused = device.available_actions(roster.individual("device-1"), false);
+        device.pause(&mut registry).unwrap();
+        let paused = device.available_actions(registry.registered_device("device-1"), false);
         assert_eq!(paused[0], DeviceAction::Resume);
         assert!(!paused.contains(&DeviceAction::Identify));
         assert!(
             device
-                .available_actions(roster.individual("device-1"), true)
+                .available_actions(registry.registered_device("device-1"), true)
                 .is_empty()
         );
     }
 
     #[test]
-    fn a_stale_new_face_offers_update_not_reinstall() {
+    fn an_outdated_faceplate_offers_update_not_reinstall() {
         let device = device(Some("suzu/1"));
-        let mut roster = Roster::new();
-        roster
-            .hold("device-1", "/dev/ttyUSB0", Some("esp8266-oled"), "now")
+        let mut registry = DeviceRegistry::new();
+        registry
+            .register("device-1", "/dev/ttyUSB0", Some("esp8266-oled"), "now")
             .unwrap();
-        roster
+        registry
             .admission_result(
                 "device-1",
                 AdmissionRecord {
                     passed: false,
                     at: "now".into(),
                     steps: vec![AdmissionStep {
-                        name: "currency".into(),
+                        name: "faceplate-version".into(),
                         ok: false,
                         detail: "stale".into(),
                     }],
@@ -405,24 +420,39 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            device.available_actions(roster.individual("device-1"), false),
-            vec![DeviceAction::Update, DeviceAction::FactoryReset]
+            device.available_actions(registry.registered_device("device-1"), false),
+            vec![DeviceAction::Update]
         );
     }
 
     #[test]
-    fn install_translates_unknown_firmware_to_adoption() {
+    fn factory_reset_is_only_offered_with_a_native_recovery_path() {
+        let esp = device(Some("suzu/1"));
+        let registry = active_registry();
+        assert!(!esp
+            .available_actions(registry.registered_device("device-1"), false)
+            .contains(&DeviceAction::FactoryReset));
+
+        let mut rp = device(Some("suzu/1"));
+        rp.facts.class = Some("waveshare-rp2040-matrix".into());
+        assert!(rp
+            .available_actions(registry.registered_device("device-1"), false)
+            .contains(&DeviceAction::FactoryReset));
+    }
+
+    #[test]
+    fn install_translates_unknown_firmware_to_provisioning() {
         let catalog = Catalog::load();
-        let mut roster = Roster::new();
-        roster
-            .hold("device-1", "/dev/ttyUSB0", Some("esp8266-oled"), "now")
+        let mut registry = DeviceRegistry::new();
+        registry
+            .register("device-1", "/dev/ttyUSB0", Some("esp8266-oled"), "now")
             .unwrap();
         let order = device(None)
-            .install(&catalog, None, roster.individual("device-1"), false)
+            .install(&catalog, None, registry.registered_device("device-1"), false)
             .unwrap();
         let DeviceOrder::Maintenance(order) = order else {
             panic!("maintenance order")
         };
-        assert_eq!(order.kind, "adopt");
+        assert_eq!(order.kind, "provision");
     }
 }

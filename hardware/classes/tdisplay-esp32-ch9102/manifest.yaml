@@ -7,8 +7,8 @@ flash:
   baud: 115200
   characteristics: "hard reset after flash — poll REPL readiness (print('mpready')) before push"
 frame:
-  size: 32400               # 240 x 135 x 1 - the face-kept mirror
-  format: rgb332            # a byte a pixel: this heap's honest color
+  size: 32400               # 240 x 135 x 1-byte capture buffer
+  format: rgb332            # one byte per pixel with limited RAM use
   depth: 8
   order: row-major
   width: 240
@@ -16,12 +16,9 @@ frame:
   render: { rotate: 0 }     # the composition is native landscape
 sets: [os]
 
-# The glass is WRITE-ONLY (the ST7789's data-out is not wired), so
-# the FACE KEEPS THE MIRROR — the matrix's law, applied to color:
-# every draw writes the panel and a 64.8 KB RGB565 framebuffer in
-# RAM, and the J shot returns the mirror. The trail camera works;
-# what it photographs is the face's own truth, one write away from
-# the glass.
+# The ST7789 data-out pin is not wired, so every draw updates both the
+# panel and a 64.8 KB RGB565 capture buffer in RAM. The J command
+# returns that buffer.
 boards:
   - name: "TENSTAR T-Display ESP32-D0WD, Type-C — factory unit"
     status: observed                 # COM13 first session, silent to I

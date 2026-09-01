@@ -1,20 +1,18 @@
-//! suzu — the adoption, servicing & detective tool.
+//! Suzu device discovery, maintenance, and diagnostics CLI.
 //!
 //! Subcommands:
 //!   (none)     watch USB serial ports; identify on hotplug; service
 //!   scan       one-shot identification of every connected port
 //!   list       list and manage the Resident's compatible devices
-//!   detective  full fact dump per USB device — the harvest instrument
-//!   serve      the Resident: watcher · devices · moments · sensor,
-//!              talking to each other in the open
+//!   detective  full diagnostic output per USB device
+//!   serve      run the Resident service
 //!
-//! Servicing today: test. install / update / factory-wipe land with the
-//! procedure engine (docs/hardware-catalog-and-adoption.md §4).
+//! Maintenance procedures are defined in the Resident maintenance module.
 
 mod catalog;
 mod control;
 mod gif;
-mod house_cli;
+mod resident_cli;
 mod mpush;
 mod paths;
 mod prepare;
@@ -34,7 +32,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-/// What the ladder concluded about a port.
+/// What the identification sequence concluded about a port.
 #[derive(Clone)]
 struct Verdict {
     /// One line, styled like: `NEW     ESP8266 + OLED display (CH340)`.
@@ -98,7 +96,7 @@ fn legacy_variant_token(line: &str) -> Option<String> {
     (!token.is_empty()).then(|| token.to_string())
 }
 
-/// Verdict from an already-run ladder transcript.
+/// Verdict from an already-run identification transcript.
 fn verdict_from(catalog: &Catalog, vid: u16, pid: u16, t: &Transcript) -> Verdict {
     if let Some(json) = &t.identity {
         let family = json.get("family").and_then(|v| v.as_str()).unwrap_or("suzu");
@@ -132,7 +130,7 @@ fn verdict_from(catalog: &Catalog, vid: u16, pid: u16, t: &Transcript) -> Verdic
         };
         return Verdict::new(
             head,
-            format!("{line}\n      → migrate with `install` once flashing lands"),
+            format!("{line}\n      → migrate with the `install` action"),
         );
     }
     if let Some(c) = catalog.class_by_vidpid(vid, pid) {
@@ -150,7 +148,7 @@ fn verdict_from(catalog: &Catalog, vid: u16, pid: u16, t: &Transcript) -> Verdic
     )
 }
 
-/// The identification ladder + catalog join. Tool-side verdict.
+/// The identification sequence + catalog join. Tool-side verdict.
 fn identify(catalog: &Catalog, port_name: &str, vid: u16, pid: u16) -> Verdict {
     let t = probe::probe_transcript(port_name);
     if let Some(e) = &t.error {
@@ -381,27 +379,27 @@ fn run_test(port: &str) {
         }
         Ok(Outcome::LegacyFirefly { line }) => {
             println!("  unknown firefly identity: {line}");
-            println!("  → still alive. Migration lands with the install procedure.");
+            println!("  → the device responded; use the install procedure to migrate it.");
         }
         Ok(Outcome::Silent) => println!("  no identity response — fresh or foreign firmware"),
         Err(e) => println!("  probe failed: {e}"),
     }
 }
 
-/// One PNG per connected firefly. The capture rides the wire
-/// (J,{"shot":1}) and the J reply is the liveness proof — no probe, no
-/// identity gate, no reboot. Each port's bytes are decoded per its
-/// class manifest's frame law; anything that doesn't answer or has no
-/// declared frame gets one honest line and an untouched port.
+/// Capture one PNG per connected display. The capture uses the serial protocol
+/// (J,{"shot":1}); a valid J reply confirms the session without a separate
+/// probe, identity check, or reboot. Each port's bytes are decoded per its
+/// class manifest's frame format; anything that doesn't answer or has no
+/// declared frame produces one result line without modifying the port.
 fn screenshot(catalog: &Catalog, filter: Option<&str>) {
-    println!("suzu screenshot — one png per connected firefly");
+    println!("suzu screenshot — one PNG per connected display");
     let ports: Vec<_> = enumerate()
         .into_iter()
         .filter(|e| e.usb.is_some()) // non-USB ports are foreign by default
         .filter(|e| filter.is_none_or(|f| e.name == f))
         .collect();
     if ports.is_empty() {
-        println!("  no USB serial port matches — plug a firefly in (data cable, not charge-only)");
+        println!("  no matching USB serial device; use a data-capable cable");
         return;
     }
     let mut shots = 0;
@@ -414,7 +412,7 @@ fn screenshot(catalog: &Catalog, filter: Option<&str>) {
             continue;
         };
         let Some(spec) = catalog.frame(&class_id).cloned() else {
-            println!("no shot: class {class_id} declares no frame law");
+            println!("no shot: class {class_id} declares no frame format");
             continue;
         };
         let zones = catalog.display_zones(&class_id);
@@ -426,13 +424,13 @@ fn screenshot(catalog: &Catalog, filter: Option<&str>) {
                         println!("shot → {} [{class_id}]", path.display());
                         shots += 1;
                     }
-                    Err(err) => println!("frame lifted, render failed: {err}"),
+                    Err(err) => println!("frame captured, render failed: {err}"),
                 }
             }
             Err(err) => println!("no shot: {err}"),
         }
     }
-    println!("{shots} png(s) — shots are in-band; the faces never stopped dancing");
+    println!("{shots} png(s) captured without stopping device sessions");
 }
 
 fn servicing_menu(port: &str) {
@@ -447,7 +445,7 @@ fn servicing_menu(port: &str) {
 }
 
 fn watch(catalog: &Arc<Catalog>) {
-    println!("suzu — adoption, servicing & detective");
+    println!("suzu — device provisioning and diagnostics");
     println!("watches USB serial ports; new devices are identified automatically.");
 
     let (tx, rx) = mpsc::channel::<Event>();
@@ -514,7 +512,7 @@ fn watch(catalog: &Arc<Catalog>) {
                                     [line.parse::<usize>().unwrap_or(0)];
                                 println!(
                                     "  {verb}: not implemented in this build.\n  → detection, \
-                                     identification and test are live; flashing lands with the \
+                                     identification and test are available; flashing is handled by the \
                                      procedure engine (docs/hardware-catalog-and-adoption.md §4)."
                                 );
                             }
@@ -532,7 +530,7 @@ fn watch(catalog: &Arc<Catalog>) {
             }
         }
     }
-    println!("bye — the garden keeps breathing.");
+    println!("stopped");
 }
 
 #[tokio::main]
@@ -546,25 +544,21 @@ async fn main() -> anyhow::Result<()> {
     match args.get(1).map(|s| s.as_str()) {
         Some("scan") => scan_once(&catalog),
         Some("detective") => detective(&catalog),
-        Some("list") => house_cli::run(&args[2..]).await?,
+        Some("list") => resident_cli::run(&args[2..]).await?,
         Some("serve") => resident::run(catalog).await?,
         Some("screenshot") => screenshot(&catalog, args.get(2).map(|s| s.as_str())),
         Some("prepare") => prepare::run(&catalog, &args[2..])?,
         Some("record") => {
-            // Reasonable limits, stated out loud when an ask exceeds
-            // them: the wire caps fps, the host and GIF viewers cap
-            // the run. The face never chokes either way (one shot is
-            // one bounded write) — these guard our side of the wire.
+            // Clamp recording length and rate to serial and GIF limits.
             let secs: u32 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(10);
             let fps: u32 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(3);
             let (secs, fps) = (secs.clamp(1, 60), fps.clamp(1, 5));
             let want_port = args.get(4).map(|s| s.as_str());
             if args.len() > 2 {
-                println!("recording {secs} s at {fps} fps (limits: ≤60 s, ≤5 fps — the wire decides)");
+                println!("recording {secs} s at {fps} fps (limits: ≤60 s, ≤5 fps)");
             }
-            // Every decodable face on the bench, in enumeration order;
-            // `suzu record 4 3 COM22` may aim the camera at one port.
-            let mut faces: Vec<shot::Face> = Vec::new();
+            // Include every decodable display in enumeration order, or one selected port.
+            let mut targets: Vec<shot::CaptureTarget> = Vec::new();
             for e in enumerate().into_iter().filter(|e| e.usb.is_some()) {
                 if let Some(w) = want_port
                     && e.name != w {
@@ -578,37 +572,37 @@ async fn main() -> anyhow::Result<()> {
                     continue;
                 };
                 let zones = catalog.display_zones(&class_id);
-                faces.push(shot::Face {
+                targets.push(shot::CaptureTarget {
                     port: e.name.clone(),
                     class: class_id,
                     spec,
                     zones,
                 });
             }
-            if faces.is_empty() {
-                anyhow::bail!("no decodable face — plug a firefly in, and check its class manifest declares a frame");
+            if targets.is_empty() {
+                anyhow::bail!("no decodable display; check that the device class manifest declares a frame");
             }
-            let (path, n) = shot::record_first(&faces, secs, fps, "record")?;
+            let (path, n) = shot::record_first(&targets, secs, fps, "record")?;
             println!("{n} frames → {}", path.display());
         }
         Some("say") => {
-            // ADR-0006: [port] [signal] [text…] — a port targets one
-            // face, a ring word broadcasts, prose rides as transition.
+            // ADR-0006: [port] [signal] [text…]. A port targets one
+            // device; without a port the signal is broadcast.
             let text = args[2..].join(" ");
             if text.is_empty() {
                 anyhow::bail!("usage: suzu say [port] [signal] <text>  (e.g. suzu say COM24 INFO Hello!)");
             }
-            control::chirp(&format!("say {text}")).await?;
+            control::send_control(&format!("say {text}")).await?;
         }
         Some("show") => {
             let text = args[2..].join(" ");
             if text.is_empty() {
                 anyhow::bail!("usage: suzu show <tag> <text ...>  (e.g. suzu show INFO.disk Disk at 50%)");
             }
-            control::chirp(&format!("show {text}")).await?;
+            control::send_control(&format!("show {text}")).await?;
         }
-        Some("pause") => control::chirp("pause").await?,
-        Some("resume") => control::chirp("resume").await?,
+        Some("pause") => control::send_control("pause").await?,
+        Some("resume") => control::send_control("resume").await?,
         Some("firmware") => {
             let port = args.get(2).ok_or_else(|| anyhow::anyhow!("usage: suzu firmware <port>"))?;
             println!("{}", servicing::migrate(port)?);

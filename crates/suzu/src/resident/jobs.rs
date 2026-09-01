@@ -2,8 +2,8 @@
 //!
 //! A job has an id, a kind, a target, a state (`recording` · `done` ·
 //! `failed` for record; `running` · `done` · `failed` for maintenance),
-//! numbered progress, and a result. It is created the moment the
-//! keeper asks, announced on the house wire as it changes, and served
+//! numbered progress, and a result. It is created when the
+//! user requests, published as it changes, and served
 //! from the registry to whoever asks. Nothing long-running happens
 //! anywhere else; nothing blocks on a job to know how it is going.
 
@@ -12,11 +12,11 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use tokio::sync::broadcast::Sender;
 
-use super::events::HouseEvent;
+use super::events::ResidentEvent;
 
 /// One job, in full. Its progress and verdict travel as Job facts on
-/// the house wire; while a record runs, the frames the GIF takes ride
-/// the frame lane (recording subsumes the preview).
+/// the event stream; while a recording runs, its frames are also published
+/// frame capture (recording replaces the preview capture loop).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Job {
     pub id: String,
@@ -40,13 +40,13 @@ pub type SharedJob = Arc<Mutex<Job>>;
 pub struct Jobs {
     map: Mutex<BTreeMap<String, SharedJob>>,
     order: Mutex<Vec<String>>,
-    events: Sender<HouseEvent>,
+    events: Sender<ResidentEvent>,
 }
 
 const JOB_CAP: usize = 40;
 
 impl Jobs {
-    pub fn new(events: Sender<HouseEvent>) -> Self {
+    pub fn new(events: Sender<ResidentEvent>) -> Self {
         Self {
             map: Mutex::new(BTreeMap::new()),
             order: Mutex::new(Vec::new()),
@@ -74,13 +74,13 @@ impl Jobs {
     }
 
     /// Mutate a job through the registry; the announcement goes out
-    /// after the mutation lands.
+    /// after the mutation completes.
     pub fn with<F: FnOnce(&mut Job)>(&self, id: &str, f: F) {
         if let Some(shared) = self.map.lock().expect("jobs lock").get(id)
             && let Ok(mut job) = shared.lock() {
                 f(&mut job);
                 let snapshot = job.clone();
-                let _ = self.events.send(HouseEvent::Job { job: snapshot });
+                let _ = self.events.send(ResidentEvent::Job { job: snapshot });
             }
     }
 
@@ -95,7 +95,7 @@ impl Jobs {
 
     fn announce(&self, shared: &SharedJob) {
         if let Ok(job) = shared.lock() {
-            let _ = self.events.send(HouseEvent::Job { job: job.clone() });
+            let _ = self.events.send(ResidentEvent::Job { job: job.clone() });
         }
     }
 }

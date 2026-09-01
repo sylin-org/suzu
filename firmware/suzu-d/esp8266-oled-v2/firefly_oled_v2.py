@@ -25,7 +25,7 @@ import ujson
 import profont_10 as font
 
 
-# firmware-side runtime truth only. Everything else
+# Firmware runtime fields only. All other fields
 # lives in /suzu.json (written by NewFirefly.ps1 at
 # provisioning time).
 _FW_VERSION = "2.0.0"
@@ -51,7 +51,7 @@ _DESCRIPTOR = _load_descriptor()
 
 
 def descriptor_json():
-    """Merge runtime-truth fields into the provisioned descriptor."""
+    """Merge runtime fields into the provisioned descriptor."""
     d = dict(_DESCRIPTOR)
     d["hardware_id"] = _hardware_id()
     d["version"] = _FW_VERSION

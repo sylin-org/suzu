@@ -1,7 +1,6 @@
-//! The sensor domain — the built-in environment capture. Ground-source
-//! zero: it speaks for the machine with no producers and no users.
+//! Built-in host metrics collection.
 
-use super::events::HouseEvent;
+use super::events::ResidentEvent;
 use serde::Serialize;
 use std::sync::Arc;
 use std::time::Duration;
@@ -9,50 +8,49 @@ use sysinfo::System;
 use tokio::sync::broadcast::Sender;
 
 #[derive(Debug, Clone, Serialize)]
-pub struct MachineReport {
+pub struct HostMetrics {
     pub name: String,
     pub uptime_s: u64,
     pub cpu: u8,
     pub mem: u8,
     pub disk: u8,
-    /// `None` is "not measured" — the face draws a dash, never a zero.
+    /// `None` means "not measured" and is displayed as a dash rather than zero.
     pub gpu: Option<u8>,
 }
 
 const FAST_TICK: Duration = Duration::from_millis(200);
-const GROUND_EVERY: u64 = 10; // one ground publish per ~2 s
+const METRICS_EVERY: u64 = 10; // publish host metrics about every 2 seconds
 
 pub struct Sensor {
-    events: Sender<HouseEvent>,
-    /// The machine's freshest state lands here as it is captured
-    /// (ADR-0006): the sessions pull ground and pulses from the
-    /// substrate on their own tick — the bus carries the news, the
-    /// cell carries the truth.
-    substrate: Arc<super::devices::Substrate>,
+    events: Sender<ResidentEvent>,
+    /// Latest captured host state (ADR-0006). Device sessions read metrics and
+    /// scalar updates from this cache on their own interval; events only notify
+    /// other components that values changed.
+    host_state: Arc<super::devices::HostStateCache>,
     sys: System,
     disks: sysinfo::Disks,
-    last: Option<MachineReport>,
+    last: Option<HostMetrics>,
 }
 
 impl Sensor {
-    pub fn new(events: Sender<HouseEvent>, substrate: Arc<super::devices::Substrate>) -> Self {
+    pub fn new(events: Sender<ResidentEvent>, host_state: Arc<super::devices::HostStateCache>) -> Self {
         let mut sys = System::new();
         sys.refresh_cpu_usage();
         sys.refresh_memory();
         let disks = sysinfo::Disks::new_with_refreshed_list();
-        // Prime the cpu reading — the first sample is always 0.
+        // Prime CPU measurement because the first sample is always zero.
         std::thread::sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL);
         sys.refresh_cpu_usage();
         Self {
             events,
-            substrate,
+            host_state,
             sys,
             disks,
             last: None,
         }
     }
 
-    fn capture(&mut self) -> MachineReport {
+    fn capture(&mut self) -> HostMetrics {
         self.sys.refresh_cpu_usage();
         self.sys.refresh_memory();
         self.disks.refresh_list();
@@ -63,7 +61,7 @@ impl Sensor {
         } else {
             0
         };
-        // The biggest mounted volume speaks for storage.
+        // Use the largest mounted volume for storage utilization.
         let mut biggest: Option<(u64, u64)> = None; // (total, available)
         for d in self.disks.list() {
             if biggest.is_none_or(|(t, _)| d.total_space() > t) {
@@ -74,7 +72,7 @@ impl Sensor {
             .map(|(t, a)| ((t - a) * 100 / t.max(1)) as u8)
             .unwrap_or(0);
 
-        MachineReport {
+        HostMetrics {
             name: System::host_name().unwrap_or_else(|| "unnamed".into()),
             uptime_s: System::uptime(),
             cpu,
@@ -85,28 +83,28 @@ impl Sensor {
     }
 
     pub async fn run(mut self) {
-        // Prime the CPU statistics with a real interval — the first
-        // sample is otherwise a 100% lie.
+        // Prime CPU statistics across a real interval; the first immediate
+        // sample is not meaningful.
         let _prime = self.capture();
         tokio::time::sleep(Duration::from_millis(300)).await;
         let mut ticks: u64 = 0;
-        let mut audio: u8 = 40; // the stub capture: decay + noise
+        let mut audio: u8 = 40; // Placeholder scalar source using decay and noise.
         let mut rng: u32 = 0x9e37_79b9;
         loop {
             ticks += 1;
 
-            // ── fast lane: pulse atoms (cheap capture, cheap show) ──
+            // High-frequency scalar sensor updates.
             rng = rng.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
             let attack = ((rng >> 16) % 30) as u8;
             audio = ((audio as u32 * 3 / 4) + attack as u32).min(100) as u8;
-            let _ = self.events.send(HouseEvent::Pulse {
+            let _ = self.events.send(ResidentEvent::Pulse {
                 axis: "audio.level",
                 value: audio,
             });
-            self.substrate.set_pulse("audio.level".into(), audio);
+            self.host_state.set_pulse("audio.level".into(), audio);
 
-            // ── slow lane: the ground, on drift ──
-            if ticks.is_multiple_of(GROUND_EVERY) {
+            // Publish host metrics only after a value changes.
+            if ticks.is_multiple_of(METRICS_EVERY) {
                 let captured = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
                     || self.capture(),
                 ));
@@ -114,9 +112,9 @@ impl Sensor {
                     Ok(report) => report,
                     Err(_) => {
                         // A capture that panics costs one cycle, not
-                        // the sensor: the house hears why and the
+                        // the sensor: publish the reason and
                         // next tick tries again.
-                        let _ = self.events.send(HouseEvent::Degraded {
+                        let _ = self.events.send(ResidentEvent::Degraded {
                             domain: "sensor",
                             reason: "capture panicked — cycle skipped, retrying".into(),
                         });
@@ -124,7 +122,7 @@ impl Sensor {
                         continue;
                     }
                 };
-                // Only publish on change — the ground drifts silently.
+                // Only publish changed values.
                 let changed = match &self.last {
                     None => true,
                     Some(prev) => {
@@ -137,7 +135,7 @@ impl Sensor {
                 };
                 if changed {
                     self.last = Some(report.clone());
-                    let _ = self.events.send(HouseEvent::GroundChanged {
+                    let _ = self.events.send(ResidentEvent::HostMetricsChanged {
                         name: report.name.clone(),
                         uptime_s: report.uptime_s,
                         cpu: report.cpu,
@@ -145,7 +143,7 @@ impl Sensor {
                         disk: report.disk,
                         gpu: report.gpu,
                     });
-                    self.substrate.set_ground(Arc::new(report));
+                    self.host_state.set_metrics(Arc::new(report));
                 }
             }
             tokio::time::sleep(FAST_TICK).await;

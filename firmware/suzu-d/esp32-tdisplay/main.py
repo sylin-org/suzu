@@ -36,7 +36,7 @@ from machine import Pin, SPI, unique_id
 import ubinascii
 
 
-# firmware-side runtime truth only. Everything else
+# Firmware runtime fields only. All other fields
 # (family, variant, display, capabilities) lives in /suzu.json
 # — written at provisioning time by NewFirefly.ps1.
 _FW_VERSION = "1.0.0"
@@ -62,7 +62,7 @@ _DESCRIPTOR = _load_descriptor()
 
 
 def descriptor_json():
-    """Merge runtime-truth fields into the provisioned descriptor."""
+    """Merge runtime fields into the provisioned descriptor."""
     d = dict(_DESCRIPTOR)
     d["hardware_id"] = _hardware_id()
     d["version"] = _FW_VERSION

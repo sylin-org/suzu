@@ -1,13 +1,10 @@
-//! Suzu's desktop workbench: the keeper's window onto the Resident.
+//! Desktop management interface for the Suzu Resident.
 //!
-//! The house rules it follows (ADR-0002): the Resident is the single
+//! Per ADR-0002, the Resident is the single
 //! writer — this shell never touches a serial port. It is also the
-//! only speaker to the loopback API: the webview calls Tauri commands
+//! only client of the loopback API: the webview calls Tauri commands
 //! and the Rust side makes the HTTP call, so no browser CORS exists
-//! anywhere in the product and no stray webpage can drive devices.
-//! Visual language and desktop patterns are ported from the family
-//! (Ghostlight's workbench, koi-desktop's tray) and re-skinned with
-//! suzu's own gold.
+//! anywhere in the product and no unrelated webpage can control devices.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -18,21 +15,19 @@ use tauri::{Emitter, Manager, WindowEvent};
 const MAIN_WINDOW: &str = "main";
 const PORT_NUM: u16 = 7899;
 
-/// Set once the webview is listening: the bridge redials, and the
-/// fresh connection's opening snapshot lands on a listener instead of
-/// the void. The bridge connects before the window loads — without
-/// this, the snapshot is announced to nobody and the window sits
-/// factless until the resident next changes its mind.
+/// Set once the webview is listening. The bridge reconnects so the
+/// the next connection's opening snapshot reaches a listener instead of
+/// an absent listener. The bridge connects before the window loads; without
+/// this, the snapshot has no listener and the window remains
+/// empty until the Resident next publishes a change.
 static BRIDGE_RESYNC: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// The Resident's door, as one address. One name, one place.
+/// Resident loopback address.
 fn resident() -> String {
     format!("127.0.0.1:{PORT_NUM}")
 }
 
-/// Where the workbench may send a click. The closed vocabulary: a URL
-/// is only ever opened if it points at the product's own surfaces —
-/// the same law Ghostlight's Rust asserts over its own markup.
+/// Return whether the URL is an approved product destination.
 fn url_is_ours(url: &str) -> bool {
     url.starts_with("https://sylin.org/")
         || url.starts_with("https://github.com/sylin-org/")
@@ -45,16 +40,16 @@ fn ready(app: tauri::AppHandle) {
         let _ = window.set_focus();
     }
     // The webview's listeners are up: ask the bridge for a fresh
-    // connection, whose opening snapshot is the whole truth re-poured.
+    // connection so the opening snapshot refreshes all client state.
     BRIDGE_RESYNC.store(true, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// Open one of the About page's destinations. Anything outside the
-/// product's own surfaces is refused, not merely unlinked.
+/// approved product destinations is rejected.
 #[tauri::command]
 async fn open_destination(url: String) -> Result<(), String> {
     if !url_is_ours(&url) {
-        return Err(format!("refused: {url} points outside the product's own surfaces"));
+        return Err(format!("refused: {url} is not an approved destination"));
     }
     tauri::async_runtime::spawn_blocking(move || open_externally(&url))
         .await
@@ -89,7 +84,7 @@ fn open_externally(target: &str) -> Result<(), String> {
 }
 
 /// One HTTP round trip to the Resident, performed by the Rust side.
-/// The webview never speaks cross-origin HTTP — no CORS, no
+/// The webview never sends cross-origin HTTP directly.
 /// preflights, and no webpage can reach the Resident through us.
 /// Async on a blocking worker: a slow or absent Resident must never
 /// freeze the window (the UI-thread lock, learned 2026-08-30).
@@ -109,7 +104,7 @@ async fn api(
         .map(|(status, body)| serde_json::json!({ "status": status, "body": body }))
 }
 
-/// The raw loopback round trip every command bottoms out in.
+/// Perform a raw HTTP request over the Resident loopback connection.
 fn http_call(
     method: &str,
     path: &str,
@@ -139,20 +134,18 @@ fn http_call(
     Ok((status, body))
 }
 
-/// The door probe (ADR-0004): can somebody be reached on 7899?
-fn door_is_owned() -> bool {
+/// Return whether a process is accepting connections on the Resident port.
+fn resident_port_is_open() -> bool {
     use std::net::SocketAddr;
     let addr: SocketAddr = resident().parse().expect("loopback addr");
     std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(300)).is_ok()
 }
 
-/// Wait for the door to open — a freshly spawned resident binds it
-/// before it touches any serial port, so an open door means the house
-/// (or a stranger) lives.
-fn wait_for_door(timeout: std::time::Duration) -> bool {
+/// Wait for the Resident port to accept connections.
+fn wait_for_resident_port(timeout: std::time::Duration) -> bool {
     let deadline = std::time::Instant::now() + timeout;
     while std::time::Instant::now() < deadline {
-        if door_is_owned() {
+        if resident_port_is_open() {
             return true;
         }
         std::thread::sleep(std::time::Duration::from_millis(200));
@@ -160,16 +153,15 @@ fn wait_for_door(timeout: std::time::Duration) -> bool {
     false
 }
 
-/// Bring the Resident up, beside this workbench, detached: it keeps
-/// running if the window closes. The door is probed first (ADR-0004):
-/// if the house already lives, the spawn is refused loudly — a second
-/// suzu.exe would bind nothing and live doorless, a zombie. The repo
+/// Start the Resident as a detached process so it continues
+/// running if the window closes. Probe the port first (ADR-0004); a second
+/// process would fail to bind the port. The repository
 /// root is derived from the binary's own location (target/debug -> the
 /// project root).
 #[tauri::command]
 async fn start_resident() -> Result<String, String> {
-    if door_is_owned() {
-        return Err("refused: the house already lives — 127.0.0.1:7899 is owned by a running resident".into());
+    if resident_port_is_open() {
+        return Err("refused: 127.0.0.1:7899 is already owned by a running process".into());
     }
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let dir = exe.parent().ok_or("no exe directory")?.to_path_buf();
@@ -204,25 +196,22 @@ async fn start_resident() -> Result<String, String> {
         Ok(child.id())
     }).await.map_err(|e| format!("worker: {e}"))??;
 
-    // The claim is only proven once the door opens; the resident binds
-    // before it minds any port, so this wait is bounded and honest.
-    if wait_for_door(std::time::Duration::from_secs(10)) {
-        Ok(format!("the resident lives — pid {pid}"))
+    // Startup succeeds only after the Resident accepts a connection.
+    if wait_for_resident_port(std::time::Duration::from_secs(10)) {
+        Ok(format!("resident started — pid {pid}"))
     } else {
         Err(format!(
-            "the resident (pid {pid}) did not open the door within 10 s — see serve.err.log"
+            "resident process {pid} did not listen within 10 seconds; see serve.err.log"
         ))
     }
 }
 
-/// Ask the Resident to rest, then *verify* (ADR-0004): the shutdown
-/// door is asked, and the port is polled until it is actually free.
-/// The truth either way — a door that will not close is reported, not
+/// Request shutdown, then verify that the loopback port becomes free.
 /// pretended.
 #[tauri::command]
 async fn stop_resident() -> Result<serde_json::Value, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        if !door_is_owned() {
+        if !resident_port_is_open() {
             return Ok(serde_json::json!({ "stopped": true, "was": "already down" }));
         }
         match http_call("POST", "/api/shutdown", &None) {
@@ -230,42 +219,42 @@ async fn stop_resident() -> Result<serde_json::Value, String> {
             Ok((status, body)) => {
                 return Ok(serde_json::json!({
                     "stopped": false,
-                    "reason": format!("the shutdown door answered {status}: {body}"),
+                    "reason": format!("the shutdown endpoint returned {status}: {body}"),
                 }));
             }
             Err(e) => {
                 return Ok(serde_json::json!({
                     "stopped": false,
-                    "reason": format!("the shutdown door did not answer: {e}"),
+                    "reason": format!("the shutdown endpoint failed: {e}"),
                 }));
             }
         }
-        // The resident exits after answering; give the port a moment
+        // The resident exits after answering; wait briefly for the port
         // to actually free, and report what is true when it does not.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while std::time::Instant::now() < deadline {
-            if !door_is_owned() {
+            if !resident_port_is_open() {
                 return Ok(serde_json::json!({ "stopped": true }));
             }
             std::thread::sleep(std::time::Duration::from_millis(200));
         }
         Ok(serde_json::json!({
             "stopped": false,
-            "reason": "the shutdown door answered, but 127.0.0.1:7899 is still held",
+            "reason": "shutdown returned successfully, but 127.0.0.1:7899 remains in use",
         }))
     })
     .await
     .map_err(|e| format!("worker: {e}"))?
 }
 
-/// The live wire: hold one SSE connection to the Resident and republish
+/// Maintain one SSE connection to the Resident and republish
 /// every frame as a Tauri event, so the workbench's store moves with
-/// the house instead of polling it. The wire speaks typed lanes
+/// the Resident instead of polling it. The stream carries typed events
 /// (`snapshot` · `fact` · `journal`); the health of the connection is
 /// itself an event, because "connected" is state the store keeps
 /// (ADR-0004). Reconnects are the server's business: every new
 /// connection opens with a fresh snapshot, so nothing appends twice.
-fn spawn_house_events(app: tauri::AppHandle) {
+fn spawn_resident_events(app: tauri::AppHandle) {
     std::thread::spawn(move || loop {
         let ok = (|| -> std::io::Result<()> {
             use std::io::{Read, Write};
@@ -273,16 +262,16 @@ fn spawn_house_events(app: tauri::AppHandle) {
             use std::time::Instant;
             let addr: SocketAddr = resident().parse().expect("loopback addr");
             let mut stream = std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(2))?;
-            // Short naps between reads: the loop stays responsive to
-            // the resync ask, and the corpse rule is explicit — 15 s
-            // without a byte (the house pings every 10) means hang up.
+            // Short read timeouts keep the loop responsive to
+            // resync requests. Fifteen seconds
+            // without a byte (the Resident pings every 10 seconds) means disconnect.
             stream.set_read_timeout(Some(std::time::Duration::from_millis(500))).ok();
             stream.write_all(
                 format!("GET /api/events HTTP/1.1\r\nhost: {}\r\naccept: text/event-stream\r\nconnection: close\r\n\r\n", resident())
                     .as_bytes(),
             )?;
             stream.flush()?;
-            let _ = app.emit("house-health", "connected");
+            let _ = app.emit("resident-health", "connected");
             let mut buf: Vec<u8> = Vec::new();
             let mut chunk = [0u8; 1024];
             let mut last_rx = Instant::now();
@@ -296,13 +285,12 @@ fn spawn_house_events(app: tauri::AppHandle) {
                     Err(e) if e.kind() == std::io::ErrorKind::WouldBlock
                         || e.kind() == std::io::ErrorKind::TimedOut =>
                     {
-                        // A quiet nap, not a death: Windows reports the
-                        // read timeout as TimedOut, Unix as WouldBlock.
+                        // Windows reports read timeouts as TimedOut; Unix uses WouldBlock.
                         if last_rx.elapsed() > std::time::Duration::from_secs(15) {
-                            break; // a corpse: the house stopped pinging
+                            break; // heartbeat timeout
                         }
                         if BRIDGE_RESYNC.swap(false, std::sync::atomic::Ordering::Relaxed) {
-                            break; // a listener asked for the truth again
+                            break; // the UI requested a fresh snapshot
                         }
                         continue;
                     }
@@ -310,7 +298,7 @@ fn spawn_house_events(app: tauri::AppHandle) {
                 }
                 // One SSE frame = optional `event:` line + `data:` line,
                 // closed by a blank line. Comments (`: ping`) are dropped;
-                // the type tag rides inside the JSON.
+                // The JSON payload contains its own type tag.
                 while let Some(pos) = buf.windows(2).position(|w| w == b"\n\n") {
                     let frame: Vec<u8> = buf.drain(..pos + 2).collect();
                     let text = String::from_utf8_lossy(&frame);
@@ -321,14 +309,14 @@ fn spawn_house_events(app: tauri::AppHandle) {
                         }
                     }
                     if let Some(data) = payload {
-                        let _ = app.emit("house", data);
+                        let _ = app.emit("resident-event", data);
                     }
                 }
             }
             Ok(())
         })();
         let _ = ok; // the Resident may be down; we keep trying
-        let _ = app.emit("house-health", "reconnecting");
+        let _ = app.emit("resident-health", "reconnecting");
         std::thread::sleep(std::time::Duration::from_secs(2));
     });
 }
@@ -339,10 +327,9 @@ fn main() {
         .invoke_handler(tauri::generate_handler![ready, open_destination, reveal_path, start_resident, stop_resident, api])
         .setup(move |app| {
             build_tray(app)?;
-            spawn_house_events(app.handle().clone());
-            // The window is configured but hidden: the surface shows
-            // itself once the first render is up (`ready`), so the
-            // keeper never sees an empty frame.
+            spawn_resident_events(app.handle().clone());
+            // The window remains hidden until the first render completes (`ready`), so the
+            // user never sees an empty frame.
             if !start_minimized {
                 if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
                     let _ = window.show();
@@ -352,8 +339,7 @@ fn main() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            // Closing the window keeps the Resident company in the
-            // tray; Quit is a tray decision.
+            // Closing the window hides it; the tray menu controls process exit.
             if let WindowEvent::CloseRequested { api, .. } = event {
                 let _ = window.hide();
                 api.prevent_close();
@@ -363,8 +349,7 @@ fn main() {
         .expect("suzu workbench failed to run");
 }
 
-/// The tray: the bell stays in the system's ear even with the window
-/// shut. Left click reveals; the menu says who is running.
+/// System tray integration. Left click shows the main window.
 fn build_tray(app: &mut tauri::App) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open", "Open Workbench", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit Suzu Workbench", true, None::<&str>)?;
@@ -372,7 +357,7 @@ fn build_tray(app: &mut tauri::App) -> tauri::Result<()> {
 
     let mut builder = TrayIconBuilder::with_id("suzu")
         .icon(tauri::include_image!("icons/suzu.png"))
-        .tooltip("Suzu — the garden keeps breathing")
+        .tooltip("Suzu device manager")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id().as_ref() {

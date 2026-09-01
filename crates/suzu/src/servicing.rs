@@ -58,9 +58,9 @@ pub fn migrate(port: &str) -> Result<String> {
     }
 
     println!("  [3/4] writing suzu identity + faceplate …");
-    let adopted = chrono::Utc::now().date_naive();
+    let provisioned_on = chrono::Utc::now().date_naive();
     let suzu_json = format!(
-        r#"{{"proto":"suzu/1","companion":"firefly","device_id":"{device_id}","family":"esp8266-oled","variant":"oled-v2","faceplate":"portrait-numerals","adopted":"{adopted}"}}"#
+        r#"{{"proto":"suzu/1","companion":"firefly","device_id":"{device_id}","family":"esp8266-oled","variant":"oled-v2","faceplate":"portrait-numerals","adopted":"{provisioned_on}"}}"#
     );
     repl.write_file("suzu.json", suzu_json.as_bytes())?;
     repl.write_file("main.py", FACEPLATE_MAIN.as_bytes())?;

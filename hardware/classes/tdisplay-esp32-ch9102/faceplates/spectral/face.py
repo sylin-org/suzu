@@ -1,27 +1,23 @@
 # suzu — Spectral faceplate (tdisplay-esp32-ch9102, suzu/1).
 # Landscape instrument, 240 wide (u) x 135 tall (v), RGB565.
 #
-# [header: the name in teal, underline, heartbeat dot]
+# [header: device name, underline, activity indicator]
 # [CPU | rainbow bar | value]  x3
-# [message strip — a say's marker and words while the stage holds]
+# [message strip: event icon and label while the overlay is active]
 # [spectrum: 36 x 14 segments, hue descending purple -> red, white
-#  peaks falling under gravity, a scanline sweeping the glass]
+#  peaks falling under gravity, a scanline sweeping display hardware]
 #
 # The bars are a rainbow anchored to the FULL width and revealed
 # left to right — filling to 45% shows the left 45% of the spectrum,
-# the way the HTML mock's clip-path did it. The spectrum hears the
-# house: the left third rides CPU, the middle MEM, the right GPU,
-# jittered like a live analyzer, with falling peak markers.
+# matching the HTML mock's clip-path. The left third uses CPU, the
+# middle uses memory, and the right uses GPU, with jitter and falling peaks.
 #
-# A say re-tints the whole instrument — name, underline, dot, bars,
-# numerals, spectrum — with the say's hue (ADR-0001: urgency as
-# color), plates its marker and words on the strip, and spends.
-# A latched exception never expires: the panel burns and dims until
-# allclear or X.
+# An event temporarily colors the name, underline, indicator, bars,
+# numerals, and spectrum according to urgency (ADR-0001). A latched
+# exception remains until `allclear` or `X`.
 #
-# When the house goes silent for 10 s the instrument goes quiet: a
-# dim grid and a lone scanline sweeping the glass — an oscilloscope
-# warming on the bench. Any frame wakes it.
+# After 10 seconds without host data, show a dim grid and scanline.
+# Any new frame returns to the active display.
 #
 # Keep this file SMALL.
 
@@ -35,10 +31,10 @@ from machine import Pin, SPI, unique_id
 import ujson
 import ubinascii
 
-# ── the dress tuple (stamped here; single-type bundle) ──
-DRESS_ID = "spectral"
-DRESS_MOUNT = "down"
-DRESS_VERSION = "1.0.0"
+# ── faceplate metadata ──
+FACEPLATE_ID = "spectral"
+FACEPLATE_MOUNT = "down"
+FACEPLATE_VERSION = "1.0.0"
 
 W = 240
 H = 135
@@ -59,14 +55,14 @@ ROWS = 14
 SEG_H = 2
 ROW_PITCH = 3
 
-STAGE_MS = 5000
+OVERLAY_MS = 5000
 REST_MS = 10000
 MARKER_MS = 300
 TICK_MS = 150
 
-# the say hues (ADR-0001) — DEGREES, the spectrum's own currency.
+# Notification colors (ADR-0001), expressed as hue degrees.
 # Spectral's palette: teal instrument, amber warning, red exception.
-STAGE_HUES = {"info": 165, "ok": 120, "warn": 48, "exception": 350}
+OVERLAY_HUES = {"info": 165, "ok": 120, "warn": 48, "exception": 350}
 HUE_INFO = 165
 HUE_OK = 120
 HUE_WARN = 48
@@ -81,21 +77,21 @@ TRACK = (26, 47, 43)
 
 # ── state ──
 tft = None
-mirror = None              # the face-kept framebuffer: the camera
-                           # photographs THIS — the glass is write-only
+capture_buffer = None              # framebuffer used for capture responses;
+                           # the display hardware itself is write-only
 last_rx = None
 label = "suzu"
 values = {"cpu": 255, "mem": 255, "gpu": 255}
-stage = None               # None or "stage"
-stage_hue = HUE_INFO
-stage_kind = "info"        # info | warn | exception
-stage_qual = ""            # cpu | gpu | mem — a qualified say's numeral
+overlay = None               # None or "overlay"
+overlay_hue = HUE_INFO
+overlay_kind = "info"        # info | warn | exception
+overlay_qual = ""            # cpu | gpu | mem — a qualified say's numeral
 ring_label = None
 ring_until = None
 latch = False
 ring_seq = "0"
 splash_k = 80
-marker_lit = False
+activity_indicator_lit = False
 dot_lit = False
 lit = None                 # COLS lit heights (segment rows)
 peaks = None               # COLS falling peak positions (float)
@@ -120,8 +116,8 @@ def _c(color):
     """Normalize: a (r,g,b) tuple packs; an int is already RGB565."""
     return rgb(color) if isinstance(color, tuple) else color
 
-# rgb565 -> rgb332: 3-3-2 bits, a byte a pixel — this heap's honest
-# color. The mirror is 32.4 KB, not 64.8 (which does not fit). The
+# RGB565 to RGB332: 3-3-2 bits, one byte per pixel.
+# color. The capture_buffer is 32.4 KB, not 64.8 (which does not fit). The
 # bits are each channel's TOP bits (rrrrrggggggbbbbb -> rrrgggbb):
 # r >> 13, g >> 8, b >> 3. A wrong shift reads a NEIGHBOR's bits —
 # the blue >> 5 read green's low bits and bright blues vanished
@@ -131,10 +127,10 @@ def to332(c):
 
 def m_set(x, y, c):
     if 0 <= x < W and 0 <= y < H:
-        mirror[y * W + x] = to332(c)
+        capture_buffer[y * W + x] = to332(c)
 
 def fillf(x, y, w, h, color):
-    """A filled rect on the glass and the mirror — one truth."""
+    """Draw a filled rectangle to the display and capture buffer."""
     c = _c(color)
     tft.fill_rect(x, y, w, h, c)
     row = bytes((to332(c),)) * w
@@ -143,7 +139,7 @@ def fillf(x, y, w, h, color):
         ww = min(x + w, W) - x0
         if ww > 0:
             i = yy * W + x0
-            mirror[i:i + ww] = row[x0 - x:x0 - x + ww]
+            capture_buffer[i:i + ww] = row[x0 - x:x0 - x + ww]
 
 def pixelf(x, y, color):
     c = _c(color)
@@ -162,7 +158,7 @@ def fillall(color):
     row = bytes((to332(c),)) * W
     for yy in range(H):
         i = yy * W
-        mirror[i:i + W] = row
+        capture_buffer[i:i + W] = row
 
 def hsl(h, s, l):
     s2 = s / 100
@@ -222,7 +218,7 @@ def text(x, y, s, color, gs=1):
 def text_w(s, gs=1):
     return len(s) * 4 * gs
 
-# ── the stage markers (the grammar's reserved shapes) ──
+# ── the overlay markers (the grammar's reserved shapes) ──
 CIRCLED_I = (
     "...###...",
     "..#...#..",
@@ -254,7 +250,7 @@ def draw_bitmap(x, y, rows, color):
 
 def draw_marker(x, y, color):
     draw_bitmap(x, y,
-                CIRCLED_I if stage_kind == "info" else TRIANGLE, color)
+                CIRCLED_I if overlay_kind == "info" else TRIANGLE, color)
 
 # ── the header ──
 
@@ -300,8 +296,8 @@ def draw_metric_row(idx, tint=None):
     vc = accent
     if vc is None:
         vc = TEAL if val != 255 else MUTED
-    if stage is not None and stage_qual == key:
-        vc = hsl(stage_hue, 100, 55)
+    if overlay is not None and overlay_qual == key:
+        vc = hsl(overlay_hue, 100, 55)
     text(W - 4 - text_w(vs, 2), y, vs, vc, 2)
 
 def draw_metrics(tint=None):
@@ -359,15 +355,13 @@ def draw_graph_full():
                   SEG_W, SEG_H, rgb(WHITE))
 
 def graph_tick():
-    """The analyzer hears the house: heights jitter around their
-    metric's influence, peaks fall under gravity, the scanline
-    sweeps."""
+    """Update spectrum heights from metrics, jitter, peaks, and scanline."""
     global _jx, beam_y
     boost = 0
     hu = None
-    if stage is not None:
+    if overlay is not None:
         boost = max(0, splash_k - 60)
-        hu = stage_hue
+        hu = overlay_hue
     for i in range(COLS):
         _jx = (_jx * 109 + 47) & 0xFF
         v = influence(i) + _jx % 31 - 15 + boost
@@ -390,17 +384,15 @@ def graph_tick():
     # the scanline rides on top; every segment repaints each tick, so
     # the old line is erased by the redraw itself — never smears
     beam_y = FIELD_Y + (beam_y - FIELD_Y + 2) % (H - FIELD_Y)
-    hlinef(0, beam_y, W, rgb(hsl(stage_hue if stage else 165, 70, 55)))
+    hlinef(0, beam_y, W, rgb(hsl(overlay_hue if overlay else 165, 70, 55)))
 
-# ── the stage ──
+# ── the overlay ──
 
-def stage_draw(now):
-    """A say re-tints the whole instrument with its hue and plates
-    the marker and words. A latched exception blinks between burn
-    and dim; other kinds land once, then the spectrum rings."""
+def overlay_draw(now):
+    """Render the event overlay. Latched exceptions alternate bright and dim states."""
     global _jx
     bright = not (latch and (now // 400) % 2 == 0)
-    tint = hsl(stage_hue, 100, 50) if bright else hsl(stage_hue, 50, 14)
+    tint = hsl(overlay_hue, 100, 50) if bright else hsl(overlay_hue, 50, 14)
     draw_header(tint)
     draw_metrics(tint)
     draw_strip(bright)
@@ -409,46 +401,45 @@ def stage_draw(now):
             for i in range(COLS):
                 _jx = (_jx * 109 + 47) & 0xFF
                 h = (85 + _jx % 15) * ROWS // 100
-                draw_graph_col(i, h, stage_hue, floor_l=12)
+                draw_graph_col(i, h, overlay_hue, floor_l=12)
         else:
             for i in range(COLS):
-                draw_graph_col(i, 0, stage_hue, floor_l=4)
+                draw_graph_col(i, 0, overlay_hue, floor_l=4)
 
-def stage_splash_tick(now):
-    """An unlatched stage: the spectrum rings at the say's hue,
-    decaying as the stage spends itself."""
+def overlay_splash_tick(now):
+    """Update a temporary overlay until it expires."""
     graph_tick()
 
 def decay_tick(now):
-    global ring_until, ring_label, stage, stage_qual, latch, band_phase
+    global ring_until, ring_label, overlay, overlay_qual, latch, band_phase
     if latch:
         phase = (now // 400) % 2 == 1
         if phase != band_phase:
             band_phase = phase
-            stage_draw(now)
+            overlay_draw(now)
     elif ring_until is not None and time.ticks_diff(now, ring_until) > 0:
         ring_until = None
         ring_label = None
-        stage = None
-        stage_qual = ""
+        overlay = None
+        overlay_qual = ""
         redraw_idle()
 
 band_phase = False
 
 # ── identity ──
-DRESS_FILE = "/suzu.json"
+DESCRIPTOR_FILE = "/suzu.json"
 
 def store_identity(dev_id):
     try:
         d = {}
         try:
-            with open(DRESS_FILE) as f:
+            with open(DESCRIPTOR_FILE) as f:
                 d = ujson.loads(f.read())
         except (OSError, ValueError):
             pass
         if d.get("device_id") != dev_id:
             d["device_id"] = dev_id
-            with open(DRESS_FILE, "w") as f:
+            with open(DESCRIPTOR_FILE, "w") as f:
                 f.write(ujson.dumps(d))
     except OSError:
         pass
@@ -456,14 +447,14 @@ def store_identity(dev_id):
 def descriptor():
     d = {}
     try:
-        with open(DRESS_FILE) as f:
+        with open(DESCRIPTOR_FILE) as f:
             d = ujson.loads(f.read())
     except (OSError, ValueError):
         pass
     d["proto"] = "suzu/1"
-    d["version"] = DRESS_VERSION
-    d["faceplate"] = DRESS_ID
-    d["mount"] = DRESS_MOUNT
+    d["version"] = FACEPLATE_VERSION
+    d["faceplate"] = FACEPLATE_ID
+    d["mount"] = FACEPLATE_MOUNT
     try:
         d["hardware_id"] = "esp32-" + ubinascii.hexlify(unique_id()).decode()
     except Exception:
@@ -482,8 +473,8 @@ def r(msg, checksum=False):
     time.sleep_ms(2)
 
 def cmd(line):
-    global last_rx, label, ring_label, ring_until, stage, stage_hue
-    global latch, stage_kind, stage_qual, splash_k, ring_seq
+    global last_rx, label, ring_label, ring_until, overlay, overlay_hue
+    global latch, overlay_kind, overlay_qual, splash_k, ring_seq
     line = line.strip()
     if not line:
         return
@@ -501,7 +492,7 @@ def cmd(line):
                 return
             line = body
     last_rx = time.ticks_ms()
-    wake()                    # awake before anything draws
+    resume_display()                    # awake before anything draws
     parts = line.split(",", 1)
     c = parts[0].upper()
     a = parts[1] if len(parts) > 1 else ""
@@ -519,8 +510,8 @@ def cmd(line):
             for i, key in enumerate(("cpu", "mem", "gpu")):
                 if len(p) > i + 1 and p[i + 1]:
                     values[key] = int(p[i + 1])
-            if stage is not None:
-                r("OK")       # the stage owns the panel; ground waits
+            if overlay is not None:
+                r("OK")       # Defer metric rendering while an overlay is active.
                 return
             draw_metrics()
             r("OK")
@@ -530,15 +521,14 @@ def cmd(line):
             ctx = ujson.loads(a)
             if isinstance(ctx, dict):
                 if ctx.get("shot"):
-                    # the trail camera (the matrix's law): the mirror is
-                    # the shot — chunked so the reply stays RAM-flat
+                    # Return the capture buffer in chunks to limit memory use.
                     import ubinascii
                     sys.stdout.write("OK,")
                     x = 0
                     for ch in b"OK,":
                         x ^= ch
-                    mv = memoryview(mirror)
-                    for i in range(0, len(mirror), 510):
+                    mv = memoryview(capture_buffer)
+                    for i in range(0, len(capture_buffer), 510):
                         chunk = ubinascii.b2a_base64(mv[i:i + 510])[:-1]
                         sys.stdout.write(chunk)
                         for ch in chunk:
@@ -551,7 +541,7 @@ def cmd(line):
                 if ctx.get("name") and ctx["name"] != label:
                     label = ctx["name"]
                     save_label()
-                    if stage is None:
+                    if overlay is None:
                         draw_header()
                 if ctx.get("device_id"):
                     store_identity(ctx["device_id"])
@@ -560,13 +550,13 @@ def cmd(line):
             if a and a != label:
                 label = a
                 save_label()
-                if stage is None:
+                if overlay is None:
                     draw_header()
             r("OK")
         elif c == "X":
-            stage = None
-            stage_hue = HUE_INFO
-            stage_qual = ""
+            overlay = None
+            overlay_hue = HUE_INFO
+            overlay_qual = ""
             latch = False
             ring_until = None
             ring_label = None
@@ -576,7 +566,7 @@ def cmd(line):
             p = a.split(",")
             signal = p[0].lower()
             word = signal.split(".", 1)[0]
-            stage_qual = signal.split(".", 1)[1] if "." in signal else ""
+            overlay_qual = signal.split(".", 1)[1] if "." in signal else ""
             if word[:5] == "alert" or word[:4] == "crit" or word[:9] == "exception":
                 kind = "exception"
             elif word[:4] == "info" or word[:2] == "ok" or word[:8] == "allclear":
@@ -586,14 +576,14 @@ def cmd(line):
             ring_label = " ".join(p[5:])[:52] or None
             if len(p) > 4:
                 ring_seq = p[4]
-            stage = "stage"
-            stage_kind = kind
-            stage_hue = STAGE_HUES.get(kind, HUE_WARN)
+            overlay = "overlay"
+            overlay_kind = kind
+            overlay_hue = OVERLAY_HUES.get(kind, HUE_WARN)
             latch = kind == "exception"
             splash_k = min(100, 60 + int(p[1] or 0) * 8)
             ring_until = (None if latch
-                          else time.ticks_add(time.ticks_ms(), STAGE_MS))
-            stage_draw(time.ticks_ms())
+                          else time.ticks_add(time.ticks_ms(), OVERLAY_MS))
+            overlay_draw(time.ticks_ms())
             ack = "OK," + p[4] if len(p) > 4 else "OK"
             r(ack, checksum=True)
         else:
@@ -601,14 +591,14 @@ def cmd(line):
     except (ValueError, IndexError) as e:
         r("ERR,%s" % e)
 
-def wake():
+def resume_display():
     global idle, idle_init
     if idle:
         idle = False
         idle_init = False
         redraw_idle()
 
-# ── the quiet bench (rest) ──
+# ── idle mode ──
 
 def rest_init():
     global idle_init, beam_y
@@ -650,8 +640,8 @@ def load_label():
 # ── the composite states ──
 
 def redraw_idle():
-    global stage_qual
-    stage_qual = ""
+    global overlay_qual
+    overlay_qual = ""
     fillall(rgb(BG))
     draw_header()
     draw_metrics()
@@ -659,12 +649,12 @@ def redraw_idle():
     draw_graph_full()
 
 def dot_tick():
-    global marker_lit
+    global activity_indicator_lit
     fresh = last_rx is not None and \
         time.ticks_diff(time.ticks_ms(), last_rx) < MARKER_MS
-    if fresh != marker_lit:
-        marker_lit = fresh
-        if stage is None:
+    if fresh != activity_indicator_lit:
+        activity_indicator_lit = fresh
+        if overlay is None:
             draw_header()
 
 # ── init & main loop ──
@@ -676,7 +666,7 @@ def init_display():
         import st7789
         # the constructor takes the NATIVE portrait panel (135x240)
         # with the turn applied after — against any other geometry the
-        # address window wraps and the glass shows a slice
+        # address window wraps and display hardware shows a slice
         tft = st7789.ST7789(
             spi, 135, 240,
             reset=Pin(23, Pin.OUT), cs=Pin(5, Pin.OUT), dc=Pin(16, Pin.OUT),
@@ -690,12 +680,12 @@ def init_display():
         return False
 
 def main():
-    global idle, idle_init, idle_t, last_rx, mirror, beam_y
+    global idle, idle_init, idle_t, last_rx, capture_buffer, beam_y
     gc.collect()
-    # The mirror first, before fragmentation: one contiguous
+    # The capture_buffer first, before fragmentation: one contiguous
     # 32.4 KB (rgb332, a byte a pixel) — the camera's film, priced
     # to this heap (rgb565's 64.8 KB does not fit).
-    mirror = bytearray(W * H)
+    capture_buffer = bytearray(W * H)
     # the console is the wire on ESP32 (sys.stdin/stdout); a UART(0)
     # re-init kills the REPL console — the harvested PoC knew it
     load_label()
@@ -712,7 +702,7 @@ def main():
     while True:
         try:
             now = time.ticks_ms()
-            # the rest ladder: 10 s of silence -> the quiet bench
+            # idle transition: enter idle mode after 10 s without input
             if last_rx is not None and \
                     time.ticks_diff(now, last_rx) > REST_MS and not idle:
                 idle = True
@@ -730,20 +720,18 @@ def main():
                     if not idle_init:
                         rest_init()
                     rest_tick()
-                elif stage is not None:
+                elif overlay is not None:
                     decay_tick(now)
-                    if stage is not None and not latch:
-                        stage_splash_tick(now)
+                    if overlay is not None and not latch:
+                        overlay_splash_tick(now)
                 else:
                     graph_tick()
                     dot_tick()
             events = poll.poll(0)
-            # the wire law: DRAIN, never sip. One line per tick let the
-            # input queue outgrow the RX ring on heavy draws — bytes
-            # vanished mid-line and every conversation in flight
-            # corrupted (the blink's J died as franken-commands: the
-            # bench measured ERR,unknown:AA). The face owns the loop,
-            # so the face owns the queue: empty it before resting.
+            # Drain all available input. Processing one line per tick can
+            # overflow the RX ring during expensive draws and corrupt commands
+            # (observed as ERR,unknown:AA). This module owns the event loop, so
+            # it must empty the queue before entering idle mode.
             while events:
                 line = sys.stdin.readline()
                 if line:

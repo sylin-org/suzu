@@ -1,12 +1,12 @@
-//! The keeper's terminal window.
+//! Terminal client for Resident device management.
 //!
 //! This is deliberately a client of the Resident, just like Workbench.
-//! It reads the same snapshot/roster stream and sends the same typed
+//! It reads the same snapshot/registry stream and sends the same typed
 //! device actions; no serial or lifecycle rule is duplicated here.
 
 use crate::resident::device::DeviceAction;
-use crate::resident::events::{DeviceRow, HouseSnapshot};
-use crate::resident::roster::{Individual, Lifecycle};
+use crate::resident::events::{DeviceRow, ResidentSnapshot};
+use crate::resident::registry::{RegisteredDevice, Lifecycle};
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -45,7 +45,7 @@ impl ResidentClient {
             .context("the Resident did not answer within 2s")?
             .with_context(|| {
                 format!(
-                    "cannot reach the Suzu Resident at {RESIDENT} — is suzu@<keeper>.service running?"
+                    "cannot reach the Suzu Resident at {RESIDENT} — verify that the suzu@<user>.service unit is running"
                 )
             })
     }
@@ -60,7 +60,7 @@ impl ResidentClient {
         EventStream::open(stream).await
     }
 
-    async fn snapshot(&self) -> Result<HouseSnapshot> {
+    async fn snapshot(&self) -> Result<ResidentSnapshot> {
         let mut events = self.events().await?;
         let first = events.next_json().await?;
         if first.get("type").and_then(Value::as_str) != Some("snapshot") {
@@ -234,7 +234,7 @@ pub async fn run(args: &[String]) -> Result<()> {
             "-h" | "--help" => {
                 println!("usage: suzu list [--json | --plain | --interactive]");
                 println!(
-                    "Lists the Resident's compatible devices; a terminal opens the keeper menu."
+                    "Lists compatible devices and opens the device-management menu."
                 );
                 return Ok(());
             }
@@ -259,7 +259,7 @@ pub async fn run(args: &[String]) -> Result<()> {
     interactive_list(&client, snapshot).await
 }
 
-async fn interactive_list(client: &ResidentClient, mut snapshot: HouseSnapshot) -> Result<()> {
+async fn interactive_list(client: &ResidentClient, mut snapshot: ResidentSnapshot) -> Result<()> {
     loop {
         print_devices(&snapshot);
         if snapshot.devices.is_empty() {
@@ -290,7 +290,7 @@ async fn interactive_list(client: &ResidentClient, mut snapshot: HouseSnapshot) 
     }
 }
 
-fn print_devices(snapshot: &HouseSnapshot) {
+fn print_devices(snapshot: &ResidentSnapshot) {
     println!(
         "\nSuzu {} · {} compatible device{}",
         snapshot.service.version,
@@ -304,7 +304,7 @@ fn print_devices(snapshot: &HouseSnapshot) {
     for (index, device) in snapshot.devices.iter().enumerate() {
         let lifecycle = device.lifecycle.as_deref().unwrap_or("new").to_uppercase();
         let class = device.class.as_deref().unwrap_or("unknown class");
-        let dress = match (&device.faceplate, &device.mount) {
+        let faceplate = match (&device.faceplate, &device.mount) {
             (Some(face), Some(mount)) => format!(" · {face} ({mount})"),
             (Some(face), None) => format!(" · {face}"),
             _ => String::new(),
@@ -315,7 +315,7 @@ fn print_devices(snapshot: &HouseSnapshot) {
             lifecycle,
             device.port,
             class,
-            dress,
+            faceplate,
             device.version.as_deref().unwrap_or("?")
         );
     }
@@ -328,7 +328,7 @@ async fn manage_device(client: &ResidentClient, device: DeviceRow) -> Result<()>
         device.class.as_deref().unwrap_or("unknown class")
     );
     if device.actions.is_empty() {
-        println!("Maintenance owns this device; follow its progress in the log and refresh.");
+        println!("This device is unavailable during maintenance; follow the log and refresh.");
         return Ok(());
     }
     for (index, action) in device.actions.iter().enumerate() {
@@ -395,7 +395,7 @@ async fn manage_device(client: &ResidentClient, device: DeviceRow) -> Result<()>
         DeviceAction::Install | DeviceAction::Update | DeviceAction::FactoryReset
     ) {
         let Some(device_id) = device.device_id.as_deref() else {
-            println!("The saga is running; refresh the list to see its result.");
+            println!("The progress is running; refresh the list to see its result.");
             return Ok(());
         };
         follow_maintenance(client, device_id).await?;
@@ -410,7 +410,7 @@ fn action_label(action: DeviceAction, device: &DeviceRow) -> &'static str {
         DeviceAction::Identify => "Identify on the desk",
         DeviceAction::Install if device.lifecycle.as_deref() == Some("new") => "Install firmware",
         DeviceAction::Install => "Reinstall firmware",
-        DeviceAction::Update if device.lifecycle.as_deref() == Some("new") => "Update dress",
+        DeviceAction::Update if device.lifecycle.as_deref() == Some("new") => "Update faceplate",
         DeviceAction::Update => "Change faceplate",
         DeviceAction::FactoryReset => "Factory reset",
     }
@@ -471,12 +471,12 @@ async fn follow_maintenance(client: &ResidentClient, device_id: &str) -> Result<
     let mut completion_announced = false;
     loop {
         let event = stream.next_json().await?;
-        let individuals = individuals_from_event(&event)?;
-        let Some(individual) = individuals.iter().find(|i| i.device_id == device_id) else {
+        let registered_devices = registered_devices_from_event(&event)?;
+        let Some(registered_device) = registered_devices.iter().find(|i| i.device_id == device_id) else {
             continue;
         };
-        if let Some(saga) = &individual.maintenance {
-            for step in saga.steps.iter().skip(shown_steps) {
+        if let Some(progress) = &registered_device.maintenance {
+            for step in progress.steps.iter().skip(shown_steps) {
                 println!(
                     "  [{}/{}] {}{}{}",
                     step.index,
@@ -490,26 +490,26 @@ async fn follow_maintenance(client: &ResidentClient, device_id: &str) -> Result<
                     },
                 );
             }
-            shown_steps = shown_steps.max(saga.steps.len());
-            if saga.state == "failed" {
+            shown_steps = shown_steps.max(progress.steps.len());
+            if progress.state == "failed" {
                 bail!(
-                    "the {} saga failed — inspect `journalctl -u suzu@<keeper>`",
-                    saga.kind
+                    "the {} maintenance procedure failed — inspect `journalctl -u suzu@<user>`",
+                    progress.kind
                 );
             }
-            if saga.state == "done" && !completion_announced {
+            if progress.state == "done" && !completion_announced {
                 println!("  maintenance complete — admission is deciding the stream…");
                 completion_announced = true;
             }
         }
-        if completion_announced && individual.lifecycle == Lifecycle::Live {
-            println!("  LIVE — admission passed and the stream is flowing.");
+        if completion_announced && registered_device.lifecycle == Lifecycle::Live {
+            println!("  LIVE — admission passed and streaming is active.");
             return Ok(());
         }
     }
 }
 
-fn individuals_from_event(event: &Value) -> Result<Vec<Individual>> {
+fn registered_devices_from_event(event: &Value) -> Result<Vec<RegisteredDevice>> {
     match event.get("type").and_then(Value::as_str) {
         Some("snapshot") => serde_json::from_value(
             event
@@ -517,14 +517,14 @@ fn individuals_from_event(event: &Value) -> Result<Vec<Individual>> {
                 .cloned()
                 .unwrap_or_else(|| json!([])),
         )
-        .context("invalid roster in snapshot"),
+        .context("invalid registry in snapshot"),
         Some("roster") => serde_json::from_value(
             event
                 .get("individuals")
                 .cloned()
                 .unwrap_or_else(|| json!([])),
         )
-        .context("invalid roster event"),
+        .context("invalid registry event"),
         _ => Ok(Vec::new()),
     }
 }

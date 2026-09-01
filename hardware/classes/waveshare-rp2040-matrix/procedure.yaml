@@ -1,5 +1,5 @@
 # Flash + maintenance procedures for this class. The step names here
-# are the declarative truth the maintenance sagas follow; the executor
+# define the steps followed by maintenance procedures; the executor
 # lives in crates/suzu/src/resident/maintenance.rs (ADR-0003).
 schema: 1
 
@@ -22,7 +22,7 @@ procedures:
       - write: { file: code.py, from: firmware }
       - write: { file: suzu.json, identity-restored: true }
       - verify-readback: { files: [code.py, suzu.json] }
-      - force-reload: { ctrl_c: 2, ctrl_d: true }   # autoreload is disabled on the face
+      - force-reload: { ctrl_c: 2, ctrl_d: true }   # autoreload is disabled on the device
       - admission-test: {}
 
   # The nuke: every flash cell falls to 0xFF, then the runtime and the
@@ -35,7 +35,7 @@ procedures:
       - human-gate: "hold BOOTSEL and replug"
       - wait-mount: { label: RPI-RP2, timeout: 300s }
       - copy: { artifact: flash_nuke.uf2 }
-      - wait-mount: { label: RPI-RP2, timeout: 60s }   # the nuke reboots into its bootloader
+      - wait-mount: { label: RPI-RP2, timeout: 60s }   # the erase image reboots into the bootloader
       - copy: { artifact: circuitpython-raspberry_pi_pico.uf2 }
       - wait-mount: { label: CIRCUITPY, timeout: 60s }
       - write: { file: code.py, from: firmware }
@@ -43,17 +43,16 @@ procedures:
       - verify-readback: { files: [code.py, suzu.json] }
       - admission-test: {}
 
-  # The exam a face takes before the stream may flow to it (ADR-0003).
-  # Steps: handshake (I answers a descriptor), ack-law (K answers OK),
+  # Admission checks required before streaming (ADR-0003).
+  # Steps: handshake (I returns a descriptor), keepalive-ack (K returns OK),
   # label-roundtrip (when the descriptor declares a label), and
-  # display-truth: a completion-blue ripple is drawn, captured via the
-  # J shot, and asserted - a hue no other state can produce.
+  # display-check: a completion-blue pattern is drawn and captured via the
+  # J capture. The color threshold distinguishes it from other states.
   admission_test:
-    display_truth: completion-drop
+    display_check: completion-pattern
     assert: "any pixel with r<60 && g>50 && b>80 in the decoded view"
 
-# Vendored so the factory path works offline at 2 a.m. Every artifact
-# is checksummed; the saga refuses to erase when one is missing.
+# Vendored so factory reset works offline. Checksums are verified before erase.
 artifacts:
   - file: flash_nuke.uf2
     sha256: f1d80fcc37161df8cbdf16a58c111208f06234976a470c17699270d212e91754

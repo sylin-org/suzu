@@ -1,5 +1,5 @@
 [Unit]
-Description=Suzu Resident (keeper %i)
+Description=Suzu Resident (service user %i)
 Documentation=https://github.com/sylin-org/suzu
 After=systemd-udevd.service
 

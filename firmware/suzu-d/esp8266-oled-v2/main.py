@@ -7,7 +7,7 @@ Serial protocol (115200 baud, newline-terminated):
   S,<name>                       → set stone name
   H,<health>                     → set health (thriving/withering/wilting)
   M,<cpu>,<mem>,<disk>,<uptime>  → update resource metrics
-  G,<offerings>,<stones>,<net_bps>,<seed_bank> → update garden context
+  G,<offerings>,<stones>,<net_bps>,<seed_bank> → update host metrics
   D,<cpu>,<mem>,<disk>,<uptime>,<offerings>,<stones>,<net_bps>,<seed_bank>
                                  → all-in-one dashboard update
   WIPE-IN,<line1>,<line2>        → wipe-in animation (event interrupt)

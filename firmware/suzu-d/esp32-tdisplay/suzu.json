@@ -3,5 +3,5 @@
   "companion": "firefly",
   "family": "esp32-tdisplay",
   "variant": "tdisplay",
-  "device_id": "assigned at adoption (preserved from pre-suzu provisioning when present)"
+  "device_id": "assigned during provisioning (preserved when already present)"
 }

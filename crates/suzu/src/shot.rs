@@ -1,7 +1,7 @@
-//! The trail camera — screenshots and recordings of live faces.
+//! Screenshots and recordings from connected device displays.
 //!
 //! `J,{"shot":1}` (the snapshot form of the complex-value escape) makes
-//! a face answer with its RAW frame buffer in its poll ack —
+//! a target answer with its RAW frame buffer in its poll ack —
 //! `OK,<base64>*hh` on the wire itself: no interrupt, no mode change,
 //! no reboot; the animation keeps dancing. The bytes are device-shaped:
 //! the class manifest's `frame:` section is the only per-device
@@ -20,21 +20,21 @@ fn sleep_ms(ms: u64) {
 
 /// Open a port at the suzu baud and let it settle: opening can reset
 /// the board (the CH340 hard-resets, the CDC soft-resets), and a
-/// mid-boot face answers nothing.
+/// mid-boot target answers nothing.
 pub fn open_port(port_name: &str) -> Result<Box<dyn SerialPort>> {
     let mut port = serialport::new(port_name, 115_200)
         .timeout(Duration::from_millis(200))
         .open()
         .map_err(|e| anyhow!("{port_name}: {e}"))?;
-    // CircuitPython gates its CDC console on DTR: without it the face
-    // hears nothing and answers nothing (proven on the bench, 2026-08-29
+    // CircuitPython gates its CDC console on DTR: without it the target
+    // receives and returns no data (observed on physical devices, 2026-08-29
     // — the matrix was 0 bytes at DTR low, its whole frame at DTR high).
     let _ = port.write_data_terminal_ready(true);
     sleep_ms(2500); // boot wait if just plugged
     Ok(port)
 }
 
-/// One in-band shot on an open session: `J,{"shot":1}` dribbled 16
+/// Capture one frame on an open session. `J,{"shot":1}` is sent 16
 /// bytes at a time (the device's UART RX FIFO overruns bursts), the
 /// reply scanned out of accumulated newline-terminated lines — never
 /// anchored on the first (boot noise produces shorter lines). The only
@@ -44,20 +44,17 @@ pub fn capture_on(port: &mut Box<dyn SerialPort>, expected: usize) -> Result<Vec
     dribble_line(port, "J,{\"shot\":1}")?;
 
     let mut acc = Vec::new();
-    // The wire's evidence ledger (ADR-0004's law, kept on this lane at
-    // last): a failed shot must say what the wire HEARD — total bytes,
-    // completed lines, frame anchors, the face's own ERR words — so a
-    // silent face, a deaf face, and a thrashing face stop presenting
-    // as the same timeout. Three diseases, three sentences.
-    let mut heard = 0usize;
+    // Collect response diagnostics so timeouts distinguish no data,
+    // unterminated data, protocol errors, and incomplete frames.
+    let mut bytes_received = 0usize;
     let mut lines = 0usize;
     let mut anchors = 0usize;
     let mut errs: Vec<String> = Vec::new();
     let mut last_line = String::new();
-    // The reply rides base64 (4/3 inflation) at the wire's honest
+    // The reply uses base64 (4/3 inflation) at the protocol's measured
     // rate (11.5 k chars/s at 115200; budgeted at half that — the
     // bench measured a healthy 32.4 KB mirror at 4.9 s and a thrashing
-    // face slower still). The bound is computed from the declared
+    // target slower still). The bound is computed from the declared
     // size, never guessed — and the one bound waited is the one told.
     let secs = (2 + (expected as u64 * 4 / 3) / 6_000).max(8);
     let deadline = Instant::now() + Duration::from_secs(secs);
@@ -66,7 +63,7 @@ pub fn capture_on(port: &mut Box<dyn SerialPort>, expected: usize) -> Result<Vec
         match port.read(&mut scratch) {
             Ok(0) => {}
             Ok(n) => {
-                heard += n;
+                bytes_received += n;
                 acc.extend_from_slice(&scratch[..n]);
             }
             Err(_) => {}
@@ -88,13 +85,13 @@ pub fn capture_on(port: &mut Box<dyn SerialPort>, expected: usize) -> Result<Vec
         std::thread::sleep(Duration::from_millis(20));
     }
     bail!(
-        "no whole-frame reply within {secs} s — heard {heard} B on \
+        "no complete frame within {secs} s; received {bytes_received} B on \
          {lines} lines, {anchors} frame anchors, {} ERR(s){}{}",
         errs.len(),
         (!errs.is_empty())
-            .then(|| format!(" — face said {:?}", errs))
+            .then(|| format!(" — target said {:?}", errs))
             .unwrap_or_default(),
-        (heard > 0 && lines == 0)
+        (bytes_received > 0 && lines == 0)
             .then(|| format!(" — unterminated tail {:?}", last_line))
             .unwrap_or_default(),
     )
@@ -150,7 +147,7 @@ fn parse_reply(line: &str, expected: usize) -> Option<Vec<u8>> {
     None
 }
 
-/// Base64 encode, no dependencies — the frame lane carries PNG bytes
+/// Base64 encode without additional dependencies. Captured frames are PNG bytes
 /// as text, and this is its one alphabet.
 pub fn encode_b64(data: &[u8]) -> String {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -200,7 +197,7 @@ pub fn decode_b64(s: &str) -> Vec<u8> {
 }
 
 /// The manifest-driven decoder: raw frame bytes → native RGBA. This is
-/// the one place format knowledge lives, and the manifest is the only
+/// the only format-specific implementation; the manifest is the only
 /// thing it reads.
 pub fn decode_frame(
     frame: &[u8],
@@ -220,7 +217,7 @@ pub fn decode_frame(
     };
     if !order_ok {
         bail!(
-            "manifest frame law contradicts itself: {} with order {:?}",
+            "manifest frame format is inconsistent: {} with order {:?}",
             spec.format,
             spec.order
         );
@@ -256,7 +253,7 @@ pub fn decode_frame(
                 bail!("rgb332: {} B is not a whole {w}x{h} frame", frame.len());
             }
             // A byte a pixel: 3-3-2 bits, the small-heap mirror's
-            // honest color, expanded on precomputed ramps (7 * 255
+            // configured color, expanded on precomputed ramps (7 * 255
             // overflows a byte mid-expression — the table never does).
             const R7: [u8; 8] = [0, 36, 73, 109, 146, 182, 219, 255];
             const R3: [u8; 4] = [0, 85, 170, 255];
@@ -336,7 +333,7 @@ pub fn render_view(
     }
 }
 
-/// One face view → a truecolor PNG.
+/// One target view → a truecolor PNG.
 pub fn render_png(
     path: &std::path::Path,
     spec: &FrameSpec,
@@ -350,7 +347,7 @@ pub fn render_png(
 
 /// One frame → the finished PNG bytes: decode per the manifest,
 /// orient, encode — one pixel of the panel per pixel of the PNG.
-/// Viewing size is the client's; the wire carries the truth.
+/// The client controls display size; the protocol carries native pixels.
 pub fn render_png_bytes(
     spec: &FrameSpec,
     zones: &[(usize, usize, [u8; 3])],
@@ -361,62 +358,62 @@ pub fn render_png_bytes(
     png_bytes(w, h, &rgb)
 }
 
-/// A decodable face: its port and the manifest knowledge that names
+/// A decodable target: its port and the manifest knowledge that names
 /// its bytes.
-pub struct Face {
+pub struct CaptureTarget {
     pub port: String,
     pub class: String,
     pub spec: FrameSpec,
     pub zones: Vec<(usize, usize, [u8; 3])>,
 }
 
-/// The trail camera: loop the in-band shot against the first answering
-/// face. Each shot costs the face one ack-sized write (~120 ms) — the
+/// Record repeated in-band screenshots from the first responding
+/// target. Each shot costs the target one ack-sized write (~120 ms) — the
 /// wire, not the encoder, is the tax — so the loop is wire-bound:
 /// missed slots are skipped and the dance goes on. Frames are decoded
-/// per the face's manifest and written as an animated GIF (truecolor
+/// per the target's manifest and written as an animated GIF (truecolor
 /// in; the gif crate quantizes). Returns (path, frames captured).
 pub fn record_first(
-    faces: &[Face],
+    targets: &[CaptureTarget],
     secs: u32,
     fps: u32,
     prefix: &str,
 ) -> Result<(std::path::PathBuf, usize)> {
-    let fps = fps.clamp(1, 5); // 5 fps ~= 7 KB/s — the wire's honest ceiling
+    let fps = fps.clamp(1, 5); // 5 fps ~= 7 KB/s, the measured protocol limit
     let period = Duration::from_millis(1000 / fps as u64);
     let delay_cs = ((1000 / fps as u16) / 10).max(2);
 
-    for face in faces {
-        let mut port = match open_port(&face.port) {
+    for target in targets {
+        let mut port = match open_port(&target.port) {
             Ok(p) => p,
             Err(e) => {
-                println!("  {}: skipped ({e})", face.port);
+                println!("  {}: skipped ({e})", target.port);
                 continue;
             }
         };
-        let first = match capture_on(&mut port, face.spec.size) {
+        let first = match capture_on(&mut port, target.spec.size) {
             Ok(f) => f,
             Err(e) => {
-                println!("  {}: no shot ({e})", face.port);
+                println!("  {}: no shot ({e})", target.port);
                 continue;
             }
         };
 
-        // This face answered: it is the subject.
-        println!("  {} [{}] answers — the subject", face.port, face.class);
-        let (w, h, rgba) = render_view(&face.spec, &face.zones, &first)?;
+        // This target answered: it is the subject.
+        println!("  {} [{}] answers — the subject", target.port, target.class);
+        let (w, h, rgba) = render_view(&target.spec, &target.zones, &first)?;
         let mut frames = vec![rgba];
         let mut next_at = Instant::now();
         let end = next_at + Duration::from_secs(secs as u64);
         while Instant::now() < end {
             next_at += period;
-            match capture_on(&mut port, face.spec.size) {
+            match capture_on(&mut port, target.spec.size) {
                 Ok(f) => {
-                    let (_, _, v) = render_view(&face.spec, &face.zones, &f)?;
+                    let (_, _, v) = render_view(&target.spec, &target.zones, &f)?;
                     frames.push(v);
                 }
                 Err(e) => {
-                    println!("  {} went quiet mid-record ({e})", face.port);
+                    println!("  {} went quiet mid-record ({e})", target.port);
                     break;
                 }
             }
@@ -428,11 +425,11 @@ pub fn record_first(
             }
         }
 
-        let out = std::path::PathBuf::from(format!("{prefix}-{}.gif", face.port));
+        let out = std::path::PathBuf::from(format!("{prefix}-{}.gif", target.port));
         crate::gif::write_gif_rgba(&out, w, h, delay_cs, &frames)?;
         return Ok((out, frames.len()));
     }
-    bail!("no face answered the shot request — nothing to record")
+    bail!("no target answered the shot request — nothing to record")
 }
 
 /// PNG encoder, no dependencies: 8-bit truecolor, stored-deflate IDAT.

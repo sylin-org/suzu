@@ -59,7 +59,7 @@ impl Lines {
     }
 }
 
-/// The full ladder transcript — everything the detective needs.
+/// The full identification transcript — everything the detective needs.
 /// Boot noise, timeouts, and line counts are evidence, not garbage.
 #[derive(Debug, Default)]
 pub struct Transcript {
@@ -68,7 +68,7 @@ pub struct Transcript {
     pub identity_raw: Option<String>,
     pub identity_after_ms: Option<u128>,
     pub legacy_line: Option<String>,
-    /// Every line seen during the ladder, truncated.
+    /// Every line seen during the identification sequence, truncated.
     pub lines: Vec<String>,
     pub error: Option<String>,
 }
@@ -91,13 +91,13 @@ fn strip_prefixes(line: &str) -> &str {
 
 /// suzu-t: a session frame may carry a trailing `*hh` xor checksum —
 /// the companion is required to send one on `OK,{…}` replies, so the
-/// host must accept it. Without this, every honest identity reply
-/// fails to parse as bare JSON and the probe calls a live face
-/// "fresh firmware" (proven on the bench, 2026-08-28).
+/// host must accept it. Without this, valid identity replies
+/// fail to parse as bare JSON and the probe reports a responding device as
+/// "fresh firmware" (observed with physical devices on 2026-08-28).
 /// Boot noise may end in a multi-byte character: the checksum is only
 /// stripped when the trailing bytes are ASCII hex (which is what the
 /// grammar allows anyway) — a byte-index split otherwise panics the
-/// whole probe task on a char boundary (also proven on the bench).
+/// whole probe task on a character boundary (also observed on physical devices).
 fn strip_checksum(line: &str) -> &str {
     let l = line.trim();
     let b = l.as_bytes();
@@ -195,7 +195,7 @@ pub fn probe_transcript(port_name: &str) -> Transcript {
     let _ = port.flush();
     std::thread::sleep(Duration::from_millis(2500));
 
-    // 1. Passive window — some firmware speaks first on boot. (The
+    // 1. Passive read window: some firmware sends identity on boot. (The
     // deadline starts NOW: anchoring it to `started` made this window
     // unrunnable — it sat entirely inside the 5 s recovery preamble.)
     let deadline = Instant::now() + Duration::from_millis(2000);
@@ -249,7 +249,7 @@ pub fn probe_transcript(port_name: &str) -> Transcript {
     t
 }
 
-/// The ladder, reduced to the three-way outcome.
+/// The identification sequence, reduced to the three-way outcome.
 pub fn probe(port_name: &str) -> Result<Outcome> {
     let t = probe_transcript(port_name);
     if let Some(e) = &t.error {

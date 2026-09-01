@@ -1,42 +1,42 @@
 name: slate
 class: esp8266-oled
 display_name: Slate
-blurb: A console readout — block digits, honest gauges, an embossed name
-version: "1.2.1"                   # the currency gate reads it (ADR-0005, amended)
+blurb: A console readout with block digits, gauges, and a device label
+version: "1.2.1"                   # validated during admission (ADR-0005)
 status: beta                       # poured 2026-08-31 — verified on the bench
 
-# Ground "report" slots, in the order the face reads them.
+# Metrics reported by the host, in display order.
 # (255 / missing -> drawn as a dash: "not measured", not zero.)
 slots: [cpu, mem, gpu]
 
-# Fast-lane atoms: on Slate the pulse is a heartbeat — the dot at the
+# High-frequency scalar input: Slate uses audio.level to update the dot at the
 # label strip's end fills while traffic is fresh. No value is carried.
 extras: [audio.level]
 
 # suzu/1 frames this face answers (see the parent's README).
 frames: [I, K, G, A, J, S, X, R]
 
-# The ring voice (ADR-0006): what this face can speak. The instance
+# Ring protocol capabilities (ADR-0006). The Resident
 # degrades every say to this dialect before a byte reaches the wire.
 rings:
   qualifiers: true
   text: true
 
-# The hangs this face declares. Each variant is a bundle directory
+# Supported mounts. Each variant is a bundle directory
 # beside this manifest, named for its mount; the id is the doors'
-# addressing for installs (the face itself reports the tuple:
+# addressing for installs (the device reports the tuple:
 # faceplate, mount, version); the blurb guides the chooser. The
-# family version above rules every hang; a variant may declare its
-# own `version:` to diverge. The build derives every non-parent hang
+# family version above applies to every mount; a variant may declare its
+# own `version:`. The build derives every non-parent mount
 # from the parent's source (tools/build_faceplates.py) — regenerate,
 # never hand-edit.
 variants:
   - mount: usb-down
     id: slate
-    blurb: hangs upwards — the connector sits at the bottom
+    blurb: upright display — connector at the bottom
   - mount: usb-up
     id: slate-up
-    blurb: hangs downwards — the connector sits at the top
+    blurb: inverted display — connector at the top
   - mount: usb-left
     id: slate-left
     blurb: landscape — the connector at the left; the words turn to read upright
@@ -44,12 +44,11 @@ variants:
     id: slate-right
     blurb: landscape — the connector at the right; the words turn to read upright
 
-# The tool installs what the faceplate declares — files are pushed
-# verbatim, never interpreted. Art lives in the files, not in the tool.
+# The tool installs declared files verbatim without interpreting their contents.
 resources:
   install:
-    - { from: main.py, to: main.py }      # bootstrap: imports face
-    - { from: face.mpy, to: face.mpy }    # the face, as bytecode
+    - { from: main.py, to: main.py }      # bootstrap: imports face.mpy
+    - { from: face.mpy, to: face.mpy }    # faceplate bytecode
     - { from: digits_slate.bin, to: digits_slate.bin }
     - { from: icons.bin, to: icons.bin }  # moment icons (8x8 sprites)
 

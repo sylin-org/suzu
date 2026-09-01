@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
-"""Pack the stage sprite set into a faceplate icons.bin.
+"""Pack status sprites into a faceplate icons.bin.
 
-Source: firmware/suzu-d/esp8266-oled/icons.py — the stage set
-drawn for the keeper's stage grammar (8 bytes per icon, MSB-left
+Source: firmware/suzu-d/esp8266-oled/icons.py. Each icon is 8 bytes, MSB-left
 rows). The bin is raw sprite data: 8 bytes per icon in the order of
-KEYS, read straight off the filesystem by the face at draw time.
-The keys are the face's ground areas: a qualified say names one and
-the face replaces that area's numeral with its sprite.
+KEYS, read directly from the filesystem by the faceplate at draw time.
+The keys are the display's metric areas: a qualified event names one and
+the faceplate replaces that area's numeral with its sprite.
 
     python tools/pack_icons.py --out faceplates/.../icons.bin
 """

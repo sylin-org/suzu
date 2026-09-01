@@ -22,7 +22,7 @@ frame:
   width: 128
   height: 64
   render: { rotate: 90 }             # the panel stands on its long edge; viewing size is the client's
-  palette: ["#000000", "#ffffff"]    # fallback when no zone claims a row; zones color the truth here
+  palette: ["#000000", "#ffffff"]    # fallback when no display zone covers a row
 sets: [os]
 boards:
   - name: "EstarDyn NodeMCU ESP8266 V3, Type-C"
@@ -44,7 +44,7 @@ class_notes: |
   it (interrupted pushes -> boot loop, garbage on serial, no
   handshake), and then the author misdiagnosed the damage as "suspect
   hardware / failed flash chip" and committed that blame to this very
-  file. The Keeper un-bricked the unit by running the ancestor
+  file. The unit was recovered by running the legacy
   installer (NewFirefly.ps1), which erased, flashed, provisioned
   (device_id 01a04aea-aa63-7be3-995e-96fe5522eeb), tested the display,
   and started the firmware — everything the author failed to do.
@@ -55,7 +55,7 @@ class_notes: |
   CORRECTION (2026-08-28, later): the "boot-loop garbage" unit was NOT
   suspect hardware. Our cancelled flash-write left it half-written;
   the unit runs the old PoC firmware (firefly v2.0.0) and was
-  re-provisioned by the USER via the ancestor installer. Suzu made no
+  re-provisioned by the user via the legacy installer. Suzu made no
   changes to any device. Lesson recorded in install-lessons.md: a tool
   reports what happened; it never concludes what the hardware is, and
   it never claims credit for a recovery it did not perform.

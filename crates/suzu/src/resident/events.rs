@@ -1,17 +1,10 @@
-//! The house events — facts, past tense, published by domains.
+//! Typed Resident events published by domains.
 //!
-//! The communication law: domains talk in commands (imperative, to the
-//! owner), events (facts, broadcast), and cheap objects (snapshots).
-//! This file owns the event vocabulary. The moments domain subscribes;
-//! the logger listens; nobody reaches into anybody.
+//! Domains exchange typed commands, broadcast events, and snapshots.
 //!
-//! ADR-0004 adds the wire-side of the same law: the read models ride
-//! the wire as whole-slice facts (`Devices`, `Roster`) replaced
-//! wholesale by the client, and every `/api/events` connection opens
-//! with one `Snapshot` — the whole house in one object. Everything
-//! after is a delta. Thin per-entity patches were tried on the bench
-//! and produced three timers racing one stream; whole slices and one
-//! store are the repair.
+//! Under ADR-0004, every `/api/events` connection starts with a complete
+//! snapshot. Subsequent `Devices` and `DeviceRegistry` events replace those
+//! client collections; other events are deltas.
 
 use serde::{Deserialize, Serialize};
 
@@ -24,22 +17,22 @@ pub struct DeviceFacts {
     pub family: Option<String>,
     pub variant: Option<String>,
     pub version: Option<String>,
-    /// `"suzu/1"` once installed; absent until the face speaks it.
+    /// `"suzu/1"` once installed; absent until the device reports it.
     pub proto: Option<String>,
     pub device_id: Option<String>,
-    /// The faceplate this face wears, as its own descriptor says it —
-    /// its own name, never the flattened install id.
+    /// Faceplate name reported by the device descriptor, before the mount is
+    /// incorporated into the installation identifier.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub faceplate: Option<String>,
-    /// The hang the dress was cut for: down | up | left | right.
-    /// Absent on a single-type faceplate (or an older dress).
+    /// Faceplate mount: down | up | left | right.
+    /// Absent on a single-variant faceplate or older firmware.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mount: Option<String>,
     /// True when identified only by legacy CSV identity.
     pub legacy: bool,
 }
 
-/// One minded device, as the wire carries it — a copy, taken by the
+/// One tracked device serialized for clients.
 /// owning domain, replaced whole in every client (ADR-0004).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceRow {
@@ -51,7 +44,7 @@ pub struct DeviceRow {
     pub proto: Option<String>,
     pub device_id: Option<String>,
     pub state: super::device::DeviceState,
-    /// The aggregate's currently legal keeper verbs. Workbench and CLI
+    /// Actions currently allowed by the device aggregate. Workbench and CLI
     /// render this vocabulary instead of re-deriving lifecycle rules.
     #[serde(default)]
     pub actions: Vec<super::device::DeviceAction>,
@@ -59,15 +52,15 @@ pub struct DeviceRow {
     pub faceplate: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mount: Option<String>,
-    /// The roster's lifecycle verdict for this individual, if known.
+    /// Registry lifecycle state for this device, if known.
     pub lifecycle: Option<String>,
     /// Whether the stream currently flows to this device.
     pub streaming: bool,
-    /// Seconds since the face last heard from the house.
+    /// Seconds since the device last received host data.
     pub last_data_s: Option<u64>,
 }
 
-/// One journal line — what the house heard, in the house's voice.
+/// One formatted journal entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JournalLine {
     pub ts: String,
@@ -75,70 +68,75 @@ pub struct JournalLine {
     pub text: String,
 }
 
-/// The service's own facts — the pill in the workbench's lampband.
+/// Resident service status.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceFacts {
     pub name: String,
     pub version: String,
-    /// The pause flag: in-memory, dies with the process.
+    /// In-memory pause flag, reset when the process restarts.
     pub paused: bool,
 }
 
-/// A face's latest frame: PNG bytes, base64 — the media lane.
+/// Latest device frame as a base64-encoded PNG.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FrameFacts {
     pub port: String,
     pub png: String,
 }
 
-/// The connection-opening fact: the whole house in one object
+/// Complete state sent when a client connects.
 /// (ADR-0004). Everything after it on the wire is a delta.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HouseSnapshot {
+pub struct ResidentSnapshot {
     pub service: ServiceFacts,
     pub devices: Vec<DeviceRow>,
-    pub roster: Vec<super::roster::Individual>,
+    #[serde(rename = "roster")]
+    pub registry: Vec<super::registry::RegisteredDevice>,
     pub jobs: Vec<super::jobs::Job>,
     /// The journal tail, oldest first.
     pub journal: Vec<JournalLine>,
     pub frames: Vec<FrameFacts>,
-    /// Whether the media lane is watched — a window asserted it and
-    /// no restart has reset it (the amendment to this ADR).
+    /// Whether a client currently requests media frames.
     pub media_watched: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum HouseEvent {
-    // watcher → the house
+pub enum ResidentEvent {
+    // watcher events
     DeviceSensed { port: String },
     PortBusy { port: String, reason: String },
     DeviceIdentified(DeviceFacts),
     DeviceGone { port: String },
 
-    // devices → the house
-    DeviceMinded { port: String, device_id: Option<String>, class: Option<String>, state: String },
+    // device events
+    #[serde(rename = "device_minded")]
+    DeviceTracked { port: String, device_id: Option<String>, class: Option<String>, state: String },
     DeviceReleased { port: String, device_id: Option<String> },
-    DeviceHomecoming { port: String, device_id: String },
+    #[serde(rename = "device_homecoming")]
+    DeviceReconnected { port: String, device_id: String },
 
-    // sensor → the house
-    GroundChanged {
+    // sensor events
+    #[serde(rename = "ground_changed")]
+    HostMetricsChanged {
         name: String,
         uptime_s: u64,
         cpu: u8,
         mem: u8,
         disk: u8,
-        /// `None` is "not measured" — dash on the face, never zero.
+        /// `None` is "not measured" and displays as a dash rather than zero.
         gpu: Option<u8>,
     },
-    /// The pulse lane — fast, cheap, drift-or-value atoms.
+    /// High-frequency scalar sensor update.
     Pulse { axis: &'static str, value: u8 },
 
-    // moments → the house
-    SplashDecided { decision: String, label: Option<String> },
-    /// A moment bound for faces: the band shows the label briefly.
-    Ring {
-        /// names the moment — and its icon, when the face has one
+    // Display notification events.
+    #[serde(rename = "splash_decided")]
+    DisplayEventSelected { decision: String, label: Option<String> },
+    /// A notification sent to device displays: the band shows the label briefly.
+    #[serde(rename = "ring")]
+    DisplayNotificationReady {
+        /// names the display event and selects its icon when available
         signal: String,
         label: String,
         urgency: u8,
@@ -147,10 +145,10 @@ pub enum HouseEvent {
     // any domain, before tripping
     Degraded { domain: &'static str, reason: String },
 
-    // roster → the house: the device lifecycle (ADR-0003)
-    /// An individual was placed in Convalescing: admitted to the roster,
-    /// not yet trusted with the stream.
-    IndividualHeld {
+    // registry lifecycle events (ADR-0003)
+    /// A device was added to the registry but is not yet streaming.
+    #[serde(rename = "individual_held")]
+    DeviceRegistered {
         device_id: String,
         port: String,
         class: Option<String>,
@@ -163,17 +161,16 @@ pub enum HouseEvent {
         passed: bool,
         steps: Vec<AdmissionStep>,
     },
-    /// A subscription was granted: ground, pulses and rings now route.
+    /// Device streaming was enabled.
     StreamAttached { device_id: String, port: String },
     /// A subscription was withdrawn (maintenance, departure, failed
-    /// admission). The face falls to its own honesty: idle.
+    /// admission). The device enters its firmware-defined idle state.
     StreamDetached {
         device_id: String,
         port: String,
         reason: String,
     },
-    /// The maintenance saga's spine — the workbench renders these as
-    /// the step-by-step, the log keeps them as the record.
+    /// Maintenance started for a device.
     MaintenanceStarted {
         device_id: String,
         port: String,
@@ -182,7 +179,7 @@ pub enum HouseEvent {
     MaintenanceStep {
         device_id: String,
         step: String,
-        /// 1-based step number and the saga's planned total.
+        /// One-based step number and planned total.
         index: u32,
         total: u32,
         ok: bool,
@@ -193,35 +190,52 @@ pub enum HouseEvent {
         kind: String,
         ok: bool,
     },
-    /// The keeper retired the individual — deliberate, final.
-    /// (The retire verb lands with the servicing engine's UI.)
+    /// The user permanently retired the device.
+    /// The API does not yet expose this action.
     #[allow(dead_code)]
     Retired { device_id: String },
 
-    // jobs — every long-running operation announces itself here
+    // Long-running job events.
     Job { job: super::jobs::Job },
 
-    // ── the wire vocabulary (ADR-0004) ─────────────────────────────
+    // Client read-model events (ADR-0004).
     /// The devices read model, replaced whole. Published when the rows
-    /// change — including every ground publish, so a client's age
-    /// displays breathe with the house's own cadence.
+    /// change, including each host-metrics publication.
     Devices { rows: Vec<DeviceRow> },
-    /// The roster read model, replaced whole. Published after every
-    /// roster mutation; the lifecycle's law lives here, once.
-    Roster { individuals: Vec<super::roster::Individual> },
+    /// The registry read model, replaced whole. Published after every
+    /// registry mutation.
+    #[serde(rename = "roster")]
+    DeviceRegistry {
+        #[serde(rename = "individuals")]
+        registered_devices: Vec<super::registry::RegisteredDevice>,
+    },
     /// The pause flag moved.
     Paused { paused: bool },
-    /// The media lane's watch flag moved (ADR-0004, the watched lane).
+    /// Media subscription state changed.
     MediaWatched { watched: bool },
-    /// A face's latest frame — the media lane, house-cadenced (ADR-0004).
-    /// Data, not news: never journaled, never announced in text.
+    /// Latest captured device frame (ADR-0004).
+    /// Frame data is not written to the journal or text log.
     Frame { port: String, png: String },
-    /// The whole house in one object. Never broadcast on the bus: the
-    /// door writes it as the first frame of every `/api/events` stream.
-    Snapshot { snapshot: HouseSnapshot },
+    /// Complete state. Sent directly as the first `/api/events` frame.
+    Snapshot { snapshot: ResidentSnapshot },
 }
 
-/// One admission-test step's shape — cheap, serializable, honest.
+#[cfg(test)]
+mod tests {
+    use super::ResidentEvent;
+
+    #[test]
+    fn registry_event_keeps_the_existing_wire_names() {
+        let value = serde_json::to_value(ResidentEvent::DeviceRegistry {
+            registered_devices: Vec::new(),
+        })
+        .unwrap();
+        assert_eq!(value["type"], "roster");
+        assert_eq!(value["individuals"], serde_json::json!([]));
+    }
+}
+
+/// Serializable admission-test result.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdmissionStep {
     pub name: String,

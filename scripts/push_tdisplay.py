@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-"""Adopt a T-Display: back up its files, push the Aurora face, keep
-the dress tuple.
+"""Back up a T-Display and install an Aurora faceplate while preserving metadata.
 
-The tdisplay already runs MicroPython (firefly/tdisplay on the
+The T-Display already runs MicroPython (legacy firmware on the
 russhughes st7789 firmware — the C display driver stays frozen in
 place, we only replace the application files). The transfer is the
 proven REPL dance from push_firmware.py: interrupt, friendly prompt,
@@ -20,7 +19,7 @@ import sys
 import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from push_firmware import Repl, resolve_dress  # noqa: E402
+from push_firmware import Repl, resolve_faceplate  # noqa: E402
 
 CLASS_ROOT = "hardware/classes/tdisplay-esp32-ch9102/faceplates"
 # The face ships as BYTECODE (vintage-matched: this board runs
@@ -39,11 +38,11 @@ def main():
     if "--faceplate" in sys.argv:
         faceplate = sys.argv[sys.argv.index("--faceplate") + 1]
 
-    dress_dir, dress_name, dress_mount, dress_version = \
-        resolve_dress_for(faceplate)
+    faceplate_dir, faceplate_name, faceplate_mount, faceplate_version = \
+        resolve_faceplate(faceplate)
 
     repl = Repl(port)
-    # Opening the port pulses DTR and resets the board; the face needs
+    # Opening the port pulses DTR and resets the board; the faceplate needs
     # its boot before it can answer a file read. Settle first — a read
     # that races the boot comes back empty or stale.
     repl.drain(3.0)
@@ -56,21 +55,21 @@ def main():
         )
     repl.backup_files(files, port)
 
-    # The durable word on the device: the dress tuple (ADR-0005).
+    # Persist faceplate metadata on the device (ADR-0005).
     suzu = {
         "proto": "suzu/1",
         "companion": "firefly",
         "family": "firefly",
         "variant": "tdisplay",
-        "faceplate": dress_name,
-        "mount": dress_mount,
-        "dress_version": dress_version,
+        "faceplate": faceplate_name,
+        "mount": faceplate_mount,
+        "dress_version": faceplate_version,
         "adopted": time.strftime("%Y-%m-%d"),
     }
     if not device_id:
-        # never wipe a deed by silence: keep what the device carries.
+        # Preserve the device's existing identity when none was supplied.
         # The file may be spaced (this script's json.dumps) or compact
-        # (the face's ujson) — match both, never a format guess.
+        # (the faceplate's ujson) — accept both JSON layouts.
         import re as _re
         raw = repl.exec(
             "print(open('suzu.json').read())").decode(errors="replace")
@@ -80,16 +79,16 @@ def main():
         elif "suzu.json" in files:
             raise SystemExit(
                 "suzu.json exists but gave no device_id — refusing to "
-                "write an idless dress over a known device (pass the id "
+                "write a faceplate without preserving a known device ID (pass the ID "
                 "explicitly, or --fresh after a real wipe)")
     if device_id:
         suzu["device_id"] = device_id
         print("identity preserved:", device_id)
-    # no id on either side: the house mints and deeds through its session
+    # If neither side has an ID, the Resident assigns one through its session.
 
     payload = [("suzu.json", json.dumps(suzu).encode())]
     for name in BUNDLE_FILES:
-        p = pathlib.Path(dress_dir) / name
+        p = pathlib.Path(faceplate_dir) / name
         payload.append((name, p.read_bytes()))
 
     for name, data in payload:
@@ -99,14 +98,14 @@ def main():
     # source with the wrong vintage — remove it before the reboot.
     repl.exec("import os; os.remove('face.py') if 'face.py' in os.listdir() else None")
 
-    print("pushed %d files — soft reboot into the face" % len(payload))
-    # soft_reboot closes the port; the face is on its own from here.
+    print("pushed %d files — restarting the faceplate" % len(payload))
+    # soft_reboot closes the port; the device restarts independently.
     repl.soft_reboot()
     time.sleep(2.0)
-    print("rebooted — the face should answer its HELLO on the bus")
+    print("rebooted — waiting for the faceplate HELLO response")
 
 
-def resolve_dress_for(faceplate):
+def resolve_faceplate(faceplate):
     """id -> (bundle dir, faceplate name, mount side, version) from the
     class's faceplate manifests."""
     import yaml
