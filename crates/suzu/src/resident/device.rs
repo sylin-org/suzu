@@ -52,10 +52,6 @@ pub enum DeviceOrder {
 }
 
 pub struct MaintenanceOrder {
-    pub device_id: String,
-    pub class: Option<String>,
-    pub vid: u16,
-    pub pid: u16,
     pub kind: String,
     pub faceplate: Option<String>,
 }
@@ -240,7 +236,8 @@ impl Device {
         if in_maintenance {
             anyhow::bail!("{}: a maintenance procedure is already running", self.facts.port);
         }
-        let device_id = self.id_owned()?;
+        // An order presupposes an identified individual.
+        self.id_owned()?;
         let class = self.facts.class.clone();
         if let Some(faceplate_id) = &requested_faceplate {
             let declared = class
@@ -275,10 +272,6 @@ impl Device {
                 .map(|info| info.id.clone())
         });
         Ok(DeviceOrder::Maintenance(MaintenanceOrder {
-            device_id,
-            class,
-            vid: self.facts.vid,
-            pid: self.facts.pid,
             kind: kind.to_string(),
             faceplate,
         }))

@@ -88,12 +88,16 @@ pub fn capture_on(port: &mut Box<dyn SerialPort>, expected: usize) -> Result<Vec
         "no complete frame within {secs} s; received {bytes_received} B on \
          {lines} lines, {anchors} frame anchors, {} ERR(s){}{}",
         errs.len(),
-        (!errs.is_empty())
-            .then(|| format!(" — target said {:?}", errs))
-            .unwrap_or_default(),
-        (bytes_received > 0 && lines == 0)
-            .then(|| format!(" — unterminated tail {:?}", last_line))
-            .unwrap_or_default(),
+        if !errs.is_empty() {
+            format!(" — target said {:?}", errs)
+        } else {
+            String::new()
+        },
+        if bytes_received > 0 && lines == 0 {
+            format!(" — unterminated tail {:?}", last_line)
+        } else {
+            String::new()
+        },
     )
 }
 

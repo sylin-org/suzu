@@ -1,0 +1,111 @@
+# A tag is the release. Push v* to build and publish.
+# The binary carries its own manifests, payloads, and workbench UI, so a
+# plain archive is a complete install — `sudo ./suzu install` finishes it.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  windows:
+    name: build · x86_64-windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release -p suzu
+      - name: Assemble the archive
+        shell: pwsh
+        run: |
+          $v = "${env:GITHUB_REF_NAME}"
+          $name = "suzu-$v-x86_64-windows"
+          New-Item -ItemType Directory -Force $name
+          Copy-Item target/release/suzu.exe, README.md, LICENSE $name/
+          Compress-Archive -Path $name -DestinationPath "$name.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-archive
+          path: suzu-*-x86_64-windows.zip
+
+  linux:
+    name: build · x86_64-linux-gnu
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release -p suzu
+      - name: Assemble the archive
+        run: |
+          v="${GITHUB_REF_NAME}"
+          name="suzu-$v-x86_64-linux-gnu"
+          mkdir -p "$name" dist
+          cp target/release/suzu README.md LICENSE "$name/"
+          tar -czf "dist/$name.tar.gz" "$name"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-gnu-archive
+          path: dist/
+
+  musl:
+    # The Alpine path, built where it runs: native musl, the same way the
+    # testbed fleet builds it.
+    name: build · x86_64-linux-musl
+    runs-on: ubuntu-latest
+    container: alpine:3.24
+    steps:
+      - name: Install the build tools
+        run: apk add --no-cache build-base curl pkgconf eudev-dev git tar
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --profile minimal --default-toolchain stable
+      - name: Build
+        run: |
+          . "$HOME/.cargo/env"
+          cargo build --release -p suzu
+      - name: Assemble the archive
+        run: |
+          . "$HOME/.cargo/env"
+          v="${GITHUB_REF_NAME}"
+          name="suzu-$v-x86_64-linux-musl"
+          mkdir -p "$name" dist
+          cp target/release/suzu README.md LICENSE "$name/"
+          tar -czf "dist/$name.tar.gz" "$name"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-musl-archive
+          path: dist/
+
+  publish:
+    name: checksums · release
+    needs: [windows, linux, musl]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksum every archive
+        run: |
+          cd dist
+          sha256sum *.zip *.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+      - name: Publish the release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: CHANGELOG.md
+          files: |
+            dist/*.zip
+            dist/*.tar.gz
+            dist/SHA256SUMS

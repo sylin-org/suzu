@@ -7,6 +7,7 @@
 //!   detective  full diagnostic output per USB device
 //!   serve      run the Resident service
 //!   install    deploy the running binary as the Resident service (Linux)
+//!   version    what this binary is
 //!
 //! Maintenance procedures are defined in the Resident maintenance module;
 //! host deployment is the install module (ADR-0008 promotion of
@@ -555,6 +556,9 @@ async fn main() -> anyhow::Result<()> {
         Some("screenshot") => screenshot(&catalog, args.get(2).map(|s| s.as_str())),
         Some("prepare") => prepare::run(&catalog, &args[2..])?,
         Some("install") => install::run(&args[2..])?,
+        Some("version") | Some("--version") | Some("-V") => {
+            println!("suzu {}", env!("CARGO_PKG_VERSION"));
+        }
         Some("uninstall") => install::run(&["--uninstall".into()])?,
         Some("record") => {
             // Clamp recording length and rate to serial and GIF limits.

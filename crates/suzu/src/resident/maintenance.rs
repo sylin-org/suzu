@@ -121,7 +121,7 @@ pub fn run(
     match runner(
         &mut run,
         port,
-        class.as_deref().unwrap_or(""),
+        class.unwrap_or(""),
         device_id,
         catalog,
         faceplate,
