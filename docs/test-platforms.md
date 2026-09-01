@@ -31,10 +31,13 @@ Per host, as the service user (historically `stone` on the template,
    credentials in `~/.codex/`.
 4. `cargo build --release -p suzu` (the `-p suzu` matters: the workbench
    crate needs GTK development headers that service hosts rightly lack),
-   then `sudo scripts/install-linux.sh` — binary to
-   `/usr/local/bin/suzu`, resources to `/usr/local/share/suzu`, the
-   `suzu@<user>.service` unit, udev rule `60-suzu.rules`, and the
-   `suzu-hw` group.
+   then `sudo suzu install` — the Resident deploys itself: binary to
+   `/usr/local/bin/suzu`, resources to `/usr/local/share/suzu`, udev rule
+   `60-suzu.rules`, the `suzu-hw` group, and the service definition for
+   whichever init the host runs (systemd, or OpenRC on musl hosts).
+   `suzu install --verify` checks an installed host;
+   `scripts/install-linux.sh` remains the ancestor reference for
+   installing from a checkout without running the new binary first.
 
 Credentials are disposable and live only in the maintainers' local
 `.ignore/` store (gitignored); they are never committed.

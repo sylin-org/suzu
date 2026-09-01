@@ -1,0 +1,27 @@
+#!/sbin/openrc-run
+# Suzu Resident — OpenRC adaptation of the systemd unit template,
+# rendered and installed by `suzu install` on hosts without systemd
+# (ADR-0008 test platforms). The redirected log files are pre-created
+# writable by the service user: root-owned logs kill the
+# dropped-privilege child with exit 1, proven on the Alpine testbed.
+
+description="Suzu Resident (service user @SUZU_SERVICE_USER@)"
+command_user="@SUZU_SERVICE_USER@"
+command="@SUZU_BINDIR@/suzu"
+command_args="serve"
+command_background="yes"
+pidfile="/run/suzu.pid"
+start_stop_daemon_args="--chuid @SUZU_SERVICE_USER@ --stdout @SUZU_STATE_DIR@/serve.log --stderr @SUZU_STATE_DIR@/serve.err.log"
+umask 0077
+
+depend() {
+	after localmount udev-settle
+}
+
+start_pre() {
+	checkpath --directory --mode 0755 /var/lib/suzu
+	checkpath --directory --owner @SUZU_SERVICE_USER@ --mode 0750 @SUZU_STATE_DIR@
+	checkpath --directory --owner @SUZU_SERVICE_USER@ --mode 0750 @SUZU_STATE_DIR@/captures
+	checkpath --file --owner @SUZU_SERVICE_USER@ --mode 0640 @SUZU_STATE_DIR@/serve.log
+	checkpath --file --owner @SUZU_SERVICE_USER@ --mode 0640 @SUZU_STATE_DIR@/serve.err.log
+}

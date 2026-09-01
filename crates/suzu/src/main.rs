@@ -6,13 +6,17 @@
 //!   list       list and manage the Resident's compatible devices
 //!   detective  full diagnostic output per USB device
 //!   serve      run the Resident service
+//!   install    deploy the running binary as the Resident service (Linux)
 //!
-//! Maintenance procedures are defined in the Resident maintenance module.
+//! Maintenance procedures are defined in the Resident maintenance module;
+//! host deployment is the install module (ADR-0008 promotion of
+//! scripts/install-linux.sh).
 
 mod bootloader;
 mod catalog;
 mod control;
 mod gif;
+mod install;
 mod resident_cli;
 mod mpush;
 mod paths;
@@ -549,6 +553,8 @@ async fn main() -> anyhow::Result<()> {
         Some("serve") => resident::run(catalog).await?,
         Some("screenshot") => screenshot(&catalog, args.get(2).map(|s| s.as_str())),
         Some("prepare") => prepare::run(&catalog, &args[2..])?,
+        Some("install") => install::run(&args[2..])?,
+        Some("uninstall") => install::run(&["--uninstall".into()])?,
         Some("record") => {
             // Clamp recording length and rate to serial and GIF limits.
             let secs: u32 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(10);

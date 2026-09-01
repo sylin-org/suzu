@@ -223,6 +223,9 @@ tools, plus a previewer that runs the face against a fake framebuffer.
   (it lives in the tray; `serve` stays the single writer).
 - Adoption with receipts: backup-first install, read-back verification, and a
   preserved `device_id` across both install paths.
+- `suzu install`: the Resident deploys itself on Linux — binary,
+  resources, udev, and the service definition for systemd or OpenRC —
+  proven across the three test platforms (ADR-0008).
 
 **Next:**
 

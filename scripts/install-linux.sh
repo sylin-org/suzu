@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 # Install a checkout-built Suzu Resident on any systemd Linux host.
+#
+# Ancestor reference (ADR-0008): the promoted path is `suzu install`,
+# which deploys the running binary itself — systemd or OpenRC, no
+# checkout required beyond the resources. This script remains for
+# installing from a checkout without running the new binary first.
 set -euo pipefail
 
 SUZU_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
