@@ -3,10 +3,10 @@
 # its token secret is absent, so the pipeline is useful from day one and
 # a channel lights up the moment its secret appears.
 # Secrets (see docs/release.md):
-#   TAP_TOKEN      fine-grained PAT, Contents RW on sylin-org/homebrew-tap
-#   WEBSITE_TOKEN  fine-grained PAT, Contents RW on sylin-org/website
-#   NPM_TOKEN      npm token with publish rights on @sylin-org
-#   WINGET_TOKEN   classic PAT, public_repo (PRs to microsoft/winget-pkgs)
+#   APP_ID          GitHub App "suzu-publisher" (org blocks fine-grained PATs)
+#   APP_PRIVATE_KEY  its PEM key — mints short-lived installation tokens
+#   NPM_TOKEN       npm token with publish rights on @sylin-org
+#   WINGET_TOKEN    classic PAT, public_repo (PRs to microsoft/winget-pkgs)
 name: publish
 
 on:
@@ -23,14 +23,23 @@ jobs:
     env:
       TAP: sylin-org/homebrew-tap
     steps:
-      - name: Gate on TAP_TOKEN
+      - name: Gate on the publisher app
         env:
-          T: ${{ secrets.TAP_TOKEN }}
+          ID: ${{ secrets.APP_ID }}
+          KEY: ${{ secrets.APP_PRIVATE_KEY }}
         run: |
-          if [ -z "$T" ]; then
-            echo "::notice::TAP_TOKEN not set — the brew channel waits"
+          if [ -z "$ID" ] || [ -z "$KEY" ]; then
+            echo "::notice::APP_ID/APP_PRIVATE_KEY not set — the brew channel waits"
             echo "SKIP=1" >> "$GITHUB_ENV"
           fi
+      - uses: actions/create-github-app-token@v2
+        if: env.SKIP != '1'
+        id: app
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: sylin-org
+          repositories: homebrew-tap
       - uses: actions/checkout@v4
         if: env.SKIP != '1'
       - name: Fetch the release checksums
@@ -46,7 +55,7 @@ jobs:
         if: env.SKIP != '1'
         run: |
           tag="${GITHUB_REF_NAME}"
-          git clone --depth 1 "https://x-access-token:${{ secrets.TAP_TOKEN }}@github.com/${TAP}.git" tap
+          git clone --depth 1 "https://x-access-token:${{ steps.app.outputs.token }}@github.com/${TAP}.git" tap
           cp suzu.rb tap/Formula/suzu.rb
           git -C tap config user.name "suzu release bot"
           git -C tap config user.email "noreply@sylin.org"
@@ -118,19 +127,28 @@ jobs:
     env:
       SITE: sylin-org/website
     steps:
-      - name: Gate on WEBSITE_TOKEN
+      - name: Gate on the publisher app
         env:
-          T: ${{ secrets.WEBSITE_TOKEN }}
+          ID: ${{ secrets.APP_ID }}
+          KEY: ${{ secrets.APP_PRIVATE_KEY }}
         run: |
-          if [ -z "$T" ]; then
-            echo "::notice::WEBSITE_TOKEN not set — the site's runtime overlay carries the version alone"
+          if [ -z "$ID" ] || [ -z "$KEY" ]; then
+            echo "::notice::APP_ID/APP_PRIVATE_KEY not set — the site's runtime overlay carries the version alone"
             echo "SKIP=1" >> "$GITHUB_ENV"
           fi
+      - uses: actions/create-github-app-token@v2
+        if: env.SKIP != '1'
+        id: app
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: sylin-org
+          repositories: website
       - name: Bump the suzu versionFallback
         if: env.SKIP != '1'
         run: |
           tag="${GITHUB_REF_NAME}"
-          git clone --depth 1 "https://x-access-token:${{ secrets.WEBSITE_TOKEN }}@github.com/${SITE}.git" site
+          git clone --depth 1 "https://x-access-token:${{ steps.app.outputs.token }}@github.com/${SITE}.git" site
           python - "$tag" <<'EOF'
           import re, sys
           tag = sys.argv[1]

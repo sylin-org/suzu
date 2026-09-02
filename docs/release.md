@@ -35,10 +35,10 @@ ever heard of it.
 | channel | artifact | CI job | secret |
 |---|---|---|---|
 | GitHub Releases | archives + `SHA256SUMS` + `latest.json` | `release.yml` | none |
-| Homebrew | `Formula/suzu.rb` rendered from the checksums | `publish.yml → tap` | `TAP_TOKEN` |
+| Homebrew | `Formula/suzu.rb` rendered from the checksums | `publish.yml → tap` | `APP_ID` + `APP_PRIVATE_KEY` |
 | npm | `@sylin-org/suzu` shim (downloads at install) | `publish.yml → npm` | `NPM_TOKEN` |
 | winget | manifest PR to `microsoft/winget-pkgs` | `publish.yml → winget` | `WINGET_TOKEN` |
-| Website | `versionFallback` bump (runtime overlay already carries the live version) | `publish.yml → website` | `WEBSITE_TOKEN` |
+| Website | `versionFallback` bump (runtime overlay already carries the live version) | `publish.yml → website` | `APP_ID` + `APP_PRIVATE_KEY` |
 
 Every publish job **skips with a notice** when its secret is absent —
 missing configuration never fails a release, it just leaves that
@@ -46,20 +46,30 @@ channel dark until the secret appears.
 
 ## The secrets (one-time setup)
 
-- `TAP_TOKEN`, `WEBSITE_TOKEN` — fine-grained GitHub PATs, Contents
-  read/write, scoped to `sylin-org/homebrew-tap` and `sylin-org/website`
-  respectively. (One PAT may seed both; separate secrets allow
-  independent rotation.) Fine-grained PATs for org repos need the org's
-  settings to permit them.
-- `NPM_TOKEN` — an npm token with publish rights on `@sylin-org`
-  (granular, packages read/write, is the durable choice). Note npm's
-  announced horizon: tokens that bypass 2FA stop being able to publish
-  directly in January 2027 — mint granular, not legacy-automation.
+- `APP_ID` + `APP_PRIVATE_KEY` — the **suzu-publisher** GitHub App
+  (id 4798912), Contents read/write, installed on the org with access
+  to `homebrew-tap` and `website` only. The workflow mints a
+  short-lived installation token per run via
+  `actions/create-github-app-token@v2` — nothing long-lived that
+  touches GitHub is stored. This is the shape the org allows: it
+  blocks fine-grained PATs and deploy keys on its repos.
+  - Create: org Settings → Developer settings → GitHub Apps → New
+    (Contents: read & write, no webhook). Download the PEM; install
+    on the org, "Only select repositories".
+  - Rotate: generate a new private key on the app page and overwrite
+    the `APP_PRIVATE_KEY` secret.
+- `NPM_TOKEN` — an npm **granular** token, packages read/write, scoped
+  to `@sylin-org` (minted 2026-09-01 as `suzu-ci`, 365 days). Note
+  npm's announced horizon: tokens that bypass 2FA stop being able to
+  publish directly in January 2027 — when that lands, move to a
+  provenance/automation token before renewing.
 - `WINGET_TOKEN` — a classic GitHub PAT with `public_repo`, because
   opening the PR to `microsoft/winget-pkgs` acts outside our org.
+  Not yet minted; the winget job waits until it is.
 
 Set with: `gh secret set NAME --repo sylin-org/suzu`. Local copies of
-the values live only in the maintainer's gitignored `.ignore/` store.
+the values live only in the maintainer's gitignored `.ignore/` store
+(`.ignore/ci-tokens.md`).
 
 ## Not automated (on purpose, for now)
 
