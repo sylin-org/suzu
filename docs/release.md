@@ -64,8 +64,8 @@ channel dark until the secret appears.
   publish directly in January 2027 — when that lands, move to a
   provenance/automation token before renewing.
 - `WINGET_TOKEN` — a classic GitHub PAT with `public_repo`, because
-  opening the PR to `microsoft/winget-pkgs` acts outside our org.
-  Not yet minted; the winget job waits until it is.
+  opening the PR to `microsoft/winget-pkgs` acts outside our org
+  (minted 2026-09-01 as `suzu-winget-ci`, expires 2027-09-01).
 
 Set with: `gh secret set NAME --repo sylin-org/suzu`. Local copies of
 the values live only in the maintainer's gitignored `.ignore/` store
